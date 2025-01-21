@@ -6,7 +6,7 @@ authors = ["Wester Coenraads <wester.coenraads@tno.nl>"]
 license = "Apache-2.0"
 description = "Provides type definitions and utilities for the S2 energy flexibility standard"
 homepage = "https://s2standard.org"
-repository = "https://github.com/flexiblepower/s2energy"
+repository = "https://github.com/flexiblepower/s2-rust"
 categories = ["api-bindings"]
 keywords = ["s2", "energy", "energy-management", "protocol", "standard"]
 
