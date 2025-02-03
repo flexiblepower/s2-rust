@@ -6,6 +6,7 @@
         <a href="https://docs.rs/s2energy"><img src="https://img.shields.io/docsrs/s2energy" /></a>
     </div>
 </div>
+<br />
 
 This crate provides type definitions and utilities for working with the [S2 energy flexibility standard](https://s2standard.org) in Rust. S2 is a communication standard for energy flexibility and energy management in homes and buildings, designed to simplify the use of energy flexibility of smart devices. To learn more about the S2 standard:
 - [Visit the website](https://s2standard.org) for a high-level explanation of S2
