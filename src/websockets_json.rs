@@ -6,8 +6,9 @@
 //! uses [`tokio`] as its async runtime.
 //!
 //! If you want to connect as a WebSocket client, you can use [`connect_as_client`] to obtain an `S2Connection`.
-//! If you want to connect as a WebSocket server, you should make an [`S2WebsocketServer`] and accept connections
+//! If you want set up a WebSocket server, you should make an [`S2WebsocketServer`] and accept connections
 //! via [`accept_connection`][S2WebsocketServer::accept_connection].
+//!
 //! # Examples
 //! Setting up a WebSocket server and handling connections to it:
 //! ```no_run
@@ -86,7 +87,9 @@ pub enum S2ConnectionError {
         requested: semver::VersionReq,
     },
     /// Error performing a handshake with the CEM; received a message at a point where that message was not expected (e.g. a [`HandshakeResponse`](crate::common::HandshakeResponse) before we even sent a [`Handshake`])
-    #[error("received an unexpected message, or an expected message at an unexpected moment, during the S2 handshaking process: {message:?}")]
+    #[error(
+        "received an unexpected message, or an expected message at an unexpected moment, during the S2 handshaking process: {message:?}"
+    )]
     InvalidHandshakeOrder { message: S2Message },
 
     /// Encountered an error on the [`TcpListener`] used internally in [`S2WebsocketServer`].
@@ -150,6 +153,14 @@ enum WebSocketWrapper {
 }
 
 impl WebSocketWrapper {
+    fn is_client(&self) -> bool {
+        matches!(self, Self::ClientSocket(..))
+    }
+
+    fn is_server(&self) -> bool {
+        !self.is_client()
+    }
+
     async fn send(&mut self, item: TungsteniteMessage) -> Result<(), tungstenite::Error> {
         match self {
             Self::ClientSocket(socket) => socket.send(item).await,
@@ -175,11 +186,15 @@ pub struct S2Connection {
 
 impl S2Connection {
     fn from_client_socket(socket: WebSocketStream<MaybeTlsStream<TcpStream>>) -> Self {
-        Self { socket: WebSocketWrapper::ClientSocket(socket) }
+        Self {
+            socket: WebSocketWrapper::ClientSocket(socket),
+        }
     }
 
     fn from_server_socket(socket: WebSocketStream<TcpStream>) -> Self {
-        Self { socket: WebSocketWrapper::ServerSocket(socket) }
+        Self {
+            socket: WebSocketWrapper::ServerSocket(socket),
+        }
     }
 
     /// Performs an initial handshake with the other end of the connection, which should be a CEM.
@@ -200,7 +215,8 @@ impl S2Connection {
         let mut need_handshake = true;
         let mut need_handshake_response = true;
 
-        while let Ok(message) = self.receive_message().await {
+        loop {
+            let message = self.receive_message().await?;
             if let S2Message::Handshake(..) = &message {
                 if need_handshake {
                     need_handshake = false;
@@ -225,7 +241,8 @@ impl S2Connection {
             }
 
             // Note that this is NOT exclusive with the if-blocks above
-            if matches!(message, S2Message::Handshake(..) | S2Message::HandshakeResponse(..)) && !need_handshake && !need_handshake_response {
+            if matches!(message, S2Message::Handshake(..) | S2Message::HandshakeResponse(..)) && !need_handshake && !need_handshake_response
+            {
                 self.send_message(rm_details.clone()).await?;
             }
 
@@ -237,9 +254,6 @@ impl S2Connection {
                 return Ok(select_control_type.control_type);
             }
         }
-
-        // If we reach this point, we've reached the end of the stream without exchanging handshakes.
-        return Err(S2ConnectionError::WebsocketClosed);
     }
 
     /// Sends the given message over the websocket.
@@ -267,18 +281,22 @@ impl S2Connection {
                 let msg_string = msg
                     .into_text()
                     .expect("Encountering a panic here should be impossible; please report a bug if you encounter this anyway");
-                break serde_json::from_str(&msg_string)?;
+
+                let msg_parsed = serde_json::from_str(&msg_string)?;
+                if let S2Message::ReceptionStatus(reception_status @ ReceptionStatus { status, .. }) = &msg_parsed {
+                    if *status != ReceptionStatusValues::Ok {
+                        return Err(S2ConnectionError::ReceivedBadReceptionStatus(reception_status.clone()));
+                    }
+                } else {
+                    break msg_parsed;
+                }
             }
         };
 
-        if !matches!(message, S2Message::Handshake(..)) && !matches!(message, S2Message::ReceptionStatus(..)) {
-            let status = ReceptionStatus::new(None, ReceptionStatusValues::Ok, message.id().expect("Failed to extract ID from message; please report a bug if you encounter this"));
-            self.send_message(S2Message::ReceptionStatus(status)).await?;
-        }
-
-        if let S2Message::ReceptionStatus(reception_status @ ReceptionStatus { status, .. }) = &message {
-            if *status != ReceptionStatusValues::Ok {
-                return Err(S2ConnectionError::ReceivedBadReceptionStatus(reception_status.clone()));
+        if !matches!(message, S2Message::ReceptionStatus(..)) {
+            if let Some(id) = message.id() {
+                let status = ReceptionStatus::new(None, ReceptionStatusValues::Ok, id);
+                self.send_message(S2Message::ReceptionStatus(status)).await?;
             }
         }
 

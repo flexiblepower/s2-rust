@@ -13,7 +13,7 @@ This crate provides type definitions and utilities for working with the [S2 ener
 - [Visit the GitHub wiki](https://github.com/flexiblepower/s2-ws-json/wiki) for a technical explanation of S2
 
 ## Crate contents
-This crate provides Rust types for all types specified by S2. It also includes provides utilities that help you manage an S2 connection over websockets with JSON as the format, including functions to easily set up a WebSocket server/client to send/receive S2 messages.
+This crate provides Rust types for all types specified by S2. It also provides utilities that help you manage an S2 connection over websockets with JSON as the format, including functions to easily set up a WebSocket server/client to send/receive S2 messages.
 
 JSON over WebSockets is a common and recommended way to implement S2, but you're free to choose a different format and communication protocol. In that case, the types in this crate should still be useful but you may wish to disable the `websockets-json` feature.
 
