@@ -3,7 +3,7 @@ use std::{env, fs, path::Path};
 use syn::{fold::Fold, parse_quote, ExprPath, ExprStruct, FieldsNamed, Ident, Item, ItemEnum, ItemMod, ItemStruct, Meta, Type, TypePath};
 use typify::{TypeSpace, TypeSpaceSettings};
 
-/// Replaces definitions and references of controltype-specific types (such as `FrbcActuatorStatus`) with the a shortened name (e.g. `ActuatorStatus``, which should be places in the `frbc` module).
+/// Replaces definitions and references of controltype-specific types (such as `FrbcActuatorStatus`) with the a shortened name (e.g. `ActuatorStatus`, which should be places in the `frbc` module).
 struct ReplaceTypeDefinitions;
 
 fn replace_prefix(s: &str) -> String {
