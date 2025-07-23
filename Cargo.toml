@@ -15,28 +15,28 @@ default = ["websockets-json"]
 websockets-json = ["dep:futures-util", "dep:tokio", "dep:tokio-tungstenite", "dep:thiserror", "dep:serde_json"]
 
 [dependencies]
-chrono = { version = "0.4.31", features = ["serde"] }
+chrono = { version = "0.4.41", features = ["serde"] }
 regress = "0.7.1" # This dependency is not used directly but necessary for typify to work
-uuid = { version = "1.6.1", features = ["v4"] }
+uuid = { version = "1.17.0", features = ["v4"] }
 serde = { version = "1.0.193", features = ["derive"] }
 semver = "1.0.24"
 
 # feature=websockets-json
-futures-util = { version = "0.3.29", optional = true }
-tokio = { version = "1.35.0", features = ["net"], optional = true }
-tokio-tungstenite = { version = "0.21.0", features = ["rustls-tls-webpki-roots"], optional = true }
-thiserror = { version = "2.0.11", optional = true }
-serde_json = { version = "1.0.111", optional = true }
+futures-util = { version = "0.3.31", optional = true }
+tokio = { version = "1.46.1", features = ["net"], optional = true }
+tokio-tungstenite = { version = "0.27.0", features = ["rustls-tls-webpki-roots"], optional = true }
+thiserror = { version = "2.0.12", optional = true }
+serde_json = { version = "1.0.141", optional = true }
 
 [build-dependencies]
-prettyplease = "0.2.25"
+prettyplease = "0.2.35"
 schemars = "0.8.21"
-syn = { version = "2.0.90", features = ["fold"] }
+syn = { version = "2.0.104", features = ["fold"] }
 typify = "0.0.14"
-serde_json = "1.0.111"
-quote = "1.0.37"
+serde_json = "1.0.141"
+quote = "1.0.40"
 
 [dev-dependencies]
 eyre = "0.6.12"
-serde_json = "1.0.111"
+serde_json = "1.0.141"
 tokio-test = "0.4.4"
