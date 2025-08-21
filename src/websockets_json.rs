@@ -22,7 +22,7 @@
 //! # Ok(()) };
 //! ```
 //!
-//! Basic resource manager flow - setting up an S2 connection as a client and sending a message:
+//! Setting up a connection as a Resource Manager:
 //! ```no_run
 //! # use s2energy::common::{Commodity, CommodityQuantity, ControlType, Currency, Duration, Id, ResourceManagerDetails, Role, RoleType};
 //! # use s2energy::frbc;
@@ -31,7 +31,8 @@
 //! // Connect to the CEM
 //! let mut s2_connection = connect_as_client("wss://example.com/cem/394727").await?;
 //!
-//! // Create `ResourceManagerDetails`, which will inform the CEM about some properties of our device
+//! // Create a `ResourceManagerDetails`, which will inform the CEM 
+//! // about some properties of our device
 //! let rm_details = ResourceManagerDetails::builder()
 //!     // Required fields
 //!     .available_control_types(vec![ControlType::FillRateBasedControl])
@@ -49,23 +50,30 @@
 //!     .currency(Currency::Eur)
 //!     .build();
 //!
-//! // Initialize the connection; this will perform the S2 handshake and version negotiation for you
+//! // Initialize the connection; this will perform
+//! // the S2 handshake and version negotiation for you
 //! s2_connection.initialize_as_rm(rm_details).await?;
-//!
-//! // Send a StorageStatus message; you probably want to send a frbc::SystemDescription as well
+//! # Ok(()) };
+//! ```
+//! 
+//! Once you've set up a connection, you can send and receive messages:
+//! ```no_run
+//! # use s2energy::{frbc, websockets_json::{connect_as_client, S2ConnectionError}};
+//! # async fn test() -> Result<(), S2ConnectionError> {
+//! # let mut s2_connection = connect_as_client("no_run").await?;
+//! // Send a StorageStatus message:
 //! s2_connection.send_message(frbc::StorageStatus::new(0.5)).await?;
 //!
-//! // Handle incoming messages
+//! // Handle incoming messages:
 //! while let Ok(message) = s2_connection.receive_message().await {
 //!     match message.get_message() {
-//!         // Validate the incoming message here
+//!         // Validate the incoming message here...
 //!         _ => { /* ... */ }
 //!     }
 //!     
-//!     // Message looks good, send back an OK reception status
+//!     // Message looks good, send back an OK reception status:
 //!     message.confirm().await?;
 //! }
-//!
 //! # Ok(()) };
 //! ```
 use crate::common::{
@@ -125,6 +133,10 @@ pub enum S2ConnectionError {
 ///
 /// **NOTE**: TLS is NOT set up or handled by this object; it is recommended you use a server in front
 /// of this (such as nginx) to handle TLS.
+/// 
+/// For example usage, refer to the [module documentation].
+/// 
+/// [module documentation]: crate::websockets_json#examples
 pub struct S2WebsocketServer {
     listener: TcpListener,
 }
@@ -193,6 +205,10 @@ impl WebSocketWrapper {
 ///
 /// You can use the methods on this object to easily send and receive S2 messages without worrying
 /// about things like (de)serialization and handling [`ReceptionStatus`] messages.
+/// 
+/// For example usage, refer to the [module documentation].
+/// 
+/// [module documentation]: crate::websockets_json#examples
 pub struct S2Connection {
     socket: WebSocketWrapper,
 }
@@ -283,7 +299,7 @@ impl S2Connection {
     /// Waits for a message to come over the websocket, and returns it.
     ///
     /// This function sends back a [`ReceptionStatus`] when it receives a message, so you don't need to do that yourself. Additionally, it filters out any received `ReceptionStatus` messages.
-    pub async fn receive_message<'conn>(&'conn mut self) -> Result<UnconfirmedMessage<'conn>, S2ConnectionError> {
+    pub async fn receive_message<'connection>(&'connection mut self) -> Result<UnconfirmedMessage<'connection>, S2ConnectionError> {
         // This is set up as a loop so we can harmlessly ignore empty messages and ping/pong messages.
         let message = loop {
             let msg = self.socket.next().await.ok_or(S2ConnectionError::WebsocketClosed)??;
@@ -334,7 +350,7 @@ impl S2Connection {
 
     /// Wait for a message, and immediately send back a [`ReceptionStatus`].
     ///
-    /// This is the equivalent of `connection.receive_message().await?.confirm().await?`. U
+    /// This is the equivalent of `connection.receive_message().await?.confirm().await?`.
     pub async fn receive_and_confirm(&mut self) -> Result<S2Message, S2ConnectionError> {
         self.receive_message().await?.confirm().await
     }
