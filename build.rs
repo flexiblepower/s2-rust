@@ -326,32 +326,55 @@ fn main() {
 
                             let ty = &field.ty;
                             Some(quote! { #name: #ty })
-                        });
+                        }).collect::<Vec<_>>();
+                        let create_constructor = parameters.len() <= 1;
 
-                        let field_names = fields.named.iter().filter_map(|field| {
-                            let Some(ident) = &field.ident else { return None };
-                            if ident.to_string() == "message_id" {
-                                return Some(quote!(message_id: Id::generate()));
-                            } else {
-                                return Some(quote!(#ident));
-                            }
-                        });
+                        if create_constructor {
+                            // Create a constructor in cases of 1 or 0 parameters.
+                            let field_names = fields.named.iter().filter_map(|field| {
+                                let Some(ident) = &field.ident else { return None };
+                                if ident.to_string() == "message_id" {
+                                    return Some(quote!(message_id: Id::generate()));
+                                } else {
+                                    return Some(quote!(#ident));
+                                }
+                            });
 
-                        // TODO: this is generated when the type names haven't been replaced yet, so the references in the doc comments don't work.
-                        // let doc_comment = format!("Create a new `{struct_name}`. See the [struct fields]({struct_name}#fields) for documentation of the parameters here.");
-                        let constructor_impl = parse_quote! {
-                            impl #struct_name {
-                                // #[doc = #doc_comment]
-                                pub fn new(#(#parameters),*) -> #struct_name {
-                                    #struct_name {
-                                        #(#field_names),*
+                            let constructor_impl = parse_quote! {
+                                impl #struct_name {
+                                    pub fn new(#(#parameters),*) -> #struct_name {
+                                        #struct_name {
+                                            #(#field_names),*
+                                        }
                                     }
                                 }
-                            }
-                        };
+                            };
 
-                        correct_module.content.as_mut().unwrap().1.push(item.clone());
-                        correct_module.content.as_mut().unwrap().1.push(constructor_impl);
+                            correct_module.content.as_mut().unwrap().1.push(item.clone());
+                            correct_module.content.as_mut().unwrap().1.push(constructor_impl);
+                        } else {
+                            // Derive a builder in cases of 2+ parameters.
+                            let mut item_struct = item_struct.clone();
+                            item_struct.attrs.push(parse_quote!(#[derive(bon::Builder)]));
+                            match &mut item_struct.fields {
+                                syn::Fields::Named(fields) => {
+                                    for field in fields.named.iter_mut() {
+                                        let Some(ident) = &field.ident else { continue };
+                                        if ident.to_string() == "message_id" {
+                                            // By default, generate message_id
+                                            field.attrs.push(parse_quote!(#[builder(default = Id::generate())]));
+                                        }
+                                        if field.ty == parse_quote!(String) || field.ty == parse_quote!(Option<String>) {
+                                            // For strings, take impl Into<String> instead of a regular String
+                                            field.attrs.push(parse_quote!(#[builder(into)]));
+                                        }
+                                    }
+                                }
+                                _ => {}
+                            }
+                            
+                            correct_module.content.as_mut().unwrap().1.push(Item::Struct(item_struct));
+                        }
                     }
 
                     _ => {

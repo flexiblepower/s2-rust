@@ -22,17 +22,26 @@
 //! ### Creating  S2 types
 //! Types have all their fields exposed, so you can construct them using regular Rust constructor syntax:
 //! ```
-//! use s2energy::common::NumberRange;
+//! # use s2energy::common::Id;
+//! # let actuator_id = Id::generate();
+//! # let operation_mode_id = Id::generate();
+//! use s2energy::{common::NumberRange, frbc::ActuatorStatus};
 //! 
 //! let range = NumberRange {
 //!     start_of_range: 1.0,
 //!     end_of_range: 30.5,
 //! };
+//! 
+//! let actuator_status = ActuatorStatus::builder()
+//!     .active_operation_mode_id(operation_mode_id)
+//!     .actuator_id(actuator_id)
+//!     .operation_mode_factor(0.7)
+//!     .build();
 //! ```
 //! 
-//! Each type also has an automatically generated constructor, so you can use [`NumberRange::new`](common::NumberRange::new) instead for brevity. Note that
-//! the parameters are not always in the most intuitive order; this is something we're looking to fix. Some types also implement `From<T>`/`Into<T>` where it makes sense;
-//! for example, `NumberRange` implements [`From<Range<f64>>`](std::ops::Range).
+//! Most types have an automatically generated builder (such as [`ActuatorStatus::builder`](frbc::ActuatorStatus::builder) in the above example), so 
+//! you can use those to create an actuator status as a more convenient alternative to the regular object initialization syntax.
+//! Types with only one field have a `new` function to easily create them.
 //! 
 //! ### Working with [`Message`](common::Message)
 //! When sending or receiving S2 messages, you'll be working with [`common::Message`]. This type represents all possible S2 messages in a big enum. When

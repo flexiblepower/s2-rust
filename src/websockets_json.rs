@@ -32,27 +32,39 @@
 //! let mut s2_connection = connect_as_client("wss://example.com/cem/394727").await?;
 //!
 //! // Create `ResourceManagerDetails`, which will inform the CEM about some properties of our device
-//! let rm_details = ResourceManagerDetails {
-//!     available_control_types: vec![ControlType::FillRateBasedControl],
-//!     roles: vec![Role::new(Commodity::Electricity, RoleType::EnergyStorage)],
-//!     provides_forecast: true,
-//!     provides_power_measurement_types: vec![CommodityQuantity::ElectricPower3PhaseSymmetric],
-//!     name: Some(String::from("Generic Battery Model Q")),
-//!     manufacturer: Some(String::from("Battery Manufacturing BV")),
-//!     model: Some(String::from("GenericBatteryQ_v3")),
-//!     serial_number: Some(String::from("111-222-333")),
-//!     firmware_version: Some(String::from("1.0.0")),
-//!     instruction_processing_delay: Duration(100),
-//!     currency: Some(Currency::Eur),
-//!     resource_id: Id::generate(),
-//!     message_id: Id::generate(),
-//! };
+//! let rm_details = ResourceManagerDetails::builder()
+//!     // Required fields
+//!     .available_control_types(vec![ControlType::FillRateBasedControl])
+//!     .roles(vec![Role { commodity: Commodity::Electricity, role: RoleType::EnergyStorage }])
+//!     .provides_forecast(true)
+//!     .provides_power_measurement_types(vec![CommodityQuantity::ElectricPower3PhaseSymmetric])
+//!     .instruction_processing_delay(Duration(100))
+//!     .resource_id(Id::try_from("00000000-1111-2222-3333-444444444444").unwrap())
+//!     // Optional fields
+//!     .name("Battery Model Q")
+//!     .manufacturer("Battery Manufacturing BV")
+//!     .model("BatteryQ_v3")
+//!     .serial_number("A1-01234-56789")
+//!     .firmware_version("0.2.0")
+//!     .currency(Currency::Eur)
+//!     .build();
 //!
 //! // Initialize the connection; this will perform the S2 handshake and version negotiation for you
 //! s2_connection.initialize_as_rm(rm_details).await?;
 //!
 //! // Send a StorageStatus message; you probably want to send a frbc::SystemDescription as well
 //! s2_connection.send_message(frbc::StorageStatus::new(0.5)).await?;
+//! 
+//! // Handle incoming messages
+//! while let Ok(message) = s2_connection.receive_message().await {
+//!     match message.get_message() {
+//!         // Validate the incoming message here
+//!         _ => { /* ... */ }
+//!     }
+//!     
+//!     // Message looks good, send back an OK reception status
+//!     message.confirm().await?;
+//! }
 //!
 //! # Ok(()) };
 //! ```
@@ -211,7 +223,10 @@ impl S2Connection {
     ///
     /// You should only use this function when implementing an RM.
     pub async fn initialize_as_rm(&mut self, rm_details: ResourceManagerDetails) -> Result<ControlType, S2ConnectionError> {
-        let handshake = Handshake::new(EnergyManagementRole::Rm, vec![crate::s2_schema_version().to_string()]);
+        let handshake = Handshake::builder()
+            .role(EnergyManagementRole::Rm)
+            .supported_protocol_versions(vec![crate::s2_schema_version().to_string()])
+            .build();
         self.send_message(handshake).await?;
 
         let mut need_handshake = true;
@@ -236,7 +251,7 @@ impl S2Connection {
                             requested: requested_version.clone(),
                         });
                     }
-                    
+
                     message.confirm().await?;
                     self.send_message(rm_details.clone()).await?;
                     continue;
@@ -276,11 +291,11 @@ impl S2Connection {
 
             if msg.is_binary() {
                 let _ = self
-                    .send_message(ReceptionStatus::new(
-                        Some("".to_string()),
-                        ReceptionStatusValues::InvalidData,
-                        Id::from_str("00000000-0000-0000-0000-000000000000").unwrap(),
-                    ))
+                    .send_message(ReceptionStatus {
+                        diagnostic_label: Some("Binary messages are not supported".to_string()),
+                        status: ReceptionStatusValues::InvalidData,
+                        subject_message_id: Id::from_str("00000000-0000-0000-0000-000000000000").unwrap(),
+                    })
                     .await;
 
                 return Err(S2ConnectionError::ReceivedBinaryMessage);
@@ -295,11 +310,11 @@ impl S2Connection {
                     Ok(msg) => msg,
                     Err(err) => {
                         let _ = self
-                            .send_message(ReceptionStatus::new(
-                                Some(format!("Failed to parse message. Error: {}", err)),
-                                ReceptionStatusValues::InvalidData,
-                                Id::from_str("00000000-0000-0000-0000-000000000000").unwrap(),
-                            ))
+                            .send_message(ReceptionStatus {
+                                diagnostic_label: Some(format!("Failed to parse message. Error: {}", err)),
+                                status: ReceptionStatusValues::InvalidData,
+                                subject_message_id: Id::from_str("00000000-0000-0000-0000-000000000000").unwrap(),
+                            })
                             .await;
                         return Err(err.into());
                     }
@@ -337,11 +352,11 @@ impl S2Connection {
 /// that you won't be able to send/receive messages on that connection for as long as you're holding the `UnconfirmedMessage`. For this reason,
 /// we recommend a `validate > confirm > handle` pattern, where you validate that a message is valid (using [`get_message`](UnconfirmedMessage::get_message)
 /// to inspect the message), confirm it using `confirm` or `error`, and only then do any operations you need to perform as a result of the message.
-/// 
+///
 /// If you want to opt out of the hassle altogether, you can [`S2Connection::receive_and_confirm`] to receive messages. This immediately
 /// confirms all received messages and gives you an owned [`S2Message`] to work with. The downside, of course, is that in the case of an invalid message
-/// you won't be able to let to sending party know that you can't handle a message.
-/// 
+/// you won't be able to let the sending party know that you can't handle that message.
+///
 /// # Examples
 /// ```no_run
 /// # use s2energy::common::{ReceptionStatusValues, Message, Id};
@@ -373,7 +388,7 @@ impl<'conn> UnconfirmedMessage<'conn> {
     }
 
     /// Sends back an OK [`ReceptionStatus`].
-    /// 
+    ///
     /// Use this to let the other side of the connection know that you've received and validated the message.
     /// If there is a problem with the message (e.g. you can't handle it, or its contents are invalid), use [`error`](`UnconfirmedMessage::error`) instead.
     pub async fn confirm(mut self) -> Result<S2Message, S2ConnectionError> {
@@ -383,17 +398,22 @@ impl<'conn> UnconfirmedMessage<'conn> {
             .expect("No message contained in UnconfirmedMessage; this is a bug in s2energy and should be reported");
         let Some(message_id) = message.id() else { return Ok(message) };
         self.connection
-            .send_message(ReceptionStatus::new(None, ReceptionStatusValues::Ok, message_id))
+            .send_message(
+                ReceptionStatus::builder()
+                    .status(ReceptionStatusValues::Ok)
+                    .subject_message_id(message_id)
+                    .build(),
+            )
             .await?;
         Ok(message)
     }
 
     /// Sends back an error-valued [`ReceptionStatus`].
-    /// 
+    ///
     /// Use this to let the other side of the connection know that there's a problem with the message. Use [`ReceptionStatusValues::InvalidContent`] for
     /// cases where the content of the message was somehow invalid (e.g. it refers to a non-existent actuator ID). Use [`ReceptionStatusValues::TemporaryError`] or
     /// [`ReceptionStatusValues::PermanentError`] for cases where the message was valid, but you can't handle it for some reason.
-    /// 
+    ///
     /// You can use the `diagnostic_message` parameter to send along human-readable diagnostic information. This is helpful for people debugging
     /// their RM/CEM implementation or for logging issues.
     pub async fn error(mut self, status: ReceptionStatusValues, diagnostic_message: &str) -> Result<S2Message, S2ConnectionError> {
@@ -403,7 +423,13 @@ impl<'conn> UnconfirmedMessage<'conn> {
             .expect("No message contained in UnconfirmedMessage; this is a bug in s2energy and should be reported");
         let Some(message_id) = message.id() else { return Ok(message) };
         self.connection
-            .send_message(ReceptionStatus::new(Some(diagnostic_message.to_string()), status, message_id))
+            .send_message(
+                ReceptionStatus::builder()
+                    .diagnostic_label(diagnostic_message.to_string())
+                    .status(status)
+                    .subject_message_id(message_id)
+                    .build(),
+            )
             .await?;
         Ok(message)
     }
