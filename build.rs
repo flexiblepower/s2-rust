@@ -318,15 +318,19 @@ fn main() {
                 // This is a very basic impl, which might be of limited use.
                 match &item_struct.fields {
                     syn::Fields::Named(fields) => {
-                        let parameters = fields.named.iter().filter_map(|field| {
-                            let Some(name) = &field.ident else { return None };
-                            if name.to_string() == "message_id" {
-                                return None;
-                            };
+                        let parameters = fields
+                            .named
+                            .iter()
+                            .filter_map(|field| {
+                                let Some(name) = &field.ident else { return None };
+                                if name.to_string() == "message_id" {
+                                    return None;
+                                };
 
-                            let ty = &field.ty;
-                            Some(quote! { #name: #ty })
-                        }).collect::<Vec<_>>();
+                                let ty = &field.ty;
+                                Some(quote! { #name: #ty })
+                            })
+                            .collect::<Vec<_>>();
                         let create_constructor = parameters.len() <= 1;
 
                         if create_constructor {
@@ -372,7 +376,7 @@ fn main() {
                                 }
                                 _ => {}
                             }
-                            
+
                             correct_module.content.as_mut().unwrap().1.push(Item::Struct(item_struct));
                         }
                     }

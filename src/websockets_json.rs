@@ -54,7 +54,7 @@
 //!
 //! // Send a StorageStatus message; you probably want to send a frbc::SystemDescription as well
 //! s2_connection.send_message(frbc::StorageStatus::new(0.5)).await?;
-//! 
+//!
 //! // Handle incoming messages
 //! while let Ok(message) = s2_connection.receive_message().await {
 //!     match message.get_message() {
@@ -68,13 +68,12 @@
 //!
 //! # Ok(()) };
 //! ```
-use std::str::FromStr;
-
 use crate::common::{
     ControlType, EnergyManagementRole, Handshake, Id, Message as S2Message, ReceptionStatus, ReceptionStatusValues, ResourceManagerDetails,
 };
 use futures_util::{SinkExt, StreamExt};
 use semver::VersionReq;
+use std::str::FromStr;
 use thiserror::Error;
 use tokio::net::{TcpListener, TcpStream, ToSocketAddrs};
 use tokio_tungstenite::{
