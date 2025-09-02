@@ -12,7 +12,7 @@
 //!
 //! # Using this crate
 //! When implementing S2, you need to have a clear picture of which control types you want to implement. If you're not sure which control type
-//! you're implementing, see [the documentation on GitHub](https://github.com/flexiblepower/s2-ws-json/wiki/Control_Types) for an overview of the
+//! you're implementing, see [the documentation website](https://docs.s2standard.org/docs/concepts/control-types/) for an overview of the
 //! available control types.
 //!
 //! S2 types common to all control types (such as [`PowerValue`](common::PowerValue) and [`Commodity`](common::Commodity)) are in the [`common`] module.
@@ -79,9 +79,9 @@
 //! is often more helpful and complete.
 //!
 //! Module documentation (for all modules) and all of the documentation in [`websockets_json`] is hand-written and generally of a higher standard.
-//! It assumes that you are familiar with the S2 standard; if this is not the case, it may be useful to refer to [the S2 documentation on GitHub](https://github.com/flexiblepower/s2-ws-json/wiki).
+//! It assumes that you are familiar with the S2 standard; if this is not the case, it may be useful to refer to [the S2 documentation website](https://docs.s2standard.org/docs/welcome/).
 
-include!(concat!(env!("OUT_DIR"), "/codegen.rs"));
+include!(concat!(env!("OUT_DIR"), "/generated.rs"));
 
 #[cfg(feature = "websockets-json")]
 pub mod websockets_json;

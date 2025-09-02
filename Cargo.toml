@@ -1,6 +1,6 @@
 [package]
 name = "s2energy"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2021"
 authors = ["Wester Coenraads <wester.coenraads@tno.nl>"]
 license = "Apache-2.0"
@@ -20,6 +20,7 @@ regress = "0.7.1" # This dependency is not used directly but necessary for typif
 uuid = { version = "1.17.0", features = ["v4"] }
 serde = { version = "1.0.193", features = ["derive"] }
 semver = "1.0.24"
+bon = "3.7.1"
 
 # feature=websockets-json
 futures-util = { version = "0.3.31", optional = true }
@@ -27,7 +28,6 @@ tokio = { version = "1.46.1", features = ["net"], optional = true }
 tokio-tungstenite = { version = "0.27.0", features = ["rustls-tls-webpki-roots"], optional = true }
 thiserror = { version = "2.0.12", optional = true }
 serde_json = { version = "1.0.141", optional = true }
-bon = "3.7.1"
 
 [build-dependencies]
 prettyplease = "0.2.35"

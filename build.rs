@@ -44,7 +44,7 @@ impl Fold for ReplaceTypeDefinitions {
     }
 }
 
-/// Replaces references to controltype-specific types (such as `FrbcActuatorStatus`) with the fully qualified path (e.g. `frbc::ActuatorStatus`).
+/// Replaces references to controltype-specific types (such as `FrbcActuatorStatus`) with the fully qualified path (e.g. `crate::frbc::ActuatorStatus`).
 struct ReplaceTypeReferences;
 
 impl Fold for ReplaceTypeReferences {
@@ -111,7 +111,7 @@ fn main() {
         /// Use PEBC for devices of which the power producing or consuming behavior cannot be controlled, but can be limited in some way.
         /// This could, for example, be a curtailable PV installation or an EV charger that can be curtailed.
         ///
-        /// For more information on the different control types, see [the documentation on GitHub](https://github.com/flexiblepower/s2-ws-json/wiki/Control_Types).
+        /// For more information on the different control types, see [the S2 documentation website](https://docs.s2standard.org/docs/concepts/control-types/).
         pub mod pebc {
             use crate::common::*;
             use serde::{Deserialize, Serialize};
@@ -123,7 +123,7 @@ fn main() {
         /// Use PPBC for devices which have to perform a certain tasks, but which are flexible w.r.t when this task can be executed.
         /// This could, for example, be a washing machine or dryer with a flexible start time.
         ///
-        /// For more information on the different control types, see [the documentation on GitHub](https://github.com/flexiblepower/s2-ws-json/wiki/Control_Types).
+        /// For more information on the different control types, see [the S2 documentation website](https://docs.s2standard.org/docs/concepts/control-types/).
         pub mod ppbc {
             use crate::common::*;
             use serde::{Deserialize, Serialize};
@@ -135,7 +135,7 @@ fn main() {
         /// Use OMBC for devices which can adjust their power producing or consuming behavior, without constraints regarding the duration of the adjustment.
         /// This could, for example, be a power generator.
         ///
-        /// For more information on the different control types, see [the documentation on GitHub](https://github.com/flexiblepower/s2-ws-json/wiki/Control_Types).
+        /// For more information on the different control types, see [the S2 documentation website](https://docs.s2standard.org/docs/concepts/control-types/).
         pub mod ombc {
             use crate::common::*;
             use serde::{Deserialize, Serialize};
@@ -147,7 +147,7 @@ fn main() {
         /// Use FRBC for devices which can store or buffer energy in some form.
         /// This could, for example, be a smart EV charger, a battery or a fridge/freezer.
         ///
-        /// For more information on the different control types, see [the documentation on GitHub](https://github.com/flexiblepower/s2-ws-json/wiki/Control_Types).
+        /// For more information on the different control types, see [the S2 documentation website](https://docs.s2standard.org/docs/concepts/control-types/).
         pub mod frbc {
             use crate::common::*;
             use serde::{Deserialize, Serialize};
@@ -159,7 +159,7 @@ fn main() {
         /// Use DDBC for devices which need to match a given demand of something, but are flexible in what way they satisfy this demand.
         /// This could, for example, be a hybrid heat pump.
         ///
-        /// For more information on the different control types, see [the documentation on GitHub](https://github.com/flexiblepower/s2-ws-json/wiki/Control_Types).
+        /// For more information on the different control types, see [the S2 documentation website](https://docs.s2standard.org/docs/concepts/control-types/).
         pub mod ddbc {
             use crate::common::*;
             use serde::{Deserialize, Serialize};
@@ -171,7 +171,7 @@ fn main() {
             //!
             //! This module includes a lot of useful types when working with S2. The most important of these is [`Message`]: this is what you'll be sending and receiving.
             //!
-            //! For more information on common S2 concepts, please refer to [the documentation on GitHub](https://github.com/flexiblepower/s2-ws-json/wiki/Common_concepts).
+            //! For more information on common S2 concepts, please refer to [the S2 documentation website](https://docs.s2standard.org/docs/welcome/).
             use serde::{Deserialize, Serialize};
 
             impl Id {
@@ -412,6 +412,6 @@ fn main() {
     // Write the results to a file.
     let output = prettyplease::unparse(&syn::parse2(root_module).expect("Error parsing the resulting module"));
     let mut out_file = Path::new(&env::var("OUT_DIR").expect("No environment variable OUT_DIR")).to_path_buf();
-    out_file.push("codegen.rs");
+    out_file.push("generated.rs");
     fs::write(out_file, output).expect("Error writing output to file");
 }
