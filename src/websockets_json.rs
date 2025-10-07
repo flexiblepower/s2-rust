@@ -178,14 +178,6 @@ enum WebSocketWrapper {
 }
 
 impl WebSocketWrapper {
-    fn is_client(&self) -> bool {
-        matches!(self, Self::ClientSocket(..))
-    }
-
-    fn is_server(&self) -> bool {
-        !self.is_client()
-    }
-
     async fn send(&mut self, item: TungsteniteMessage) -> Result<(), tungstenite::Error> {
         match self {
             Self::ClientSocket(socket) => socket.send(item).await,
