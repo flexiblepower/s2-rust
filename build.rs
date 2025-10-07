@@ -77,7 +77,7 @@ impl Fold for RemoveMessageType {
             .into_pairs()
             .filter(|pair| {
                 let Some(ident) = &pair.value().ident else { return true };
-                return ident.to_string() != "message_type";
+                ident != "message_type"
             })
             .collect();
         syn::fold::fold_fields_named(self, fields)
@@ -91,7 +91,7 @@ struct ReplaceGeneratedErrorPath;
 impl Fold for ReplaceGeneratedErrorPath {
     fn fold_type_path(&mut self, mut type_path: syn::TypePath) -> syn::TypePath {
         let type_ident = &mut type_path.path.segments.last_mut().unwrap().ident;
-        if type_ident.to_string() == "ConversionError" {
+        if type_ident == "ConversionError" {
             syn::fold::fold_type_path(self, parse_quote!(crate::error::ConversionError))
         } else {
             syn::fold::fold_type_path(self, type_path)
@@ -103,7 +103,7 @@ fn main() {
     let content = std::fs::read_to_string("./src/s2.schema.json").expect("Error reading JSON schema");
     let schema = serde_json::from_str::<schemars::schema::RootSchema>(&content).expect("Error parsing JSON schema");
 
-    let mut type_space = TypeSpace::new(&TypeSpaceSettings::default().with_derive("PartialEq".to_string()));
+    let mut type_space = TypeSpace::new(TypeSpaceSettings::default().with_derive("PartialEq".to_string()));
 
     type_space
         .add_root_schema(schema)
@@ -283,7 +283,7 @@ fn main() {
                     // Add a function to easily extract the message ID.
                     let id_extractors = item_enum.variants.iter().map(|variant| {
                         let ident = variant.ident.clone();
-                        if ident.to_string() != "ReceptionStatus" {
+                        if ident != "ReceptionStatus" {
                             Some(quote! { Message::#ident(x) => Some(x.message_id.clone()) })
                         } else {
                             Some(quote! { Message::#ident(_) => None })
@@ -332,7 +332,7 @@ fn main() {
                             .iter()
                             .filter_map(|field| {
                                 let Some(name) = &field.ident else { return None };
-                                if name.to_string() == "message_id" {
+                                if name == "message_id" {
                                     return None;
                                 };
 
@@ -346,10 +346,10 @@ fn main() {
                             // Create a constructor in cases of 1 or 0 parameters.
                             let field_names = fields.named.iter().filter_map(|field| {
                                 let Some(ident) = &field.ident else { return None };
-                                if ident.to_string() == "message_id" {
-                                    return Some(quote!(message_id: Id::generate()));
+                                if ident == "message_id" {
+                                    Some(quote!(message_id: Id::generate()))
                                 } else {
-                                    return Some(quote!(#ident));
+                                    Some(quote!(#ident))
                                 }
                             });
 
@@ -369,21 +369,18 @@ fn main() {
                             // Derive a builder in cases of 2+ parameters.
                             let mut item_struct = item_struct.clone();
                             item_struct.attrs.push(parse_quote!(#[derive(bon::Builder)]));
-                            match &mut item_struct.fields {
-                                syn::Fields::Named(fields) => {
-                                    for field in fields.named.iter_mut() {
-                                        let Some(ident) = &field.ident else { continue };
-                                        if ident.to_string() == "message_id" {
-                                            // By default, generate message_id
-                                            field.attrs.push(parse_quote!(#[builder(default = Id::generate())]));
-                                        }
-                                        if field.ty == parse_quote!(String) || field.ty == parse_quote!(Option<String>) {
-                                            // For strings, take impl Into<String> instead of a regular String
-                                            field.attrs.push(parse_quote!(#[builder(into)]));
-                                        }
+                            if let syn::Fields::Named(fields) = &mut item_struct.fields {
+                                for field in fields.named.iter_mut() {
+                                    let Some(ident) = &field.ident else { continue };
+                                    if ident == "message_id" {
+                                        // By default, generate message_id
+                                        field.attrs.push(parse_quote!(#[builder(default = Id::generate())]));
+                                    }
+                                    if field.ty == parse_quote!(String) || field.ty == parse_quote!(Option<String>) {
+                                        // For strings, take impl Into<String> instead of a regular String
+                                        field.attrs.push(parse_quote!(#[builder(into)]));
                                     }
                                 }
-                                _ => {}
                             }
 
                             correct_module.content.as_mut().unwrap().1.push(Item::Struct(item_struct));

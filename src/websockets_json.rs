@@ -31,7 +31,7 @@
 //! // Connect to the CEM
 //! let mut s2_connection = connect_as_client("wss://example.com/cem/394727").await?;
 //!
-//! // Create a `ResourceManagerDetails`, which will inform the CEM 
+//! // Create a `ResourceManagerDetails`, which will inform the CEM
 //! // about some properties of our device
 //! let rm_details = ResourceManagerDetails::builder()
 //!     // Required fields
@@ -55,7 +55,7 @@
 //! s2_connection.initialize_as_rm(rm_details).await?;
 //! # Ok(()) };
 //! ```
-//! 
+//!
 //! Once you've set up a connection, you can send and receive messages:
 //! ```no_run
 //! # use s2energy::{frbc, websockets_json::{connect_as_client, S2ConnectionError}};
@@ -133,9 +133,9 @@ pub enum S2ConnectionError {
 ///
 /// **NOTE**: TLS is NOT set up or handled by this object; it is recommended you use a server in front
 /// of this (such as nginx) to handle TLS.
-/// 
+///
 /// For example usage, refer to the [module documentation].
-/// 
+///
 /// [module documentation]: crate::websockets_json#examples
 pub struct S2WebsocketServer {
     listener: TcpListener,
@@ -197,9 +197,9 @@ impl WebSocketWrapper {
 ///
 /// You can use the methods on this object to easily send and receive S2 messages without worrying
 /// about things like (de)serialization and handling [`ReceptionStatus`] messages.
-/// 
+///
 /// For example usage, refer to the [module documentation].
-/// 
+///
 /// [module documentation]: crate::websockets_json#examples
 pub struct S2Connection {
     socket: WebSocketWrapper,
@@ -250,9 +250,12 @@ impl S2Connection {
                     need_handshake_response = false;
                     let requested_version = VersionReq::parse(&handshake_response.selected_protocol_version)?;
                     if !requested_version.matches(&crate::s2_schema_version()) {
-                        message
-                            .error(ReceptionStatusValues::InvalidContent, "CEM requested an incompatible version of S2")
-                            .await?;
+                        let error_msg = format!(
+                            "CEM requested an incompatible version of S2: requested {}, which is not compatible with {}",
+                            requested_version,
+                            crate::s2_schema_version()
+                        );
+                        message.error(ReceptionStatusValues::InvalidContent, &error_msg).await?;
                         return Err(S2ConnectionError::IncompatibleS2Version {
                             supported: crate::s2_schema_version(),
                             requested: requested_version.clone(),
