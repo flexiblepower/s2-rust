@@ -84,6 +84,21 @@ impl Fold for RemoveMessageType {
     }
 }
 
+/// `typify` generates an error type for conversion errors, which is located in `crate:error`.
+/// This adjusts references to conversion errors to point there.
+struct ReplaceGeneratedErrorPath;
+
+impl Fold for ReplaceGeneratedErrorPath {
+    fn fold_type_path(&mut self, mut type_path: syn::TypePath) -> syn::TypePath {
+        let type_ident = &mut type_path.path.segments.last_mut().unwrap().ident;
+        if type_ident.to_string() == "ConversionError" {
+            syn::fold::fold_type_path(self, parse_quote!(crate::error::ConversionError))
+        } else {
+            syn::fold::fold_type_path(self, type_path)
+        }
+    }
+}
+
 fn main() {
     let content = std::fs::read_to_string("./src/s2.schema.json").expect("Error reading JSON schema");
     let schema = serde_json::from_str::<schemars::schema::RootSchema>(&content).expect("Error parsing JSON schema");
@@ -114,7 +129,6 @@ fn main() {
         /// For more information on the different control types, see [the S2 documentation website](https://docs.s2standard.org/docs/concepts/control-types/).
         pub mod pebc {
             use crate::common::*;
-            use serde::{Deserialize, Serialize};
         }
     );
     let mut ppbc: ItemMod = parse_quote!(
@@ -126,7 +140,6 @@ fn main() {
         /// For more information on the different control types, see [the S2 documentation website](https://docs.s2standard.org/docs/concepts/control-types/).
         pub mod ppbc {
             use crate::common::*;
-            use serde::{Deserialize, Serialize};
         }
     );
     let mut ombc: ItemMod = parse_quote!(
@@ -138,7 +151,6 @@ fn main() {
         /// For more information on the different control types, see [the S2 documentation website](https://docs.s2standard.org/docs/concepts/control-types/).
         pub mod ombc {
             use crate::common::*;
-            use serde::{Deserialize, Serialize};
         }
     );
     let mut frbc: ItemMod = parse_quote!(
@@ -150,7 +162,6 @@ fn main() {
         /// For more information on the different control types, see [the S2 documentation website](https://docs.s2standard.org/docs/concepts/control-types/).
         pub mod frbc {
             use crate::common::*;
-            use serde::{Deserialize, Serialize};
         }
     );
     let mut ddbc: ItemMod = parse_quote!(
@@ -162,7 +173,6 @@ fn main() {
         /// For more information on the different control types, see [the S2 documentation website](https://docs.s2standard.org/docs/concepts/control-types/).
         pub mod ddbc {
             use crate::common::*;
-            use serde::{Deserialize, Serialize};
         }
     );
     let mut common: ItemMod = parse_quote!(
@@ -172,8 +182,6 @@ fn main() {
             //! This module includes a lot of useful types when working with S2. The most important of these is [`Message`]: this is what you'll be sending and receiving.
             //!
             //! For more information on common S2 concepts, please refer to [the S2 documentation website](https://docs.s2standard.org/docs/welcome/).
-            use serde::{Deserialize, Serialize};
-
             impl Id {
                 /// Create a randomly generated `Id`.
                 pub fn generate() -> Self {
@@ -194,6 +202,7 @@ fn main() {
 
     // Remove the `message_type` field from struct definitions.
     let base_contents = RemoveMessageType::fold_file(&mut RemoveMessageType, base_contents);
+    let base_contents = ReplaceGeneratedErrorPath::fold_file(&mut ReplaceGeneratedErrorPath, base_contents);
 
     // Go over each item (e.g. definition) in the source and determine the correct module to place it in.
     // Controltype-specific types (such as `FrbcActuatorStatus`) go in the module corresponding to that controltype,
