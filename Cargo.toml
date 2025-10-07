@@ -16,7 +16,7 @@ websockets-json = ["dep:futures-util", "dep:tokio", "dep:tokio-tungstenite", "de
 
 [dependencies]
 chrono = { version = "0.4.42", features = ["serde"] }
-regress = "0.7.1" # This dependency is not used directly but necessary for typify to work
+regress = "0.10.4" # This dependency is not used directly but necessary for typify to work
 uuid = { version = "1.18.1", features = ["v4"] }
 serde = { version = "1.0.228", features = ["derive"] }
 semver = "1.0.27"
