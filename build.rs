@@ -369,16 +369,13 @@ fn main() {
                             // Derive a builder in cases of 2+ parameters.
                             let mut item_struct = item_struct.clone();
                             item_struct.attrs.push(parse_quote!(#[derive(bon::Builder)]));
+                            item_struct.attrs.push(parse_quote!(#[builder(on(::std::string::String, into))]));
                             if let syn::Fields::Named(fields) = &mut item_struct.fields {
                                 for field in fields.named.iter_mut() {
                                     let Some(ident) = &field.ident else { continue };
                                     if ident == "message_id" {
                                         // By default, generate message_id
                                         field.attrs.push(parse_quote!(#[builder(default = Id::generate())]));
-                                    }
-                                    if field.ty == parse_quote!(String) || field.ty == parse_quote!(Option<String>) {
-                                        // For strings, take impl Into<String> instead of a regular String
-                                        field.attrs.push(parse_quote!(#[builder(into)]));
                                     }
                                 }
                             }
