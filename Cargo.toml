@@ -8,7 +8,7 @@ description = "Provides type definitions and utilities for the S2 energy flexibi
 homepage = "https://s2standard.org"
 repository = "https://github.com/flexiblepower/s2-rust"
 categories = ["api-bindings"]
-keywords = ["s2", "energy", "energy-management", "protocol", "standard"]
+keywords = ["s2", "energy", "energy-management", "protocol", "automation"]
 
 [features]
 default = ["websockets-json"]
