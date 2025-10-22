@@ -4,6 +4,7 @@
     <div>
         <a href="https://crates.io/crates/s2energy"><img src="https://img.shields.io/crates/v/s2energy" /></a>
         <a href="https://docs.rs/s2energy"><img src="https://img.shields.io/docsrs/s2energy" /></a>
+        <a href="https://discord.com/invite/NyFMEPmuDw"><img src="https://img.shields.io/discord/1351281839913832510"></a>
     </div>
 </div>
 <br />
