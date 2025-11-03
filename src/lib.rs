@@ -103,11 +103,11 @@ mod test {
             message_id: Id::from_str("d147a031-f0bc-4fb6-9713-5a3bd5027481").expect("Error parsing ID"),
             operation_mode_factor: 0.64,
             previous_operation_mode_id: None,
-            transition_timestamp: Some(chrono::DateTime::from_timestamp(1736256315394, 0).expect("Error parsing timestamp")),
+            transition_timestamp: Some(chrono::DateTime::from_timestamp(1736256315, 0).expect("Error parsing timestamp")),
         };
         let message = Message::FrbcActuatorStatus(actuator_status);
         let serialized = serde_json::to_string(&message)?;
-        let expected_serialized = r#"{"message_type":"FRBC.ActuatorStatus","active_operation_mode_id":"862acd86-cfd5-4a5c-9ad8-d28a5d192f03","actuator_id":"19e02398-3b5a-4f42-bd64-7929bce7369f","message_id":"d147a031-f0bc-4fb6-9713-5a3bd5027481","operation_mode_factor":0.64,"transition_timestamp":"+56989-10-09T04:56:34Z"}"#;
+        let expected_serialized = r#"{"message_type":"FRBC.ActuatorStatus","active_operation_mode_id":"862acd86-cfd5-4a5c-9ad8-d28a5d192f03","actuator_id":"19e02398-3b5a-4f42-bd64-7929bce7369f","message_id":"d147a031-f0bc-4fb6-9713-5a3bd5027481","operation_mode_factor":0.64,"transition_timestamp":"2025-01-07T13:25:15Z"}"#;
         assert_eq!(serialized, expected_serialized);
 
         let roundtripped: Message = serde_json::from_str(&serialized)?;
