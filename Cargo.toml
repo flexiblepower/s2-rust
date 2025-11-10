@@ -1,6 +1,6 @@
 [package]
 name = "s2energy"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 authors = ["Wester Coenraads <wester.coenraads@tno.nl>"]
 license = "Apache-2.0"

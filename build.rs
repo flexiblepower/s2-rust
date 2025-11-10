@@ -1,6 +1,6 @@
-use quote::{quote, ToTokens};
+use quote::{ToTokens, quote};
 use std::{env, fs, path::Path};
-use syn::{fold::Fold, parse_quote, ExprPath, ExprStruct, FieldsNamed, Ident, Item, ItemEnum, ItemMod, ItemStruct, Meta, Type, TypePath};
+use syn::{ExprPath, ExprStruct, FieldsNamed, Ident, Item, ItemEnum, ItemMod, ItemStruct, Meta, Type, TypePath, fold::Fold, parse_quote};
 use typify::{TypeSpace, TypeSpaceSettings};
 
 /// Replaces definitions and references of controltype-specific types (such as `FrbcActuatorStatus`) with the a shortened name (e.g. `ActuatorStatus`, which should be places in the `frbc` module).
@@ -195,6 +195,26 @@ fn main() {
                         start_of_range: val.start.into(),
                         end_of_range: val.end.into(),
                     }
+                }
+            }
+
+            impl From<NumberRange> for std::ops::Range<f64> {
+                fn from(val: NumberRange) -> std::ops::Range<f64> {
+                    val.start_of_range..val.end_of_range
+                }
+            }
+
+            impl From<Duration> for chrono::TimeDelta {
+                fn from(val: Duration) -> chrono::TimeDelta {
+                    chrono::TimeDelta::milliseconds(val.0 as i64)
+                }
+            }
+
+            impl From<chrono::TimeDelta> for Duration {
+                fn from(val: chrono::TimeDelta) -> Duration {
+                    Duration(
+                        u64::try_from(val.num_milliseconds()).expect("Can't convert a negative chrono::TimeDelta to a common::Duration"),
+                    )
                 }
             }
         }
