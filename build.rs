@@ -189,6 +189,12 @@ fn main() {
                 }
             }
 
+            impl NumberRange {
+                pub fn contains(&self, value: f64) -> bool {
+                    self.start_of_range >= value && self.end_of_range < value
+                }
+            }
+
             impl<T: Into<f64>> From<std::ops::Range<T>> for NumberRange {
                 fn from(val: std::ops::Range<T>) -> NumberRange {
                     NumberRange {
