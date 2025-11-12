@@ -191,7 +191,7 @@ fn main() {
 
             impl NumberRange {
                 pub fn contains(&self, value: f64) -> bool {
-                    self.start_of_range >= value && self.end_of_range < value
+                    value >= self.start_of_range && value < self.end_of_range
                 }
             }
 
