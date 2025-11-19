@@ -191,9 +191,12 @@ fn main() {
 
             impl NumberRange {
                 pub fn new(start: f64, end: f64) -> NumberRange {
-                    NumberRange { start_of_range: start, end_of_range: end }
+                    NumberRange {
+                        start_of_range: start,
+                        end_of_range: end,
+                    }
                 }
-                
+
                 pub fn contains(&self, value: f64) -> bool {
                     value >= self.start_of_range && value < self.end_of_range
                 }
@@ -412,6 +415,14 @@ fn main() {
 
                             correct_module.content.as_mut().unwrap().1.push(Item::Struct(item_struct));
                         }
+                    }
+
+                    syn::Fields::Unnamed(_) => {
+                        let mut item_struct = item_struct.clone();
+                        if item_struct.ident == "Id" {
+                            item_struct.attrs.push(parse_quote!(#[derive(Eq, PartialEq, Hash)]))
+                        }
+                        correct_module.content.as_mut().unwrap().1.push(item.clone());
                     }
 
                     _ => {
