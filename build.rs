@@ -185,7 +185,7 @@ fn main() {
             impl Id {
                 /// Create a randomly generated `Id`.
                 pub fn generate() -> Self {
-                    Self(uuid::Uuid::new_v4().to_string())
+                    Self(uuid::Uuid::new_v4())
                 }
             }
 
