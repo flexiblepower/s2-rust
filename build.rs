@@ -420,9 +420,9 @@ fn main() {
                     syn::Fields::Unnamed(_) => {
                         let mut item_struct = item_struct.clone();
                         if item_struct.ident == "Id" {
-                            item_struct.attrs.push(parse_quote!(#[derive(Eq, PartialEq, Hash)]))
+                            item_struct.attrs.push(parse_quote!(#[derive(Eq, Hash)]))
                         }
-                        correct_module.content.as_mut().unwrap().1.push(item.clone());
+                        correct_module.content.as_mut().unwrap().1.push(Item::Struct(item_struct));
                     }
 
                     _ => {
