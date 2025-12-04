@@ -276,7 +276,9 @@ impl S2Connection {
 
                 S2Message::SelectControlType(select_control_type) if !need_handshake && !need_handshake_response => {
                     tracing::info!("Control type selected by CEM: {:?}", select_control_type.control_type);
-                    return Ok(select_control_type.control_type);
+                    let control_type = select_control_type.control_type;
+                    message.confirm().await?;
+                    return Ok(control_type);
                 }
 
                 other_message => {
