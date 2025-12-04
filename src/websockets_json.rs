@@ -85,8 +85,8 @@ use std::str::FromStr;
 use thiserror::Error;
 use tokio::net::{TcpListener, TcpStream, ToSocketAddrs};
 use tokio_tungstenite::{
-    tungstenite::{self, client::IntoClientRequest, protocol::Message as TungsteniteMessage},
     MaybeTlsStream, WebSocketStream,
+    tungstenite::{self, client::IntoClientRequest, protocol::Message as TungsteniteMessage},
 };
 
 /// Errors that occur during an S2 connection over WebSockets.
@@ -109,9 +109,15 @@ pub enum S2ConnectionError {
     },
     /// Error performing a handshake with the CEM; received a message at a point where that message was not expected (e.g. a [`HandshakeResponse`](crate::common::HandshakeResponse) before we even sent a [`Handshake`])
     #[error(
-        "received an unexpected message, or an expected message at an unexpected moment, during the S2 handshaking process: {message:?}"
+        "received an unexpected message, or an expected message at an unexpected moment, during the S2 handshaking process: {message:?} ({} Handshake, {} HandshakeResponse)",
+        if *handshake_received { "already received" } else { "not yet received" },
+        if *handshake_response_received { "already received" } else { "not yet received" },
     )]
-    InvalidHandshakeOrder { message: S2Message },
+    InvalidHandshakeOrder {
+        handshake_received: bool,
+        handshake_response_received: bool,
+        message: S2Message,
+    },
 
     /// Encountered an error on the [`TcpListener`] used internally in [`S2WebsocketServer`].
     #[error("error originating from the internal TCPListener")]
@@ -255,6 +261,7 @@ impl S2Connection {
                             requested_version,
                             crate::s2_schema_version()
                         );
+                        tracing::warn!("{error_msg:?}");
                         message.error(ReceptionStatusValues::InvalidContent, &error_msg).await?;
                         return Err(S2ConnectionError::IncompatibleS2Version {
                             supported: crate::s2_schema_version(),
@@ -268,13 +275,18 @@ impl S2Connection {
                 }
 
                 S2Message::SelectControlType(select_control_type) if !need_handshake && !need_handshake_response => {
+                    tracing::info!("Control type selected by CEM: {:?}", select_control_type.control_type);
                     return Ok(select_control_type.control_type);
                 }
 
                 other_message => {
                     let diagnostic = format!("Did not expect message at this point in the handshake process: {:?}", other_message);
                     let message = message.error(ReceptionStatusValues::InvalidContent, &diagnostic).await?;
-                    return Err(S2ConnectionError::InvalidHandshakeOrder { message });
+                    return Err(S2ConnectionError::InvalidHandshakeOrder {
+                        message,
+                        handshake_received: !need_handshake,
+                        handshake_response_received: !need_handshake_response,
+                    });
                 }
             }
 
@@ -285,6 +297,7 @@ impl S2Connection {
     /// Sends the given message over the websocket.
     pub async fn send_message(&mut self, message: impl Into<S2Message>) -> Result<(), S2ConnectionError> {
         let s2_message = message.into();
+        tracing::trace!("Sending S2 message: {s2_message:?}");
         let message_str = serde_json::to_string(&s2_message)
             .expect("Could not serialize the given message into JSON; this is a bug and should be reported");
         self.socket.send(TungsteniteMessage::Text(message_str.into())).await?;
@@ -300,6 +313,7 @@ impl S2Connection {
             let msg = self.socket.next().await.ok_or(S2ConnectionError::WebsocketClosed)??;
 
             if msg.is_binary() {
+                tracing::warn!("Received binary websocket message, which is not supported. Sending ReceptionStatus INVALID_DATA.");
                 let _ = self
                     .send_message(ReceptionStatus {
                         diagnostic_label: Some("Binary messages are not supported".to_string()),
@@ -310,18 +324,20 @@ impl S2Connection {
 
                 return Err(S2ConnectionError::ReceivedBinaryMessage);
             } else if msg.is_close() {
+                tracing::info!("Received a websocket close message");
                 return Err(S2ConnectionError::WebsocketClosed);
             } else if msg.is_text() {
                 let msg_string = msg
                     .into_text()
-                    .expect("Encountering a panic here should be impossible; please report a bug if you encounter this anyway");
+                    .expect("Encountering a panic here should be impossible; please report a bug in s2energy if you encounter this anyway");
 
                 let msg_parsed = match serde_json::from_str(&msg_string) {
                     Ok(msg) => msg,
                     Err(err) => {
+                        tracing::warn!("Failed to parse incoming message. Message: {msg_string}. Error: {err}");
                         let _ = self
                             .send_message(ReceptionStatus {
-                                diagnostic_label: Some(format!("Failed to parse message. Error: {}", err)),
+                                diagnostic_label: Some(format!("Failed to parse message. Error: {err}")),
                                 status: ReceptionStatusValues::InvalidData,
                                 subject_message_id: Id::from_str("00000000-0000-0000-0000-000000000000").unwrap(),
                             })
@@ -340,6 +356,7 @@ impl S2Connection {
             }
         };
 
+        tracing::trace!("Received S2 message: {message:?}");
         Ok(UnconfirmedMessage::new(message, self))
     }
 
@@ -469,7 +486,9 @@ impl<'conn> UnconfirmedMessage<'conn> {
 impl<'conn> Drop for UnconfirmedMessage<'conn> {
     fn drop(&mut self) {
         if !std::thread::panicking() && self.message.is_some() {
-            panic!("Dropped an `UnconfirmedMessage` without calling `confirm`, `bad_status` or `into_inner`. Please refer to the `UnconfirmedMessage` documentation for proper usage.");
+            panic!(
+                "Dropped an `UnconfirmedMessage` without calling `confirm`, `bad_status` or `into_inner`. Please refer to the `UnconfirmedMessage` documentation for proper usage."
+            );
         }
     }
 }
