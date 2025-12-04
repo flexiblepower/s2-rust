@@ -242,7 +242,7 @@ impl S2Connection {
             .build();
         self.send_message(handshake).await?;
 
-        let mut need_handshake = true;
+        let mut need_handshake = false;
         let mut need_handshake_response = true;
 
         loop {
