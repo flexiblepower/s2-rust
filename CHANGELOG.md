@@ -1,5 +1,6 @@
 # 0.3.0
-- `common::Duration` now has `From`/`Into` implementations to easily convert to/from `chrono::TimeDelta`.
+- `common::Duration` now has `From`/`Into` implementations to easily convert to/from `chrono::TimeDelta`.\
+- Added crate feature (enabled by default): `tracing`. When this feature is enabled, `s2energy` will now emit logs via the `tracing` crate to report on e.g. the messages being sent and received.
 
 # 0.2.0
 - BREAKING: Reworked the way reception statuses are handled: instead of automatically confirming reception of messages, calling `receive_message` now returns an `UnconfirmedMessage` that the user can use to validate the message contents and send back the appropriate reception status.

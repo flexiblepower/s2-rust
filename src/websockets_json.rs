@@ -449,6 +449,7 @@ impl<'conn> UnconfirmedMessage<'conn> {
             .take()
             .expect("No message contained in UnconfirmedMessage; this is a bug in s2energy and should be reported");
         let Some(message_id) = message.id() else { return Ok(message) };
+        tracing::warn!("Sending reception status {status:?} in response to message {message_id:?}");
         self.connection
             .send_message(
                 ReceptionStatus::builder()
