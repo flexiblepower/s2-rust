@@ -237,58 +237,47 @@ fn main() {
     let base_contents = RemoveMessageType::fold_file(&mut RemoveMessageType, base_contents);
     let base_contents = ReplaceGeneratedErrorPath::fold_file(&mut ReplaceGeneratedErrorPath, base_contents);
 
+    let mut push_to_correct_module = |item_name: &str, item: Item| {
+        let correct_module = if item_name.starts_with("Pebc") {
+            &mut pebc
+        } else if item_name.starts_with("Ppbc") {
+            &mut ppbc
+        } else if item_name.starts_with("Ombc") {
+            &mut ombc
+        } else if item_name.starts_with("Frbc") {
+            &mut frbc
+        } else if item_name.starts_with("Ddbc") {
+            &mut ddbc
+        } else {
+            &mut common
+        };
+        correct_module.content.as_mut().unwrap().1.push(item)
+    };
+
     // Go over each item (e.g. definition) in the source and determine the correct module to place it in.
     // Controltype-specific types (such as `FrbcActuatorStatus`) go in the module corresponding to that controltype,
     // other types (such as `Commodity`) go in `common`.
-    for item in &base_contents.items {
+    for item in base_contents.items {
         match item {
             syn::Item::Impl(item_impl) => {
                 let impl_type_name = match &*item_impl.self_ty {
                     Type::Path(type_path) => type_path.path.segments.last().unwrap().ident.to_string(),
                     Type::Verbatim(token_stream) => token_stream.to_string(),
                     _ => {
-                        root_module.extend(item.into_token_stream());
+                        root_module.extend(item_impl.into_token_stream());
                         continue;
                     }
                 };
 
-                let correct_module = if impl_type_name.starts_with("Pebc") {
-                    &mut pebc
-                } else if impl_type_name.starts_with("Ppbc") {
-                    &mut ppbc
-                } else if impl_type_name.starts_with("Ombc") {
-                    &mut ombc
-                } else if impl_type_name.starts_with("Frbc") {
-                    &mut frbc
-                } else if impl_type_name.starts_with("Ddbc") {
-                    &mut ddbc
-                } else {
-                    &mut common
-                };
-
-                correct_module.content.as_mut().unwrap().1.push(item.clone());
+                push_to_correct_module(&impl_type_name, item_impl.into());
             }
 
-            syn::Item::Enum(item_enum) => {
+            syn::Item::Enum(mut item_enum) => {
                 let enum_name = item_enum.ident.to_string();
-                let correct_module = if enum_name.starts_with("Pebc") {
-                    &mut pebc
-                } else if enum_name.starts_with("Ppbc") {
-                    &mut ppbc
-                } else if enum_name.starts_with("Ombc") {
-                    &mut ombc
-                } else if enum_name.starts_with("Frbc") {
-                    &mut frbc
-                } else if enum_name.starts_with("Ddbc") {
-                    &mut ddbc
-                } else {
-                    &mut common
-                };
 
                 // Special case for `Message`: the generated enum is serde(untagged), but needs to be serde(tag = "message_type")
                 // with the variants renamed so it matches the S2 spec.
                 if enum_name == "Message" {
-                    let mut item_enum = item_enum.clone();
                     // Change `serde(untagged)` to `serde(tag = "message_type)`.
                     for attr in &mut item_enum.attrs {
                         let Meta::List(lst) = &mut attr.meta else { continue };
@@ -332,29 +321,15 @@ fn main() {
                         }
                     };
 
-                    correct_module.content.as_mut().unwrap().1.push(syn::Item::Enum(item_enum));
-                    correct_module.content.as_mut().unwrap().1.push(extractor_impl);
-                } else {
-                    correct_module.content.as_mut().unwrap().1.push(item.clone());
+                    push_to_correct_module(&enum_name, extractor_impl);
                 }
+
+                push_to_correct_module(&enum_name, item_enum.into());
             }
 
-            syn::Item::Struct(item_struct) => {
+            syn::Item::Struct(mut item_struct) => {
                 let struct_name = &item_struct.ident;
                 let struct_name_str = struct_name.to_string();
-                let correct_module = if struct_name_str.starts_with("Pebc") {
-                    &mut pebc
-                } else if struct_name_str.starts_with("Ppbc") {
-                    &mut ppbc
-                } else if struct_name_str.starts_with("Ombc") {
-                    &mut ombc
-                } else if struct_name_str.starts_with("Frbc") {
-                    &mut frbc
-                } else if struct_name_str.starts_with("Ddbc") {
-                    &mut ddbc
-                } else {
-                    &mut common
-                };
 
                 // For structs, also generate a constructor impl.
                 // This is a very basic impl, which might be of limited use.
@@ -373,8 +348,8 @@ fn main() {
                                 Some(quote! { #name: #ty })
                             })
                             .collect::<Vec<_>>();
-                        let create_constructor = parameters.len() <= 1;
 
+                        let create_constructor = parameters.len() <= 1;
                         if create_constructor {
                             // Create a constructor in cases of 1 or 0 parameters.
                             let field_names = fields.named.iter().filter_map(|field| {
@@ -396,11 +371,9 @@ fn main() {
                                 }
                             };
 
-                            correct_module.content.as_mut().unwrap().1.push(item.clone());
-                            correct_module.content.as_mut().unwrap().1.push(constructor_impl);
+                            push_to_correct_module(&struct_name_str, constructor_impl);
                         } else {
                             // Derive a builder in cases of 2+ parameters.
-                            let mut item_struct = item_struct.clone();
                             item_struct.attrs.push(parse_quote!(#[derive(bon::Builder)]));
                             item_struct.attrs.push(parse_quote!(#[builder(on(::std::string::String, into))]));
                             if let syn::Fields::Named(fields) = &mut item_struct.fields {
@@ -412,23 +385,19 @@ fn main() {
                                     }
                                 }
                             }
-
-                            correct_module.content.as_mut().unwrap().1.push(Item::Struct(item_struct));
                         }
                     }
 
                     syn::Fields::Unnamed(_) => {
-                        let mut item_struct = item_struct.clone();
                         if item_struct.ident == "Id" {
                             item_struct.attrs.push(parse_quote!(#[derive(Eq, Hash)]))
                         }
-                        correct_module.content.as_mut().unwrap().1.push(Item::Struct(item_struct));
                     }
 
-                    _ => {
-                        correct_module.content.as_mut().unwrap().1.push(item.clone());
-                    }
+                    _ => {}
                 };
+
+                push_to_correct_module(&struct_name_str, item_struct.into());
             }
 
             _ => {
