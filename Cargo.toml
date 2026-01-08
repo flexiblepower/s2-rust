@@ -11,8 +11,9 @@ categories = ["api-bindings"]
 keywords = ["s2", "energy", "energy-management", "protocol", "automation"]
 
 [features]
-default = ["websockets-json"]
+default = ["websockets-json", "dbus"]
 websockets-json = ["dep:futures-util", "dep:tokio", "dep:tokio-tungstenite", "dep:thiserror", "dep:serde_json"]
+dbus = []
 
 [dependencies]
 chrono = { version = "0.4.42", features = ["serde"] }

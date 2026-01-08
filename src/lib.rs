@@ -83,8 +83,8 @@
 
 include!(concat!(env!("OUT_DIR"), "/generated.rs"));
 
-#[cfg(feature = "websockets-json")]
-pub mod websockets_json;
+pub mod transport;
+pub mod connection;
 
 #[cfg(test)]
 mod test {
