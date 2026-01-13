@@ -135,7 +135,7 @@ impl WebsocketServer {
     ///
     /// This will immediately bind the server to the specified address. To unbind the server,
     /// drop this object.
-    pub async fn new(addr: impl ToSocketAddrs) -> Result<Self, ConnectionError<WebsocketTransport>> {
+    pub async fn new(addr: impl ToSocketAddrs) -> Result<Self, ConnectionError<WebsocketTransportError>> {
         Ok(Self {
             listener: TcpListener::bind(addr)
                 .await
@@ -147,7 +147,7 @@ impl WebsocketServer {
     /// Accept an S2 connection over WebSockets on this server.
     ///
     /// You probably want to do this in a loop, and spawn a new task to handle each connection (see the [example in the module documentation][crate::websockets_json#examples]).
-    pub async fn accept_connection(&self) -> Result<S2Connection<WebsocketTransport>, ConnectionError<WebsocketTransport>> {
+    pub async fn accept_connection(&self) -> Result<S2Connection<WebsocketTransport>, ConnectionError<WebsocketTransportError>> {
         let (tcp_stream, _) = self
             .listener
             .accept()
@@ -169,7 +169,7 @@ impl WebsocketServer {
 /// for convenience.
 pub async fn connect_as_client(
     url: impl IntoClientRequest + Unpin,
-) -> Result<S2Connection<WebsocketTransport>, ConnectionError<WebsocketTransport>> {
+) -> Result<S2Connection<WebsocketTransport>, ConnectionError<WebsocketTransportError>> {
     let (socket, _) = tokio_tungstenite::connect_async(url)
         .await
         .map_err(Into::into)

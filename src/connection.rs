@@ -7,10 +7,10 @@ use thiserror::Error;
 
 /// An error from the S2 connection.
 #[derive(Error, Debug)]
-pub enum ConnectionError<T: S2Transport> {
+pub enum ConnectionError<T: std::error::Error> {
     /// An error from the underlying `S2Transport`.
     #[error("an error occurred in the underlying transport")]
-    TransportError(#[source] T::TransportError),
+    TransportError(#[source] T),
 
     /// A situation occurred that is in violation of the S2 specification.
     #[error("a situation occurred that is in violation of the S2 specification")]
@@ -70,7 +70,7 @@ impl<T: S2Transport> S2Connection<T> {
     /// send the respective `SystemDescription` after this function returns.
     ///
     /// You should only use this function when implementing an RM.
-    pub async fn initialize_as_rm(&mut self, rm_details: ResourceManagerDetails) -> Result<ControlType, ConnectionError<T>> {
+    pub async fn initialize_as_rm(&mut self, rm_details: ResourceManagerDetails) -> Result<ControlType, ConnectionError<T::TransportError>> {
         let handshake = Handshake::builder()
             .role(EnergyManagementRole::Rm)
             .supported_protocol_versions(vec![crate::s2_schema_version().to_string()])
@@ -135,7 +135,7 @@ impl<T: S2Transport> S2Connection<T> {
     }
 
     /// Sends the given message over the websocket.
-    pub async fn send_message(&mut self, message: impl Into<Message>) -> Result<(), ConnectionError<T>> {
+    pub async fn send_message(&mut self, message: impl Into<Message>) -> Result<(), ConnectionError<T::TransportError>> {
         self.transport.send(message.into()).await.map_err(ConnectionError::TransportError)?;
         Ok(())
     }
@@ -143,7 +143,7 @@ impl<T: S2Transport> S2Connection<T> {
     /// Waits for a message to come over the websocket, and returns it.
     ///
     /// This function sends back a [`ReceptionStatus`] when it receives a message, so you don't need to do that yourself. Additionally, it filters out any received `ReceptionStatus` messages.
-    pub async fn receive_message<'connection>(&'connection mut self) -> Result<UnconfirmedMessage<'connection, T>, ConnectionError<T>> {
+    pub async fn receive_message<'connection>(&'connection mut self) -> Result<UnconfirmedMessage<'connection, T>, ConnectionError<T::TransportError>> {
         let message = self.transport.receive().await.map_err(ConnectionError::TransportError)?;
         if let Message::ReceptionStatus(reception_status @ ReceptionStatus { status, .. }) = &message {
             if *status != ReceptionStatusValues::Ok {
@@ -158,7 +158,7 @@ impl<T: S2Transport> S2Connection<T> {
     /// Wait for a message, and immediately send back a [`ReceptionStatus`].
     ///
     /// This is the equivalent of `connection.receive_message().await?.confirm().await?`.
-    pub async fn receive_and_confirm(&mut self) -> Result<Message, ConnectionError<T>> {
+    pub async fn receive_and_confirm(&mut self) -> Result<Message, ConnectionError<T::TransportError>> {
         self.receive_message().await?.confirm().await
     }
 }
@@ -214,7 +214,7 @@ impl<'conn, T: S2Transport> UnconfirmedMessage<'conn, T> {
     ///
     /// Use this to let the other side of the connection know that you've received and validated the message.
     /// If there is a problem with the message (e.g. you can't handle it, or its contents are invalid), use [`error`](`UnconfirmedMessage::error`) instead.
-    pub async fn confirm(mut self) -> Result<Message, ConnectionError<T>> {
+    pub async fn confirm(mut self) -> Result<Message, ConnectionError<T::TransportError>> {
         let message = self
             .message
             .take()
@@ -239,7 +239,7 @@ impl<'conn, T: S2Transport> UnconfirmedMessage<'conn, T> {
     ///
     /// You can use the `diagnostic_message` parameter to send along human-readable diagnostic information. This is helpful for people debugging
     /// their RM/CEM implementation or for logging issues.
-    pub async fn error(mut self, status: ReceptionStatusValues, diagnostic_message: &str) -> Result<Message, ConnectionError<T>> {
+    pub async fn error(mut self, status: ReceptionStatusValues, diagnostic_message: &str) -> Result<Message, ConnectionError<T::TransportError>> {
         let message = self
             .message
             .take()
