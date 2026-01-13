@@ -96,11 +96,11 @@ use tokio_tungstenite::{
 #[derive(Error, Debug)]
 pub enum WebsocketTransportError {
     /// Encountered an error on the [`TcpListener`] used internally in [`S2WebsocketServer`].
-    #[error("error originating from the internal TCPListener")]
+    #[error("error originating from the internal TCPListener: {0}")]
     WebsocketServerError(#[from] tokio::io::Error),
 
     /// Encountered an error on the WebSocket connection.
-    #[error("error from websocket connection")]
+    #[error("error from websocket connection: {0}")]
     WebsocketError(#[from] tungstenite::Error),
 
     /// The WebSocket has closed. This may be expected, and does not always indicate an actual error.
@@ -112,7 +112,7 @@ pub enum WebsocketTransportError {
     ReceivedBinaryMessage,
 
     /// Could not parse a received JSON message into a valid S2 message. This is likely a bug on the other end of the connection.
-    #[error("error parsing a received JSON message into a valid S2 message")]
+    #[error("error parsing a received JSON message into a valid S2 message: {0}")]
     MessageParseError(#[from] serde_json::Error),
 }
 

@@ -9,11 +9,11 @@ use thiserror::Error;
 #[derive(Error, Debug)]
 pub enum ConnectionError<T: std::error::Error> {
     /// An error from the underlying `S2Transport`.
-    #[error("an error occurred in the underlying transport")]
+    #[error("an error occurred in the underlying transport: {0}")]
     TransportError(#[source] T),
 
     /// A situation occurred that is in violation of the S2 specification.
-    #[error("a situation occurred that is in violation of the S2 specification")]
+    #[error("a situation occurred that is in violation of the S2 specification: {0}")]
     ProtocolError(#[from] ProtocolError),
 }
 
@@ -25,7 +25,7 @@ pub enum ProtocolError {
     ReceivedBadReceptionStatus(ReceptionStatus),
 
     /// Could not parse the S2 version sent by the other end of the connection.
-    #[error("error parsing the requested S2 version into a valid semver version")]
+    #[error("error parsing the requested S2 version into a valid semver version: {0}")]
     S2VersionParseError(#[from] semver::Error),
 
     /// The CEM requested a version of S2 that is not supported by the build of the library you are using.
