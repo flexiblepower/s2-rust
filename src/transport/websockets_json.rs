@@ -12,9 +12,9 @@
 //! # Examples
 //! Setting up a WebSocket server and handling connections to it:
 //! ```no_run
-//! # use s2energy::transport::websockets_json::{WebsocketServer, WebsocketTransport};
+//! # use s2energy::transport::{S2Transport, websockets_json::{WebsocketServer, WebsocketTransport}};
 //! # use s2energy::connection::ConnectionError;
-//! # async fn test() -> Result<(), ConnectionError<WebsocketTransport>> {
+//! # async fn test() -> Result<(), ConnectionError<<WebsocketTransport as S2Transport>::TransportError>> {
 //! let server = WebsocketServer::new("0.0.0.0:8080").await?;
 //! loop {
 //!     let s2_connection = server.accept_connection().await?;
@@ -27,9 +27,9 @@
 //! ```no_run
 //! # use s2energy::common::{Commodity, CommodityQuantity, ControlType, Currency, Duration, Id, ResourceManagerDetails, Role, RoleType};
 //! # use s2energy::frbc;
-//! # use s2energy::transport::websockets_json::{connect_as_client, WebsocketTransport};
+//! # use s2energy::transport::{S2Transport, websockets_json::{connect_as_client, WebsocketTransport}};
 //! # use s2energy::connection::ConnectionError;
-//! # async fn test() -> Result<(), ConnectionError<WebsocketTransport>> {
+//! # async fn test() -> Result<(), ConnectionError<<WebsocketTransport as S2Transport>::TransportError>> {
 //! // Connect to the CEM
 //! let mut s2_connection = connect_as_client("wss://example.com/cem/394727").await?;
 //!
@@ -60,8 +60,8 @@
 //!
 //! Once you've set up a connection, you can send and receive messages:
 //! ```no_run
-//! # use s2energy::{frbc, connection::ConnectionError, transport::websockets_json::{connect_as_client, WebsocketTransport}};
-//! # async fn test() -> Result<(), ConnectionError<WebsocketTransport>> {
+//! # use s2energy::{frbc, connection::ConnectionError, transport::S2Transport, transport::websockets_json::{connect_as_client, WebsocketTransport}};
+//! # async fn test() -> Result<(), ConnectionError<<WebsocketTransport as S2Transport>::TransportError>> {
 //! # let mut s2_connection = connect_as_client("no_run").await?;
 //! // Send a StorageStatus message:
 //! s2_connection.send_message(frbc::StorageStatus::new(0.5)).await?;

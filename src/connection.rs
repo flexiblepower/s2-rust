@@ -70,7 +70,10 @@ impl<T: S2Transport> S2Connection<T> {
     /// send the respective `SystemDescription` after this function returns.
     ///
     /// You should only use this function when implementing an RM.
-    pub async fn initialize_as_rm(&mut self, rm_details: ResourceManagerDetails) -> Result<ControlType, ConnectionError<T::TransportError>> {
+    pub async fn initialize_as_rm(
+        &mut self,
+        rm_details: ResourceManagerDetails,
+    ) -> Result<ControlType, ConnectionError<T::TransportError>> {
         let handshake = Handshake::builder()
             .role(EnergyManagementRole::Rm)
             .supported_protocol_versions(vec![crate::s2_schema_version().to_string()])
@@ -143,7 +146,9 @@ impl<T: S2Transport> S2Connection<T> {
     /// Waits for a message to come over the websocket, and returns it.
     ///
     /// This function sends back a [`ReceptionStatus`] when it receives a message, so you don't need to do that yourself. Additionally, it filters out any received `ReceptionStatus` messages.
-    pub async fn receive_message<'connection>(&'connection mut self) -> Result<UnconfirmedMessage<'connection, T>, ConnectionError<T::TransportError>> {
+    pub async fn receive_message<'connection>(
+        &'connection mut self,
+    ) -> Result<UnconfirmedMessage<'connection, T>, ConnectionError<T::TransportError>> {
         let message = self.transport.receive().await.map_err(ConnectionError::TransportError)?;
         if let Message::ReceptionStatus(reception_status @ ReceptionStatus { status, .. }) = &message {
             if *status != ReceptionStatusValues::Ok {
@@ -160,6 +165,13 @@ impl<T: S2Transport> S2Connection<T> {
     /// This is the equivalent of `connection.receive_message().await?.confirm().await?`.
     pub async fn receive_and_confirm(&mut self) -> Result<Message, ConnectionError<T::TransportError>> {
         self.receive_message().await?.confirm().await
+    }
+
+    /// Properly disconnects this connection.
+    ///
+    /// Depending on the underlying transport, this can range from simply dropping the connection object to sending disconnection messages.
+    pub async fn disconnect(self) {
+        self.transport.disconnect().await
     }
 }
 
@@ -183,9 +195,9 @@ impl<T: S2Transport> S2Connection<T> {
 /// ```
 /// # use s2energy::common::{ReceptionStatusValues, Message, Id};
 /// # use s2energy::frbc;
-/// # use s2energy::transport::test::MockTransport;
+/// # use s2energy::transport::{S2Transport, test::MockTransport};
 /// # use s2energy::connection::ConnectionError;
-/// # async fn test() -> Result<(), ConnectionError<MockTransport>> {
+/// # async fn test() -> Result<(), ConnectionError<<MockTransport as S2Transport>::TransportError>> {
 /// # let mut s2_connection = MockTransport::new_connection();
 /// // Inspect the message and ensure its contents match our expectations:
 /// let message = s2_connection.receive_message().await?;
@@ -239,7 +251,11 @@ impl<'conn, T: S2Transport> UnconfirmedMessage<'conn, T> {
     ///
     /// You can use the `diagnostic_message` parameter to send along human-readable diagnostic information. This is helpful for people debugging
     /// their RM/CEM implementation or for logging issues.
-    pub async fn error(mut self, status: ReceptionStatusValues, diagnostic_message: &str) -> Result<Message, ConnectionError<T::TransportError>> {
+    pub async fn error(
+        mut self,
+        status: ReceptionStatusValues,
+        diagnostic_message: &str,
+    ) -> Result<Message, ConnectionError<T::TransportError>> {
         let message = self
             .message
             .take()
