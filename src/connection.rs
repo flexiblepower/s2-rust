@@ -45,6 +45,8 @@ pub enum ProtocolError {
     },
 }
 
+/// A connection able to send and receive S2 messages.
+#[derive(Clone, Debug)]
 pub struct S2Connection<T: S2Transport> {
     transport: T,
 }
@@ -178,7 +180,7 @@ impl<T: S2Transport> S2Connection<T> {
 /// you won't be able to let the sending party know that you can't handle that message.
 ///
 /// # Examples
-/// ```no_run
+/// ```
 /// # use s2energy::common::{ReceptionStatusValues, Message, Id};
 /// # use s2energy::frbc;
 /// # use s2energy::transport::test::MockTransport;
@@ -195,7 +197,6 @@ impl<T: S2Transport> S2Connection<T> {
 /// # Ok(())
 /// # }
 /// ```
-
 pub struct UnconfirmedMessage<'conn, T: S2Transport> {
     message: Option<Message>,
     connection: &'conn mut S2Connection<T>,
