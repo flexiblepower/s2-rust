@@ -12,7 +12,7 @@ keywords = ["s2", "energy", "energy-management", "protocol", "automation"]
 
 [features]
 default = ["websockets-json", "dbus"]
-websockets-json = ["dep:futures-util", "dep:tokio", "dep:tokio-tungstenite", "dep:thiserror", "dep:serde_json"]
+websockets-json = ["dep:futures-util", "dep:tokio", "dep:tokio-tungstenite", "dep:serde_json"]
 dbus = []
 
 [dependencies]
@@ -23,12 +23,12 @@ serde = { version = "1.0.228", features = ["derive"] }
 semver = "1.0.27"
 bon = "3.8.0"
 tracing = "0.1.43"
+thiserror = "2.0.17"
 
 # feature=websockets-json
 futures-util = { version = "0.3.31", optional = true }
 tokio = { version = "1.47.1", features = ["net"], optional = true }
 tokio-tungstenite = { version = "0.28.0", features = ["rustls-tls-webpki-roots"], optional = true }
-thiserror = { version = "2.0.17", optional = true }
 serde_json = { version = "1.0.145", optional = true }
 
 [build-dependencies]

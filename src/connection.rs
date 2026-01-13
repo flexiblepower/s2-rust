@@ -12,8 +12,8 @@ pub enum ConnectionError<T: S2Transport> {
     #[error("an error occurred in the underlying transport")]
     TransportError(#[source] T::TransportError),
 
-    /// An situation occurred that is in violation of the S2 specification.
-    #[error("")]
+    /// A situation occurred that is in violation of the S2 specification.
+    #[error("a situation occurred that is in violation of the S2 specification")]
     ProtocolError(#[from] ProtocolError),
 }
 
@@ -181,10 +181,10 @@ impl<T: S2Transport> S2Connection<T> {
 /// ```no_run
 /// # use s2energy::common::{ReceptionStatusValues, Message, Id};
 /// # use s2energy::frbc;
-/// # use s2energy::transport::websockets_json::{WebsocketTransport, connect_as_client};
+/// # use s2energy::transport::test::MockTransport;
 /// # use s2energy::connection::ConnectionError;
-/// # async fn test() -> Result<(), ConnectionError<WebsocketTransport>> {
-/// # let mut s2_connection = connect_as_client("wss://example.com/cem/394727").await?;
+/// # async fn test() -> Result<(), ConnectionError<MockTransport>> {
+/// # let mut s2_connection = MockTransport::new_connection();
 /// // Inspect the message and ensure its contents match our expectations:
 /// let message = s2_connection.receive_message().await?;
 /// if let Message::FrbcInstruction(instruction) = message.get_message() {
@@ -195,6 +195,7 @@ impl<T: S2Transport> S2Connection<T> {
 /// # Ok(())
 /// # }
 /// ```
+
 pub struct UnconfirmedMessage<'conn, T: S2Transport> {
     message: Option<Message>,
     connection: &'conn mut S2Connection<T>,
