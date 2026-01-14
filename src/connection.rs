@@ -20,10 +20,6 @@ pub enum ConnectionError<T: std::error::Error> {
 /// Errors for situations where a violation of the S2 specification has occurred.
 #[derive(Error, Debug)]
 pub enum ProtocolError {
-    /// We sent a message, and got back a non-OK [`ReceptionStatus`].
-    #[error("received non-OK reception status: {0:?}")]
-    ReceivedBadReceptionStatus(ReceptionStatus),
-
     /// Could not parse the S2 version sent by the other end of the connection.
     #[error("error parsing the requested S2 version into a valid semver version: {0}")]
     S2VersionParseError(#[from] semver::Error),
@@ -150,12 +146,6 @@ impl<T: S2Transport> S2Connection<T> {
         &'connection mut self,
     ) -> Result<UnconfirmedMessage<'connection, T>, ConnectionError<T::TransportError>> {
         let message = self.transport.receive().await.map_err(ConnectionError::TransportError)?;
-        if let Message::ReceptionStatus(reception_status @ ReceptionStatus { status, .. }) = &message {
-            if *status != ReceptionStatusValues::Ok {
-                return Err(ProtocolError::ReceivedBadReceptionStatus(reception_status.clone()).into());
-            }
-        }
-
         tracing::trace!("Received S2 message: {message:?}");
         Ok(UnconfirmedMessage::new(message, self))
     }
@@ -231,6 +221,10 @@ impl<'conn, T: S2Transport> UnconfirmedMessage<'conn, T> {
             .message
             .take()
             .expect("No message contained in UnconfirmedMessage; this is a bug in s2energy and should be reported");
+        if matches!(message, Message::ReceptionStatus(..)) {
+            return Ok(message);
+        }
+
         let Some(message_id) = message.id() else { return Ok(message) };
         self.connection
             .send_message(
@@ -260,6 +254,10 @@ impl<'conn, T: S2Transport> UnconfirmedMessage<'conn, T> {
             .message
             .take()
             .expect("No message contained in UnconfirmedMessage; this is a bug in s2energy and should be reported");
+        if matches!(message, Message::ReceptionStatus(..)) {
+            return Ok(message);
+        }
+
         let Some(message_id) = message.id() else { return Ok(message) };
         tracing::warn!("Sending reception status {status:?} in response to message {message_id:?}");
         self.connection
