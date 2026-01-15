@@ -82,6 +82,7 @@
 //! Module documentation (for all modules) and all of the documentation in [`websockets_json`] is hand-written and generally of a higher standard.
 //! It assumes that you are familiar with the S2 standard; if this is not the case, it may be useful to refer to [the S2 documentation website](https://docs.s2standard.org/docs/welcome/).
 #![warn(missing_docs)]
+#![cfg_attr(docsrs_s2energy, feature(doc_cfg))]
 
 include!(concat!(env!("OUT_DIR"), "/generated.rs"));
 
