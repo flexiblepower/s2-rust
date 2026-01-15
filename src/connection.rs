@@ -102,8 +102,8 @@ impl<T: S2Transport> S2Connection<T> {
 
                 Message::HandshakeResponse(handshake_response) if need_handshake_response && !need_handshake => {
                     need_handshake_response = false;
-                    let requested_version = VersionReq::parse(&handshake_response.selected_protocol_version)
-                        .map_err(|err| ProtocolError::S2VersionParseError(err))?;
+                    let requested_version =
+                        VersionReq::parse(&handshake_response.selected_protocol_version).map_err(ProtocolError::S2VersionParseError)?;
                     if !requested_version.matches(&crate::s2_schema_version()) {
                         let error_msg = format!(
                             "CEM requested an incompatible version of S2: requested {}, which is not compatible with {}",
