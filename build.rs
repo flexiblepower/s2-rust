@@ -128,6 +128,7 @@ fn main() {
         ///
         /// For more information on the different control types, see [the S2 documentation website](https://docs.s2standard.org/docs/concepts/control-types/).
         pub mod pebc {
+            #![allow(missing_docs)]
             use crate::common::*;
         }
     );
@@ -139,6 +140,7 @@ fn main() {
         ///
         /// For more information on the different control types, see [the S2 documentation website](https://docs.s2standard.org/docs/concepts/control-types/).
         pub mod ppbc {
+            #![allow(missing_docs)]
             use crate::common::*;
         }
     );
@@ -150,6 +152,7 @@ fn main() {
         ///
         /// For more information on the different control types, see [the S2 documentation website](https://docs.s2standard.org/docs/concepts/control-types/).
         pub mod ombc {
+            #![allow(missing_docs)]
             use crate::common::*;
         }
     );
@@ -161,6 +164,7 @@ fn main() {
         ///
         /// For more information on the different control types, see [the S2 documentation website](https://docs.s2standard.org/docs/concepts/control-types/).
         pub mod frbc {
+            #![allow(missing_docs)]
             use crate::common::*;
         }
     );
@@ -172,16 +176,19 @@ fn main() {
         ///
         /// For more information on the different control types, see [the S2 documentation website](https://docs.s2standard.org/docs/concepts/control-types/).
         pub mod ddbc {
+            #![allow(missing_docs)]
             use crate::common::*;
         }
     );
     let mut common: ItemMod = parse_quote!(
+        /// Types common to all S2 control types.
+        ///
+        /// This module includes a lot of useful types when working with S2. The most important of these is [`Message`]: this is what you'll be sending and receiving.
+        ///
+        /// For more information on common S2 concepts, please refer to [the S2 documentation website](https://docs.s2standard.org/docs/welcome/).
         pub mod common {
-            //! Types common to all S2 control types.
-            //!
-            //! This module includes a lot of useful types when working with S2. The most important of these is [`Message`]: this is what you'll be sending and receiving.
-            //!
-            //! For more information on common S2 concepts, please refer to [the S2 documentation website](https://docs.s2standard.org/docs/welcome/).
+            #![allow(missing_docs)]
+
             impl Id {
                 /// Create a randomly generated `Id`.
                 pub fn generate() -> Self {

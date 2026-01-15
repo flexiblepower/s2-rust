@@ -1,3 +1,9 @@
+//! Types and utilities for S2 connections.
+//!
+//! The most important type in this module is [`S2Connection`], which you can use to send/receive S2 messages.
+//! An `S2Connection` is acquired from an implementing transport protocol, for example by using
+//! [`websockets_json::connect_as_client`](crate::transport::websockets_json::connect_as_client).
+
 use crate::{
     common::{ControlType, EnergyManagementRole, Handshake, Message, ReceptionStatus, ReceptionStatusValues, ResourceManagerDetails},
     transport::S2Transport,
@@ -26,7 +32,12 @@ pub enum ProtocolError {
 
     /// The CEM requested a version of S2 that is not supported by the build of the library you are using.
     #[error("the CEM requested an incompatible S2 version: {requested:?} was requested, {supported:?} is supported")]
-    IncompatibleS2Version { supported: semver::Version, requested: VersionReq },
+    IncompatibleS2Version {
+        /// The version of S2 supported by this implementation.
+        supported: semver::Version,
+        /// The version of S2 requested by the CEM.
+        requested: VersionReq,
+    },
 
     /// Error performing a handshake with the CEM; received a message at a point where that message was not expected (e.g. a [`HandshakeResponse`](crate::common::HandshakeResponse) before we even sent a [`Handshake`])
     #[error(
@@ -35,8 +46,11 @@ pub enum ProtocolError {
         if *handshake_response_received { "already received" } else { "not yet received" },
     )]
     InvalidHandshakeOrder {
+        /// The unexpectedly received message.
         message: Message,
+        /// Did we already receive a [`Handshake`] before receiving this message?
         handshake_received: bool,
+        /// Did we already receive a [`HandshakeResponse`](crate::common::HandshakeResponse) before receiving this message?
         handshake_response_received: bool,
     },
 }

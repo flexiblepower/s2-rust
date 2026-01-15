@@ -178,8 +178,15 @@ pub async fn connect_as_client(
     Ok(S2Connection::new(ws_transport))
 }
 
+/// A WebSocket connection.
+/// 
+/// End-users should not use this type directly; instead, they should acquire an [`S2Connection<WebsocketTransport>`]
+/// (e.g. using [`connect_as_client`]) and use that instead.
 pub enum WebsocketTransport {
+    /// A WebSocket client connection.
     ClientSocket(WebSocketStream<MaybeTlsStream<TcpStream>>),
+
+    /// A WebSocket server connection.
     ServerSocket(WebSocketStream<TcpStream>),
 }
 
