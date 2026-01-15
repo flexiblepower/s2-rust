@@ -13,10 +13,9 @@
 use crate::common::Message;
 use std::error::Error;
 
-#[cfg_attr(docsrs_s2energy, doc(cfg(feature = "dbus")))]
+#[doc(hidden)]
 #[cfg(feature = "dbus")]
 pub mod dbus;
-#[cfg_attr(docsrs_s2energy, doc(cfg(feature = "websockets-json")))]
 #[cfg(feature = "websockets-json")]
 pub mod websockets_json;
 

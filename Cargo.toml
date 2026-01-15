@@ -47,3 +47,8 @@ serde_json = "1.0.145"
 [package.metadata.docs.rs]
 all-features = true
 rustdoc-args = ["--cfg", "docsrs_s2energy"]
+
+# We can't use cfg(docsrs), because several dependencies have issues when passing
+# --cfg docsrs as a compiler arg. So here we define our own docsrs cfg.
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(docsrs_s2energy)'] }
