@@ -11,22 +11,24 @@ categories = ["api-bindings"]
 keywords = ["s2", "energy", "energy-management", "protocol", "automation"]
 
 [features]
-default = ["websockets-json"]
-websockets-json = ["dep:futures-util", "dep:tokio", "dep:tokio-tungstenite", "dep:thiserror", "dep:serde_json"]
+default = ["websockets-json", "dbus"]
+websockets-json = ["dep:futures-util", "dep:tokio", "dep:tokio-tungstenite", "dep:serde_json"]
+dbus = []
 
 [dependencies]
 chrono = { version = "0.4.42", features = ["serde"] }
 regress = "0.10.4" # This dependency is not used directly but necessary for typify to work
-uuid = { version = "1.18.1", features = ["v4"] }
+uuid = { version = "1.18.1", features = ["v4", "serde"] }
 serde = { version = "1.0.228", features = ["derive"] }
 semver = "1.0.27"
 bon = "3.8.0"
+tracing = "0.1.43"
+thiserror = "2.0.17"
 
 # feature=websockets-json
 futures-util = { version = "0.3.31", optional = true }
 tokio = { version = "1.47.1", features = ["net"], optional = true }
 tokio-tungstenite = { version = "0.28.0", features = ["rustls-tls-webpki-roots"], optional = true }
-thiserror = { version = "2.0.17", optional = true }
 serde_json = { version = "1.0.145", optional = true }
 
 [build-dependencies]
@@ -40,3 +42,13 @@ quote = "1.0.41"
 [dev-dependencies]
 eyre = "0.6.12"
 serde_json = "1.0.145"
+
+# docs.rs-specific configuration
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs_s2energy"]
+
+# We can't use cfg(docsrs), because several dependencies have issues when passing
+# --cfg docsrs as a compiler arg. So here we define our own docsrs cfg.
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(docsrs_s2energy)'] }

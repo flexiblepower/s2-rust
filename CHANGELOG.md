@@ -1,5 +1,9 @@
 # 0.3.0
+- BREAKING: implement an abstraction over transport protocols to enable users to use different transport protocols for their S2 connection. The `connection` module now contains the transport-agnostic types for end-users, and the `transport` module contains the implementations of transport protocols and the main abstraction (the `S2Transport` trait). This is a breaking change for basically everything that used to be in the `websockets_json` module (which has moved to `transport::websockets_json`).
 - `common::Duration` now has `From`/`Into` implementations to easily convert to/from `chrono::TimeDelta`.
+- This crate will now emit logs via the `tracing` crate to report on e.g. the messages being sent and received. Application developers can use a crate like [`tracing-subscriber`](https://crates.io/crates/tracing-subscriber) to see/save the emitted logs.
+- The internal representation of `common::Id` has been changed to a `Uuid` instead of a `String`. This can represent a significant performance improvement for consumers of this crate that process a lot of IDs while e.g. creating a planning.
+- Fixed a bug where no `ReceptionStatus` was sent for some messages received during `Connection::initialize_as_rm`.
 
 # 0.2.0
 - BREAKING: Reworked the way reception statuses are handled: instead of automatically confirming reception of messages, calling `receive_message` now returns an `UnconfirmedMessage` that the user can use to validate the message contents and send back the appropriate reception status.
