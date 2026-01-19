@@ -14,7 +14,7 @@ use thiserror::Error;
 /// An error from the S2 connection.
 #[derive(Error, Debug)]
 pub enum ConnectionError<T: std::error::Error> {
-    /// An error from the underlying `S2Transport`.
+    /// An error from the underlying [`S2Transport`].
     #[error("an error occurred in the underlying transport: {0}")]
     TransportError(#[source] T),
 
@@ -192,7 +192,7 @@ impl<T: S2Transport> S2Connection<T> {
 /// to inspect the message), confirm it using `confirm` or `error`, and only then do any operations you need to perform as a result of the message.
 ///
 /// If you want to opt out of the hassle altogether, you can [`S2Connection::receive_and_confirm`] to receive messages. This immediately
-/// confirms all received messages and gives you an owned [`S2Message`] to work with. The downside, of course, is that in the case of an invalid message
+/// confirms all received messages and gives you an owned [`Message`] to work with. The downside, of course, is that in the case of an invalid message
 /// you won't be able to let the sending party know that you can't handle that message.
 ///
 /// # Examples
@@ -298,7 +298,7 @@ impl<'conn, T: S2Transport> UnconfirmedMessage<'conn, T> {
 
     /// Extract the contained S2 message, without confirming it.
     ///
-    /// **Warning**: when you use this function, you become responsible for sending back an appropriate `ReceptionStatus`.
+    /// **Warning**: when you use this function, you become responsible for sending back an appropriate [`ReceptionStatus`].
     /// You must do so in order to comply to the S2 spec, and failure to do so may result in unexpected behaviour from other
     /// S2 implementations you are connecting with.
     pub fn into_inner(mut self) -> Message {

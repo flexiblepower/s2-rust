@@ -4,8 +4,8 @@
 //! - [Read the whitepaper](https://ecostandard.org/wp-content/uploads/2024/05/20240521_DSF_PositionPaper.pdf) to learn why it's important to expose and utilise energy flexibility
 //!
 //! # Crate contents
-//! This crate provides Rust types for all types specified by S2. It also includes provides utilities in the [`websockets_json`] module
-//! that help you manage an S2 connection over websockets with JSON as the format.
+//! This crate provides Rust types for all types specified by S2. It also includes provides utilities in the [`connection`] and [`transport`] modules
+//! that help you set up S2 connections.
 //!
 //! JSON over WebSockets is a common and recommended way to implement S2, but you're free to choose a different
 //! format and communication protocol. In that case, the types in this crate should still be useful but you may wish to disable the `websockets-json` feature.
@@ -20,7 +20,7 @@
 //! divided into modules based on the control type they belong to.
 //!
 //! ### Creating  S2 types
-//! Types have all their fields exposed, so you can construct them using regular Rust constructor syntax:
+//! S2 types have all their fields exposed, so you can construct them using regular Rust constructor syntax:
 //! ```
 //! # use s2energy::common::Id;
 //! # let actuator_id = Id::generate();
@@ -39,9 +39,9 @@
 //!     .build();
 //! ```
 //!
-//! Most types have an automatically generated builder (such as [`ActuatorStatus::builder`](frbc::ActuatorStatus::builder) in the above example), so
+//! Most S2 types have an automatically generated builder (such as [`ActuatorStatus::builder`](frbc::ActuatorStatus::builder) in the above example), so
 //! you can use those to create an actuator status as a more convenient alternative to the regular object initialization syntax.
-//! Types with only one field have a `new` function to easily create them.
+//! S2 types with only one field have a `new` function to easily create them.
 //!
 //! ### Working with [`Message`](common::Message)
 //! When sending or receiving S2 messages, you'll be working with [`common::Message`]. This type represents all possible S2 messages in a big enum. When
@@ -65,8 +65,16 @@
 //! let storage_status = StorageStatus::new(2.1);
 //! let message: Message = storage_status.into();
 //! ```
-//! [`S2Connection::send_message`](websockets_json::S2Connection::send_message) accepts an `impl Into<Message>`, so you can just give it any compatible
+//! [`Connection::send_message`](connection::S2Connection::send_message) accepts an `impl Into<Message>`, so you can just give it any compatible
 //! type and it will work.
+//! 
+//! ### Sending/receiving S2 messages
+//! S2 does not specify a particular transport protocol for S2 messages. As a result, many transport protocols can be used: WebSockets, MQTT, [even D-Bus](https://github.com/victronenergy/venus/wiki/Venus-OS-D%E2%80%90Bus-S2-Interface).
+//! To facilitate the use of different transport protocols, this crates provides a central abstraction in [`connection::S2Connection`] and [`transport::S2Transport`].
+//! An `S2Connection` can use any transport protocol implementing the `S2Transport` trait.
+//! 
+//! This crate provides some transport implementations for end-users. Currently, only a WebSockets implementation is provided (in [`transport::websockets_json`]).
+//! D-Bus support is also planned for the near future.
 //!
 //! ### Crate features
 //! The crate currently has these features:
@@ -78,7 +86,7 @@
 //! can be spotty. The [language-agnostic documentation for the S2 standard](https://docs.s2standard.org/)
 //! is often more helpful and complete.
 //!
-//! Module documentation (for all modules) and all of the documentation in [`websockets_json`] is hand-written and generally of a higher standard.
+//! Module documentation (for all modules) and documentation for other types (like those in [`connection`] or [`transport`]) is hand-written and generally of a higher standard.
 //! It assumes that you are familiar with the S2 standard; if this is not the case, it may be useful to refer to [the S2 documentation website](https://docs.s2standard.org/docs/welcome/).
 #![warn(missing_docs)]
 #![cfg_attr(docsrs_s2energy, feature(doc_cfg))]

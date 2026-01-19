@@ -115,7 +115,7 @@ fn main() {
         /// Returns the version of S2 this library was built with.
         ///
         /// You can use this to check compatibility between your and others' implementations of S2.
-        /// When using [`S2Connection::initialize_as_rm`][crate::websockets_json::S2Connection::initialize_as_rm], the version requested by the CEM is checked against this value.
+        /// When using [`S2Connection::initialize_as_rm`][crate::connection::S2Connection::initialize_as_rm], the version requested by the CEM is checked against this value.
         pub fn s2_schema_version() -> semver::Version {
             semver::Version::parse("0.0.2-beta").expect("Failed to parse S2 schema version; this is a bug in s2energy and should be reported")
         }
@@ -183,7 +183,7 @@ fn main() {
     let mut common: ItemMod = parse_quote!(
         /// Types common to all S2 control types.
         ///
-        /// This module includes a lot of useful types when working with S2. The most important of these is [`Message`]: this is what you'll be sending and receiving.
+        /// This module includes a lot of useful types when working with S2. The most important of these is [`Message`](crate::common::Message): this is what you'll be sending and receiving.
         ///
         /// For more information on common S2 concepts, please refer to [the S2 documentation website](https://docs.s2standard.org/docs/welcome/).
         pub mod common {

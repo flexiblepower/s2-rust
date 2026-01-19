@@ -6,8 +6,11 @@
 //! uses [`tokio`] as its async runtime.
 //!
 //! If you want to connect as a WebSocket client, you can use [`connect_as_client`] to obtain an `S2Connection`.
-//! If you want set up a WebSocket server, you should make an [`S2WebsocketServer`] and accept connections
-//! via [`accept_connection`][S2WebsocketServer::accept_connection].
+//! If you want set up a WebSocket server, you should make an [`WebsocketServer`] and accept connections
+//! via [`accept_connection`][WebsocketServer::accept_connection].
+//! 
+//! **Note:** this module relies on [`tokio_tungstenite`] for WebSocket communication. As a result, you must use
+//! [`tokio`] as your async runtime if you wish to use this module.
 //!
 //! # Examples
 //! Setting up a WebSocket server and handling connections to it:
@@ -95,7 +98,7 @@ use tokio_tungstenite::{
 /// Errors that can occur on the websocket connection.
 #[derive(Error, Debug)]
 pub enum WebsocketTransportError {
-    /// Encountered an error on the [`TcpListener`] used internally in [`S2WebsocketServer`].
+    /// Encountered an error on the [`TcpListener`] used internally in [`WebsocketServer`].
     #[error("error originating from the internal TCPListener: {0}")]
     WebsocketServerError(#[from] tokio::io::Error),
 
@@ -125,7 +128,7 @@ pub enum WebsocketTransportError {
 ///
 /// For example usage, refer to the [module documentation].
 ///
-/// [module documentation]: crate::websockets_json#examples
+/// [module documentation]: crate::transport::websockets_json#examples
 pub struct WebsocketServer {
     listener: TcpListener,
 }
@@ -146,7 +149,7 @@ impl WebsocketServer {
 
     /// Accept an S2 connection over WebSockets on this server.
     ///
-    /// You probably want to do this in a loop, and spawn a new task to handle each connection (see the [example in the module documentation][crate::websockets_json#examples]).
+    /// You probably want to do this in a loop, and spawn a new task to handle each connection (see the [example in the module documentation][crate::transport::websockets_json#examples]).
     pub async fn accept_connection(&self) -> Result<S2Connection<WebsocketTransport>, ConnectionError<WebsocketTransportError>> {
         let (tcp_stream, _) = self
             .listener
