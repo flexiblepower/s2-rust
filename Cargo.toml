@@ -30,6 +30,10 @@ futures-util = { version = "0.3.31", optional = true }
 tokio = { version = "1.47.1", features = ["net"], optional = true }
 tokio-tungstenite = { version = "0.28.0", features = ["rustls-tls-webpki-roots"], optional = true }
 serde_json = { version = "1.0.145", optional = true }
+rand = "0.9.2"
+base64 = "0.22.1"
+hmac = "0.12.1"
+sha2 = "0.10.9"
 
 [build-dependencies]
 prettyplease = "0.2.37"
