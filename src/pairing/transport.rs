@@ -1,5 +1,28 @@
 use axum::http::{HeaderMap, HeaderName, HeaderValue};
 use serde::*;
+use thiserror::Error;
+
+#[derive(Error, Debug, Serialize, Deserialize)]
+pub enum PairingResponseErrorMessage {
+    #[error("Invalid combination of roles")]
+    InvalidCombinationOfRoles,
+    #[error("Incompatible S2 message versions")]
+    IncompatibleS2MessageVersions,
+    #[error("Incompatible HMAC hashing algorithms")]
+    IncompatibleHMACHashingAlgorithms,
+    #[error("Incompatible communication protocols")]
+    IncompatibleCommunicationProtocols,
+    #[error("S2Node not found")]
+    S2NodeNotFound,
+    #[error("No S2Node provided")]
+    S2NodeNotProvided,
+    #[error("No valid pairingToken on PairingServer")]
+    InvalidPairingToken,
+    #[error("Parsing error")]
+    ParsingError,
+    #[error("Other")]
+    Other,
+}
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "lowercase")]
@@ -51,6 +74,18 @@ pub struct PairingS2NodeId(pub String);
 /// NOTE: base-64 encoded.
 #[derive(Serialize, Deserialize, Clone)]
 pub struct AccessToken(pub String);
+
+impl AccessToken {
+    pub fn new(rng: &mut impl rand::Rng) -> Self {
+        use base64::{Engine as _, engine::general_purpose::STANDARD};
+
+        let mut bytes = [0u8; 32];
+        rng.fill(&mut bytes);
+
+        let encoded = STANDARD.encode(bytes);
+        Self(encoded)
+    }
+}
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct S2NodeId(pub String);

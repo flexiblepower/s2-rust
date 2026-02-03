@@ -1,5 +1,5 @@
 use reqwest::Url;
-use s2energy::pairing::{PairingState, Role, transport::*};
+use s2energy::pairing::{Role, pair_client, transport::*};
 
 const PAIRING_TOKEN: &[u8] = &[1, 2, 3];
 
@@ -22,12 +22,16 @@ async fn main() {
     let id = PairingS2NodeId(String::from("elfkje"));
 
     let url = Url::parse("http://127.0.0.1:8005").unwrap();
-    let mut state = PairingState::init(
+    let mut rng = rand::rng();
+    pair_client(
+        &mut rng,
         url,
-        Role::CommunicationServer {
-            initiate_connection_url: Url::parse("http://fake.com").unwrap(),
-            access_token: AccessToken(String::from("AABB")),
-        },
+        PAIRING_TOKEN,
+        //        Role::CommunicationServer {
+        //            initiate_connection_url: Url::parse("http://fake.com").unwrap(),
+        //            access_token: AccessToken(String::from("AABB")),
+        //        },
+        Role::CommunicationClient,
         &[Version::V1],
         node_description,
         endpoint_description,
@@ -35,7 +39,4 @@ async fn main() {
     )
     .await
     .unwrap();
-
-    let mut rng = rand::rng();
-    state.pair(&mut rng, &PAIRING_TOKEN).await.unwrap();
 }

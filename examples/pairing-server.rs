@@ -8,7 +8,8 @@ use reqwest::StatusCode;
 use std::{
     collections::HashMap,
     net::SocketAddr,
-    sync::{Arc, RwLock, RwLockReadGuard},
+    sync::{Arc, RwLock},
+    time::{Duration, Instant},
 };
 use tokio::net::TcpListener;
 
@@ -18,34 +19,44 @@ use s2energy::pairing::transport::*;
 const PAIRING_TOKEN: &[u8] = &[1, 2, 3];
 
 struct ClientState {
-    // The pairing attempt must complete within 15 seconds.
-    // start_time:
+    start_time: Instant,
     hmac_challenge: HmacChallenge,
 }
 impl ClientState {
     fn has_expired(&self) -> bool {
-        false
+        self.start_time.elapsed() > Duration::from_secs(15)
     }
 }
 
-type AppState = Arc<RwLock<AppStateInner>>;
+type AppState = Arc<AppStateInner>;
 
 struct AppStateInner {
     // rng: ThreadRng,
-    attempts: HashMap<PairingAttemptId, ClientState>,
+    description: S2NodeDescription,
+    attempts: RwLock<HashMap<PairingAttemptId, ClientState>>,
 }
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
+    let server_s2_node_description = S2NodeDescription {
+        id: S2NodeId(String::from("12121212")),
+        brand: String::from("super-reliable-corp"),
+        logo_uri: None,
+        type_: String::from("fancy"),
+        model_name: String::from("the best"),
+        user_defined_name: None,
+        role: S2Role::Rm,
+    };
+
     let state = AppStateInner {
-        // rng: rand::rng(),
-        attempts: HashMap::default(),
+        description: server_s2_node_description,
+        attempts: RwLock::new(HashMap::default()),
     };
 
     let app = Router::new()
         .route("/", get(root))
         .nest("/v1", v1_router())
-        .with_state(Arc::new(RwLock::new(state)));
+        .with_state(Arc::new(state));
 
     let addr = SocketAddr::from(([127, 0, 0, 1], 8005));
     let listener = TcpListener::bind(addr).await.unwrap();
@@ -61,37 +72,27 @@ async fn root() -> Json<Vec<&'static str>> {
 fn v1_router() -> Router<AppState> {
     Router::new()
         .route("/requestPairing", post(v1_request_pairing))
+        .route("/requestConnectionDetails", post(v1_request_connection_details))
         .route("/postConnectionDetails", post(v1_post_connection_details))
         .route("/finalizePairing", post(v1_finalize_pairing))
 }
 
-async fn v1_request_pairing(State(state): State<AppState>, Json(request_pairing): Json<RequestPairing>) -> Json<RequestPairingResponse> {
-    let server_s2_node_description = S2NodeDescription {
-        id: S2NodeId(String::from("12121212")),
-        brand: String::from("super-reliable-corp"),
-        logo_uri: None,
-        type_: String::from("fancy"),
-        model_name: String::from("the best"),
-        user_defined_name: None,
-        role: S2Role::Rm,
-    };
-
+async fn v1_request_pairing(
+    State(state): State<AppState>,
+    Json(request_pairing): Json<RequestPairing>,
+) -> Result<Json<RequestPairingResponse>, Json<PairingResponseErrorMessage>> {
     let mut rng = rand::rng();
     let server_hmac_challenge = HmacChallenge::new(&mut rng);
 
-    // let network = Wan;
-    let network = Network::Lan { fingerprint: [0; 32] };
-
-    let client_hmac_challenge_response = request_pairing.client_hmac_challenge.sha256(&network, PAIRING_TOKEN);
-
     let pairing_attempt_id = {
-        let mut writer = state.write().unwrap();
+        let mut attempts = state.attempts.write().unwrap();
         loop {
             let id = PairingAttemptId::new(&mut rng);
-            if !writer.attempts.contains_key(&id) {
-                writer.attempts.insert(
+            if !attempts.contains_key(&id) {
+                attempts.insert(
                     id.clone(),
                     ClientState {
+                        start_time: Instant::now(),
                         hmac_challenge: server_hmac_challenge.clone(),
                     },
                 );
@@ -100,9 +101,13 @@ async fn v1_request_pairing(State(state): State<AppState>, Json(request_pairing)
         }
     };
 
+    // let network = Wan;
+    let network = Network::Lan { fingerprint: [0; 32] };
+    let client_hmac_challenge_response = request_pairing.client_hmac_challenge.sha256(&network, PAIRING_TOKEN);
+
     let resp = RequestPairingResponse {
         pairing_attempt_id,
-        server_s2_node_description,
+        server_s2_node_description: state.description.clone(),
         server_s2_endpoint_description: S2EndpointDescription {
             name: None,
             logo_uri: None,
@@ -113,7 +118,42 @@ async fn v1_request_pairing(State(state): State<AppState>, Json(request_pairing)
         server_hmac_challenge,
     };
 
-    Json(resp)
+    Ok(Json(resp))
+}
+
+async fn v1_request_connection_details(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<RequestConnectionDetailsRequest>,
+) -> Result<Json<ConnectionDetails>, StatusCode> {
+    let Some(pairing_attempt_id) = PairingAttemptId::from_headers(&headers) else {
+        return Err(StatusCode::UNAUTHORIZED);
+    };
+
+    let attempts = state.attempts.read().unwrap();
+    let Some(client_state) = attempts.get(&pairing_attempt_id) else {
+        return Err(StatusCode::UNAUTHORIZED);
+    };
+
+    if client_state.has_expired() {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+
+    // let network = Network::Wan;
+    let network = Network::Lan { fingerprint: [0; 32] };
+
+    let expected = client_state.hmac_challenge.sha256(&network, PAIRING_TOKEN);
+    if expected != req.server_hmac_challenge_response {
+        todo!();
+    }
+
+    let mut rng = rand::rng();
+    let connection_details = ConnectionDetails {
+        initiate_connection_url: Some(String::from("example.com")),
+        access_token: Some(AccessToken::new(&mut rng)),
+    };
+
+    Ok(Json(connection_details))
 }
 
 async fn v1_post_connection_details(
@@ -125,9 +165,8 @@ async fn v1_post_connection_details(
         return StatusCode::UNAUTHORIZED;
     };
 
-    let reader = state.read().unwrap();
-
-    let Some(client_state) = reader.attempts.get(&pairing_attempt_id) else {
+    let attempts = state.attempts.read().unwrap();
+    let Some(client_state) = attempts.get(&pairing_attempt_id) else {
         return StatusCode::UNAUTHORIZED;
     };
 
@@ -151,9 +190,8 @@ async fn v1_finalize_pairing(State(state): State<AppState>, headers: HeaderMap, 
         return StatusCode::UNAUTHORIZED;
     };
 
-    let reader = state.read().unwrap();
-
-    let Some(client_state) = reader.attempts.get(&pairing_attempt_id) else {
+    let mut attempts = state.attempts.write().unwrap();
+    let Some(client_state) = attempts.remove(&pairing_attempt_id) else {
         return StatusCode::UNAUTHORIZED;
     };
 
