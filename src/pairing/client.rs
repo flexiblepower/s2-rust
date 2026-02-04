@@ -4,6 +4,18 @@ use reqwest::{Client, StatusCode, Url};
 use super::transport::*;
 use super::{Error, Network, PairingResult, Role};
 
+pub enum NetworkType {
+    Lan,
+    Wan,
+}
+
+//FIXME: Consider whether we want to use reqwest types in public interface.
+//FIXME: Decide whether or not having the randomness configurable is usefull for the end user.
+#[allow(unused)]
+pub async fn pair(rng: &mut impl Rng, remote: Url, remote_type: NetworkType, pairing_token: &[u8]) {
+    todo!()
+}
+
 pub async fn pair_client(
     rng: &mut impl Rng,
 

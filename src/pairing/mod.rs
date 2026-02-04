@@ -1,5 +1,6 @@
 #![allow(missing_docs)]
 mod client;
+mod server;
 pub mod transport;
 
 use rand::Rng;
@@ -8,6 +9,16 @@ use reqwest::Url;
 
 pub use client::pair_client;
 use transport::{AccessToken, HmacChallenge, HmacChallengeResponse};
+
+pub use client::{NetworkType, pair};
+pub use server::Server;
+pub use transport::{ConnectionVersion, S2EndpointDescription, S2NodeDescription};
+
+pub struct Config {
+    pub node_description: S2NodeDescription,
+    pub endpoint_description: S2EndpointDescription,
+    pub supported_protocol_versions: Vec<ConnectionVersion>,
+}
 
 pub enum Role {
     CommunicationServer {
