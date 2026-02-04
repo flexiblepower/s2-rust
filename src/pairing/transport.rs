@@ -43,7 +43,7 @@ pub struct RequestPairing {
     #[serde(rename = "clientS2EndpointDescription")]
     pub endpoint_description: S2EndpointDescription,
     #[serde(rename = "pairingS2NodeId")]
-    pub id: PairingS2NodeId,
+    pub id: S2NodeId,
     #[serde(rename = "supportedCommunicationProtocols")]
     pub supported_protocols: Vec<CommunicationProtocol>,
     /// The versions of the S2 JSON message schemas this S2Node implementation currently supports.
@@ -70,9 +70,6 @@ pub struct S2EndpointDescription {
     #[serde(default)]
     pub deployment: Option<Deployment>,
 }
-
-#[derive(Serialize, Deserialize, Clone)]
-pub struct PairingS2NodeId(pub String);
 
 /// NOTE: base-64 encoded.
 #[derive(Serialize, Deserialize, Clone)]

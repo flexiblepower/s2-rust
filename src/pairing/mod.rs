@@ -7,12 +7,11 @@ use rand::Rng;
 
 use reqwest::Url;
 
-pub use client::pair_client;
 use transport::{AccessToken, HmacChallenge, HmacChallengeResponse};
 
-pub use client::{NetworkType, pair};
+pub use client::{PairingRemote, pair};
 pub use server::Server;
-pub use transport::{ConnectionVersion, S2EndpointDescription, S2NodeDescription};
+pub use transport::{ConnectionVersion, S2EndpointDescription, S2NodeDescription, S2NodeId, S2Role};
 
 pub struct Config {
     pub node_description: S2NodeDescription,

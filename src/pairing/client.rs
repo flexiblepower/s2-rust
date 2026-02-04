@@ -1,40 +1,38 @@
 use rand::Rng;
 use reqwest::{Client, StatusCode, Url};
 
+use super::Config;
 use super::transport::*;
 use super::{Error, Network, PairingResult, Role};
 
-pub enum NetworkType {
-    Lan,
-    Wan,
-}
-
 //FIXME: Consider whether we want to use reqwest types in public interface.
-//FIXME: Decide whether or not having the randomness configurable is usefull for the end user.
-#[allow(unused)]
-pub async fn pair(rng: &mut impl Rng, remote: Url, remote_type: NetworkType, pairing_token: &[u8]) {
-    todo!()
+pub struct PairingRemote {
+    pub url: Url,
+    pub id: S2NodeId,
 }
 
-pub async fn pair_client(
+//FIXME: Decide whether or not having the randomness configurable is usefull for the end user.
+pub async fn pair(
     rng: &mut impl Rng,
-
-    url: Url,
+    config: Config,
+    remote: PairingRemote,
     pairing_token: &[u8],
-
     role: Role,
-    supported_versions: Vec<ConnectionVersion>,
-
-    node_description: S2NodeDescription,
-    endpoint_description: S2EndpointDescription,
-    id: PairingS2NodeId,
 ) -> PairingResult<ConnectionDetails> {
-    let state = PairingState::init(url, role, supported_versions, node_description, endpoint_description, id).await?;
+    let state = PairingState::init(
+        remote.url,
+        role,
+        config.supported_protocol_versions,
+        config.node_description,
+        config.endpoint_description,
+        remote.id,
+    )
+    .await?;
 
     state.pair(rng, pairing_token).await
 }
 
-pub struct PairingState {
+struct PairingState {
     client: reqwest::Client,
     url: Url,
 
@@ -45,7 +43,7 @@ pub struct PairingState {
     supported_versions: Vec<ConnectionVersion>,
     node_description: S2NodeDescription,
     endpoint_description: S2EndpointDescription,
-    id: PairingS2NodeId,
+    id: S2NodeId,
 }
 
 impl PairingState {
@@ -57,7 +55,7 @@ impl PairingState {
 
         node_description: S2NodeDescription,
         endpoint_description: S2EndpointDescription,
-        id: PairingS2NodeId,
+        id: S2NodeId,
     ) -> PairingResult<Self> {
         let client = reqwest::Client::new();
         let server_versions = get_supported_versions(&client, &url).await?;
