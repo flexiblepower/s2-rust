@@ -26,12 +26,15 @@ pub enum PairingResponseErrorMessage {
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "lowercase")]
-pub enum Version {
+pub enum PairingVersion {
     V1,
 }
 
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ConnectionVersion(pub String);
+
 #[derive(Serialize, Deserialize)]
-pub struct SupportedVersions(pub Vec<Version>);
+pub struct PairingSupportedVersions(pub Vec<PairingVersion>);
 
 #[derive(Serialize, Deserialize)]
 pub struct RequestPairing {
@@ -45,7 +48,7 @@ pub struct RequestPairing {
     pub supported_protocols: Vec<CommunicationProtocol>,
     /// The versions of the S2 JSON message schemas this S2Node implementation currently supports.
     #[serde(rename = "supportedS2MessageVersions")]
-    pub supported_versions: Vec<Version>,
+    pub supported_versions: Vec<ConnectionVersion>,
     #[serde(rename = "supportedHmacHashingAlgorithms")]
     #[serde(default)]
     pub supported_hashing_algorithms: Vec<HmacHashingAlgorithm>,

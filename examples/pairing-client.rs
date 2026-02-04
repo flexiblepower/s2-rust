@@ -32,7 +32,7 @@ async fn main() {
         //            access_token: AccessToken(String::from("AABB")),
         //        },
         Role::CommunicationClient,
-        &[Version::V1],
+        vec![ConnectionVersion("v1".into())],
         node_description,
         endpoint_description,
         id,

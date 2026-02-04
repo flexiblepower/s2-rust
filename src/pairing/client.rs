@@ -11,7 +11,7 @@ pub async fn pair_client(
     pairing_token: &[u8],
 
     role: Role,
-    supported_versions: &[Version],
+    supported_versions: Vec<ConnectionVersion>,
 
     node_description: S2NodeDescription,
     endpoint_description: S2EndpointDescription,
@@ -28,8 +28,9 @@ pub struct PairingState {
 
     role: Role,
     network: Network,
-    version: Version,
+    version: PairingVersion,
 
+    supported_versions: Vec<ConnectionVersion>,
     node_description: S2NodeDescription,
     endpoint_description: S2EndpointDescription,
     id: PairingS2NodeId,
@@ -40,7 +41,7 @@ impl PairingState {
         url: Url,
 
         role: Role,
-        supported_versions: &[Version],
+        supported_versions: Vec<ConnectionVersion>,
 
         node_description: S2NodeDescription,
         endpoint_description: S2EndpointDescription,
@@ -54,9 +55,9 @@ impl PairingState {
         let network = Network::Lan { fingerprint: [0; 32] };
 
         let version = 'blk: {
-            for candidate in supported_versions {
-                if server_versions.0.iter().any(|v| v == candidate) {
-                    break 'blk *candidate;
+            for candidate in [PairingVersion::V1] {
+                if server_versions.0.iter().any(|v| *v == candidate) {
+                    break 'blk candidate;
                 }
             }
 
@@ -64,7 +65,7 @@ impl PairingState {
         };
 
         let url = match version {
-            Version::V1 => url.join("/v1/").unwrap(),
+            PairingVersion::V1 => url.join("/v1/").unwrap(),
         };
 
         Ok(Self {
@@ -75,6 +76,7 @@ impl PairingState {
             network,
             version,
 
+            supported_versions,
             node_description,
             endpoint_description,
             id,
@@ -98,7 +100,7 @@ impl PairingState {
             endpoint_description: self.endpoint_description.clone(),
             id: self.id.clone(),
             supported_protocols: vec![CommunicationProtocol::WebSocket],
-            supported_versions: vec![self.version],
+            supported_versions: self.supported_versions.clone(),
             supported_hashing_algorithms: vec![HmacHashingAlgorithm::Sha256],
             client_hmac_challenge: client_hmac_challenge.clone(),
             force_pairing: false,
@@ -113,7 +115,7 @@ impl PairingState {
         };
 
         match self.version {
-            Version::V1 => {
+            PairingVersion::V1 => {
                 let in_progress = V1PairingInProgress {
                     client: self.client,
                     url: self.url,
@@ -204,7 +206,7 @@ impl V1PairingInProgress {
     }
 }
 
-async fn get_supported_versions(client: &Client, url: &Url) -> PairingResult<SupportedVersions> {
+async fn get_supported_versions(client: &Client, url: &Url) -> PairingResult<PairingSupportedVersions> {
     let url = url.join("/").unwrap();
     let response = client.get(url).send().await.unwrap();
     let status = response.status();
@@ -213,7 +215,7 @@ async fn get_supported_versions(client: &Client, url: &Url) -> PairingResult<Sup
         todo!("invalid status code {status:?}");
     }
 
-    let supported_versions = response.json::<SupportedVersions>().await.unwrap();
+    let supported_versions = response.json::<PairingSupportedVersions>().await.unwrap();
 
     Ok(supported_versions)
 }
