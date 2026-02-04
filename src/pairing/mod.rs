@@ -10,7 +10,7 @@ use reqwest::Url;
 use transport::{AccessToken, HmacChallenge, HmacChallengeResponse};
 
 pub use client::{PairingRemote, pair};
-pub use server::Server;
+pub use server::{Server, ServerConfig};
 pub use transport::{ConnectionVersion, S2EndpointDescription, S2NodeDescription, S2NodeId, S2Role};
 
 pub struct Config {
