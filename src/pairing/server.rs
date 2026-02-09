@@ -281,41 +281,51 @@ async fn v1_request_connection_details(
         return Err(StatusCode::UNAUTHORIZED);
     };
 
-    let mut attempts = state.attempts.lock().unwrap();
-    let Some(state) = attempts.get_mut(&pairing_attempt_id) else {
-        return Err(StatusCode::UNAUTHORIZED);
-    };
-
-    if let Some(state_entry) = state.get_state()
-        && let PairingState::Initial(state) = std::mem::replace(state_entry, PairingState::Empty)
-    {
-        // let network = Network::Wan;
-        let network = Network::Lan { fingerprint: [0; 32] };
-
-        let expected = state.challenge.sha256(&network, &state.token.0);
-        if expected != req.server_hmac_challenge_response {
-            todo!();
-        }
-
-        let mut rng = rand::rng();
-        let connection_details = ConnectionDetails {
-            initiate_connection_url: Some(String::from("example.com")),
-            access_token: Some(AccessToken::new(&mut rng)),
+    // We do this with a closure to drop attempts before we run the future for sending results to the caller, if it is present.
+    let (result, future) = (|| {
+        let mut attempts = state.attempts.lock().unwrap();
+        let Some(state) = attempts.get_mut(&pairing_attempt_id) else {
+            return (Err(StatusCode::UNAUTHORIZED), None);
         };
 
-        *state_entry = PairingState::Complete(CompletePairingState {
-            sender: state.sender,
-            remote_node_description: state.remote_node_description,
-            remote_endpoint_description: state.remote_endpoint_description,
-            access_token: AccessToken(connection_details.access_token.as_ref().unwrap().0.clone()),
-            role: PairingRole::CommunicationServer,
-        });
+        if let Some(state_entry) = state.get_state()
+            && let PairingState::Initial(state) = std::mem::replace(state_entry, PairingState::Empty)
+        {
+            // let network = Network::Wan;
+            let network = Network::Lan { fingerprint: [0; 32] };
 
-        Ok(Json(connection_details))
-    } else {
-        attempts.remove(&pairing_attempt_id);
-        Err(StatusCode::UNAUTHORIZED)
+            let expected = state.challenge.sha256(&network, &state.token.0);
+            if expected != req.server_hmac_challenge_response {
+                attempts.remove(&pairing_attempt_id);
+                return (Err(StatusCode::FORBIDDEN), Some(state.sender.send(Err(Error::InvalidToken))));
+            }
+
+            let mut rng = rand::rng();
+            let connection_details = ConnectionDetails {
+                initiate_connection_url: Some(String::from("example.com")),
+                access_token: Some(AccessToken::new(&mut rng)),
+            };
+
+            *state_entry = PairingState::Complete(CompletePairingState {
+                sender: state.sender,
+                remote_node_description: state.remote_node_description,
+                remote_endpoint_description: state.remote_endpoint_description,
+                access_token: AccessToken(connection_details.access_token.as_ref().unwrap().0.clone()),
+                role: PairingRole::CommunicationServer,
+            });
+
+            (Ok(Json(connection_details)), None)
+        } else {
+            attempts.remove(&pairing_attempt_id);
+            (Err(StatusCode::UNAUTHORIZED), None)
+        }
+    })();
+
+    if let Some(future) = future {
+        future.await;
     }
+
+    result
 }
 
 async fn v1_post_connection_details(
@@ -327,38 +337,48 @@ async fn v1_post_connection_details(
         return StatusCode::UNAUTHORIZED;
     };
 
-    let mut attempts = state.attempts.lock().unwrap();
-    let Some(state) = attempts.get_mut(&pairing_attempt_id) else {
-        return StatusCode::UNAUTHORIZED;
-    };
+    // We do this with a closure to drop attempts before we run the future for sending results to the caller, if it is present.
+    let (result, future) = (|| {
+        let mut attempts: std::sync::MutexGuard<'_, HashMap<PairingAttemptId, ExpiringPairingState>> = state.attempts.lock().unwrap();
+        let Some(state) = attempts.get_mut(&pairing_attempt_id) else {
+            return (StatusCode::UNAUTHORIZED, None);
+        };
 
-    if let Some(state_entry) = state.get_state()
-        && let PairingState::Initial(state) = std::mem::replace(state_entry, PairingState::Empty)
-    {
-        // let network = Network::Wan;
-        let network = Network::Lan { fingerprint: [0; 32] };
+        if let Some(state_entry) = state.get_state()
+            && let PairingState::Initial(state) = std::mem::replace(state_entry, PairingState::Empty)
+        {
+            // let network = Network::Wan;
+            let network = Network::Lan { fingerprint: [0; 32] };
 
-        let expected = state.challenge.sha256(&network, &state.token.0);
-        if expected != req.server_hmac_challenge_response {
-            todo!();
+            let expected = state.challenge.sha256(&network, &state.token.0);
+            if expected != req.server_hmac_challenge_response {
+                attempts.remove(&pairing_attempt_id);
+                return (StatusCode::FORBIDDEN, Some(state.sender.send(Err(Error::InvalidToken))));
+            }
+
+            // Do better error handling here than unwrap
+            *state_entry = PairingState::Complete(CompletePairingState {
+                sender: state.sender,
+                remote_node_description: state.remote_node_description,
+                remote_endpoint_description: state.remote_endpoint_description,
+                access_token: req.connection_details.access_token.unwrap(),
+                role: PairingRole::CommunicationClient {
+                    initiate_url: req.connection_details.initiate_connection_url.unwrap(),
+                },
+            });
+
+            (StatusCode::NO_CONTENT, None)
+        } else {
+            attempts.remove(&pairing_attempt_id);
+            (StatusCode::UNAUTHORIZED, None)
         }
+    })();
 
-        // Do better error handling here than unwrap
-        *state_entry = PairingState::Complete(CompletePairingState {
-            sender: state.sender,
-            remote_node_description: state.remote_node_description,
-            remote_endpoint_description: state.remote_endpoint_description,
-            access_token: req.connection_details.access_token.unwrap(),
-            role: PairingRole::CommunicationClient {
-                initiate_url: req.connection_details.initiate_connection_url.unwrap(),
-            },
-        });
-
-        StatusCode::NO_CONTENT
-    } else {
-        attempts.remove(&pairing_attempt_id);
-        StatusCode::UNAUTHORIZED
+    if let Some(future) = future {
+        future.await;
     }
+
+    result
 }
 
 async fn v1_finalize_pairing(State(state): State<AppState>, headers: HeaderMap, Json(success): Json<bool>) -> StatusCode {

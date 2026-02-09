@@ -71,6 +71,7 @@ pub enum Error {
     NoSupportedVersion,
     Timeout,
     AlreadyPending,
+    InvalidToken,
     Cancelled,
 }
 
