@@ -24,17 +24,33 @@ pub(crate) enum PairingResponseErrorMessage {
     Other,
 }
 
-#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Serialize, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum PairingVersion {
     V1,
 }
 
+#[derive(Deserialize, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum WirePairingVersion {
+    V1,
+    #[serde(other)]
+    Other,
+}
+
+impl TryFrom<WirePairingVersion> for PairingVersion {
+    type Error = ();
+
+    fn try_from(value: WirePairingVersion) -> Result<Self, Self::Error> {
+        match value {
+            WirePairingVersion::V1 => Ok(PairingVersion::V1),
+            WirePairingVersion::Other => Err(()),
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ConnectionVersion(pub String);
-
-#[derive(Serialize, Deserialize)]
-pub(crate) struct PairingSupportedVersions(pub Vec<PairingVersion>);
 
 #[derive(Serialize, Deserialize)]
 pub(crate) struct RequestPairing {

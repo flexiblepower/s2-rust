@@ -14,7 +14,7 @@ use axum::{
 use reqwest::StatusCode;
 use tokio::time::Instant;
 
-use crate::pairing::PairingRole;
+use crate::pairing::{PairingRole, SUPPORTED_PAIRING_VERSIONS};
 
 use super::{Config, Error, Network, Pairing, PairingResult, S2EndpointDescription, S2NodeDescription, transport::*};
 
@@ -192,8 +192,8 @@ struct AppStateInner {
     attempts: Mutex<HashMap<PairingAttemptId, ExpiringPairingState>>,
 }
 
-async fn root() -> Json<Vec<&'static str>> {
-    Json(vec!["v1"])
+async fn root() -> Json<&'static [PairingVersion]> {
+    Json(SUPPORTED_PAIRING_VERSIONS)
 }
 
 fn v1_router() -> Router<AppState> {

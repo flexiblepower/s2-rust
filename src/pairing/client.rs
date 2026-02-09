@@ -29,11 +29,11 @@ async fn negotiate_version(url: Url, client: &reqwest::Client) -> Result<Pairing
         todo!("invalid status code {status:?}");
     }
 
-    let supported_versions = response.json::<PairingSupportedVersions>().await.unwrap();
+    let supported_versions = response.json::<Vec<WirePairingVersion>>().await.unwrap();
 
-    for version in SUPPORTED_PAIRING_VERSIONS {
-        if supported_versions.0.contains(version) {
-            return Ok(*version);
+    for version in supported_versions.into_iter().filter_map(|v| v.try_into().ok()) {
+        if SUPPORTED_PAIRING_VERSIONS.contains(&version) {
+            return Ok(version);
         }
     }
 
