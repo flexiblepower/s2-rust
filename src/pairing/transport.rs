@@ -217,10 +217,8 @@ pub(crate) struct RequestConnectionDetailsRequest {
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ConnectionDetails {
-    #[serde(default)]
-    pub initiate_connection_url: Option<String>,
-    #[serde(default)]
-    pub access_token: Option<AccessToken>,
+    pub initiate_connection_url: String,
+    pub access_token: AccessToken,
 }
 
 #[derive(Serialize, Deserialize)]

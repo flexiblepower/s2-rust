@@ -302,15 +302,15 @@ async fn v1_request_connection_details(
 
             let mut rng = rand::rng();
             let connection_details = ConnectionDetails {
-                initiate_connection_url: Some(String::from("example.com")),
-                access_token: Some(AccessToken::new(&mut rng)),
+                initiate_connection_url: String::from("example.com"),
+                access_token: AccessToken::new(&mut rng),
             };
 
             *state_entry = PairingState::Complete(CompletePairingState {
                 sender: state.sender,
                 remote_node_description: state.remote_node_description,
                 remote_endpoint_description: state.remote_endpoint_description,
-                access_token: AccessToken(connection_details.access_token.as_ref().unwrap().0.clone()),
+                access_token: connection_details.access_token.clone(),
                 role: PairingRole::CommunicationServer,
             });
 
@@ -361,9 +361,9 @@ async fn v1_post_connection_details(
                 sender: state.sender,
                 remote_node_description: state.remote_node_description,
                 remote_endpoint_description: state.remote_endpoint_description,
-                access_token: req.connection_details.access_token.unwrap(),
+                access_token: req.connection_details.access_token,
                 role: PairingRole::CommunicationClient {
-                    initiate_url: req.connection_details.initiate_connection_url.unwrap(),
+                    initiate_url: req.connection_details.initiate_connection_url,
                 },
             });
 

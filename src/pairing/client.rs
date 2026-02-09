@@ -99,8 +99,8 @@ async fn pair_v1(
             let request = PostConnectionDetailsRequest {
                 server_hmac_challenge_response,
                 connection_details: ConnectionDetails {
-                    initiate_connection_url: Some(initiate_connection_url.clone().into()),
-                    access_token: Some(AccessToken(access_token.0.clone())),
+                    initiate_connection_url: initiate_connection_url.clone().into(),
+                    access_token: access_token.clone(),
                 },
             };
             let response = client
@@ -134,9 +134,9 @@ async fn pair_v1(
             }
             let connection_details = response.json::<ConnectionDetails>().await.unwrap();
             Pairing {
-                token: connection_details.access_token.unwrap(),
+                token: connection_details.access_token,
                 role: PairingRole::CommunicationClient {
-                    initiate_url: connection_details.initiate_connection_url.unwrap(),
+                    initiate_url: connection_details.initiate_connection_url,
                 },
             }
         }
