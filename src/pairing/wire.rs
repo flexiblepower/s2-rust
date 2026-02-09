@@ -120,10 +120,8 @@ pub struct S2NodeDescription {
     pub role: S2Role,
 }
 
-#[derive(Serialize, Deserialize)]
-pub(crate) enum CommunicationProtocol {
-    WebSocket,
-}
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
+pub struct CommunicationProtocol(pub String);
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash)]
 #[serde(rename_all = "UPPERCASE")]
