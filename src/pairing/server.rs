@@ -16,7 +16,7 @@ use tokio::time::Instant;
 
 use crate::pairing::{PairingRole, SUPPORTED_PAIRING_VERSIONS};
 
-use super::{Config, Error, Network, Pairing, PairingResult, S2EndpointDescription, S2NodeDescription, transport::*};
+use super::{Config, Error, Network, Pairing, PairingResult, S2EndpointDescription, S2NodeDescription, wire::*};
 
 const PERMANENT_PAIRING_BUFFER_SIZE: usize = 1;
 

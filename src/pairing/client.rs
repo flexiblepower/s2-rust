@@ -3,7 +3,7 @@ use reqwest::{StatusCode, Url};
 use crate::pairing::{Pairing, PairingRole, SUPPORTED_PAIRING_VERSIONS};
 
 use super::Config;
-use super::transport::*;
+use super::wire::*;
 use super::{Error, Network, PairingResult, Role};
 
 //FIXME: Consider whether we want to use reqwest types in public interface.

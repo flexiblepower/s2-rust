@@ -2,19 +2,19 @@
 #![warn(clippy::clone_on_copy)]
 mod client;
 mod server;
-mod transport;
+mod wire;
 
 use rand::Rng;
 
 use reqwest::Url;
 
-use transport::{AccessToken, HmacChallenge, HmacChallengeResponse};
+use wire::{AccessToken, HmacChallenge, HmacChallengeResponse};
 
 pub use client::{PairingRemote, pair};
 pub use server::{PairingToken, Server, ServerConfig};
-pub use transport::{ConnectionVersion, Deployment, S2EndpointDescription, S2NodeDescription, S2NodeId, S2Role};
+pub use wire::{ConnectionVersion, Deployment, S2EndpointDescription, S2NodeDescription, S2NodeId, S2Role};
 
-use crate::pairing::transport::PairingVersion;
+use crate::pairing::wire::PairingVersion;
 
 const SUPPORTED_PAIRING_VERSIONS: &[PairingVersion] = &[PairingVersion::V1];
 
