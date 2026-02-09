@@ -1,6 +1,7 @@
 use reqwest::Url;
 use s2energy::pairing::{
-    CommunicationProtocol, Config, ConnectionVersion, PairingRemote, Role, S2EndpointDescription, S2NodeDescription, S2NodeId, S2Role, pair,
+    CommunicationProtocol, Config, ConnectionVersion, Deployment, PairingRemote, S2EndpointDescription, S2NodeDescription, S2NodeId,
+    S2Role, pair,
 };
 
 const PAIRING_TOKEN: &[u8] = &[1, 2, 3];
@@ -24,18 +25,19 @@ async fn main() {
         },
         vec![ConnectionVersion("v1".into())],
         vec![CommunicationProtocol("WebSocket".into())],
+        Deployment::Lan,
     )
+    .with_connection_initiate_url("client.example.com".into())
     .build()
     .unwrap();
 
     let pair_result = pair(
-        config,
+        &config,
         PairingRemote {
             url: Url::parse("http://127.0.0.1:8005").unwrap(),
             id: S2NodeId(String::from("12121212")),
         },
         PAIRING_TOKEN,
-        Role::CommunicationClient,
     )
     .await
     .unwrap();

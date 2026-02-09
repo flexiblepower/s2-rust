@@ -2,8 +2,8 @@ use std::{net::SocketAddr, sync::Arc};
 use tokio::net::TcpListener;
 
 use s2energy::pairing::{
-    CommunicationProtocol, Config, ConnectionVersion, PairingToken, S2EndpointDescription, S2NodeDescription, S2NodeId, S2Role, Server,
-    ServerConfig,
+    CommunicationProtocol, Config, ConnectionVersion, Deployment, PairingToken, S2EndpointDescription, S2NodeDescription, S2NodeId, S2Role,
+    Server, ServerConfig,
 };
 
 #[allow(unused)]
@@ -20,7 +20,7 @@ async fn main() {
             type_: String::from("fancy"),
             model_name: String::from("the best"),
             user_defined_name: None,
-            role: S2Role::Rm,
+            role: S2Role::Cem,
         },
         S2EndpointDescription {
             name: None,
@@ -29,6 +29,7 @@ async fn main() {
         },
         vec![ConnectionVersion("v1".into())],
         vec![CommunicationProtocol("WebSocket".into())],
+        Deployment::Wan,
     )
     .with_connection_initiate_url("test.example.com".into())
     .build()

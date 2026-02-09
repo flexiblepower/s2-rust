@@ -6,8 +6,6 @@ mod wire;
 
 use rand::Rng;
 
-use reqwest::Url;
-
 use wire::{AccessToken, HmacChallenge, HmacChallengeResponse};
 
 pub use client::{PairingRemote, pair};
@@ -24,6 +22,7 @@ pub struct Config {
     endpoint_description: S2EndpointDescription,
     supported_protocol_versions: Vec<ConnectionVersion>,
     supported_communication_protocols: Vec<CommunicationProtocol>,
+    local_deployment: Deployment,
     connection_initiate_url: Option<String>,
 }
 
@@ -45,12 +44,14 @@ impl Config {
         endpoint_description: S2EndpointDescription,
         supported_protocol_versions: Vec<ConnectionVersion>,
         supported_communication_protocols: Vec<CommunicationProtocol>,
+        local_deployment: Deployment,
     ) -> ConfigBuilder {
         ConfigBuilder {
             node_description,
             endpoint_description,
             supported_protocol_versions,
             supported_communication_protocols,
+            local_deployment,
             connection_initiate_url: None,
         }
     }
@@ -61,6 +62,7 @@ pub struct ConfigBuilder {
     endpoint_description: S2EndpointDescription,
     supported_protocol_versions: Vec<ConnectionVersion>,
     supported_communication_protocols: Vec<CommunicationProtocol>,
+    local_deployment: Deployment,
     connection_initiate_url: Option<String>,
 }
 
@@ -71,7 +73,9 @@ impl ConfigBuilder {
     }
 
     pub fn build(self) -> Result<Config, ConfigError> {
-        if (self.node_description.role == S2Role::Cem || self.endpoint_description.deployment == Some(Deployment::Wan))
+        if (self.node_description.role == S2Role::Cem
+            || self.endpoint_description.deployment == Some(Deployment::Wan)
+            || (self.endpoint_description.deployment.is_none() && self.local_deployment == Deployment::Wan))
             && self.connection_initiate_url.is_none()
         {
             return Err(ConfigError::MissingInitiateUrl);
@@ -81,6 +85,7 @@ impl ConfigBuilder {
             endpoint_description: self.endpoint_description,
             supported_protocol_versions: self.supported_protocol_versions,
             supported_communication_protocols: self.supported_communication_protocols,
+            local_deployment: self.local_deployment,
             connection_initiate_url: self.connection_initiate_url,
         })
     }
@@ -101,14 +106,6 @@ pub struct Pairing {
     pub remote_endpoint_description: S2EndpointDescription,
     pub token: AccessToken,
     pub role: PairingRole,
-}
-
-pub enum Role {
-    CommunicationServer {
-        initiate_connection_url: Url,
-        access_token: AccessToken,
-    },
-    CommunicationClient,
 }
 
 impl HmacChallenge {
@@ -154,6 +151,8 @@ pub enum Error {
     InvalidToken,
     // The pairing session was cancelled.
     Cancelled,
+    // The remote is of the same type
+    RemoteOfSameType,
     // The configuration was invalid
     InvalidConfig(ConfigError),
 }
