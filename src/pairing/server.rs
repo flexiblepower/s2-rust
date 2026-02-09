@@ -242,6 +242,29 @@ async fn v1_request_pairing(
         }
     };
 
+    if !request_pairing.force_pairing {
+        let mut communication_overlap = false;
+        for communication_protocol in &open_pairing.config.supported_communication_protocols {
+            if request_pairing.supported_protocols.contains(communication_protocol) {
+                communication_overlap = true;
+                break;
+            }
+        }
+        if !communication_overlap {
+            return Err(PairingResponseErrorMessage::IncompatibleCommunicationProtocols.into());
+        }
+        let mut connection_overlap = false;
+        for connection_protocol in &open_pairing.config.supported_protocol_versions {
+            if request_pairing.supported_versions.contains(connection_protocol) {
+                connection_overlap = true;
+                break;
+            }
+        }
+        if !connection_overlap {
+            return Err(PairingResponseErrorMessage::IncompatibleS2MessageVersions.into());
+        }
+    }
+
     // let network = Wan;
     let network = Network::Lan { fingerprint: [0; 32] };
     let client_hmac_challenge_response = request_pairing.client_hmac_challenge.sha256(&network, &open_pairing.token.0);
