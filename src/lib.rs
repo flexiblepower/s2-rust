@@ -90,6 +90,7 @@
 //! It assumes that you are familiar with the S2 standard; if this is not the case, it may be useful to refer to [the S2 documentation website](https://docs.s2standard.org/docs/welcome/).
 #![warn(missing_docs)]
 #![cfg_attr(docsrs_s2energy, feature(doc_cfg))]
+#![expect(clippy::clone_on_copy)]
 
 include!(concat!(env!("OUT_DIR"), "/generated.rs"));
 

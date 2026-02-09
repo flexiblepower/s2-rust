@@ -1,4 +1,5 @@
 #![allow(missing_docs)]
+#![warn(clippy::clone_on_copy)]
 mod client;
 mod server;
 pub mod transport;

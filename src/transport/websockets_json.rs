@@ -185,6 +185,7 @@ pub async fn connect_as_client(
 ///
 /// End-users should not use this type directly; instead, they should acquire an [`S2Connection<WebsocketTransport>`]
 /// (e.g. using [`connect_as_client`]) and use that instead.
+#[expect(clippy::large_enum_variant)]
 pub enum WebsocketTransport {
     /// A WebSocket client connection.
     ClientSocket(WebSocketStream<MaybeTlsStream<TcpStream>>),
