@@ -74,10 +74,19 @@ impl HmacChallenge {
 
 #[derive(Debug, Clone)]
 pub enum Error {
+    // Something went wrong in the transport layers
+    TransportFailed,
+    // The remote reacted outside our expectations
+    ProtocolError,
+    // No shared version with the remote.
     NoSupportedVersion,
+    // Session timed out.
     Timeout,
+    // Already a pending pairing session with that node id.
     AlreadyPending,
+    // Provided token was invalid.
     InvalidToken,
+    // The pairing session was cancelled.
     Cancelled,
 }
 

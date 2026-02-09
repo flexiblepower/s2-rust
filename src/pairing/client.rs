@@ -22,14 +22,13 @@ pub async fn pair(config: Config, remote: PairingRemote, pairing_token: &[u8], r
 }
 
 async fn negotiate_version(client: &reqwest::Client, url: Url) -> Result<PairingVersion, Error> {
-    let response = client.get(url).send().await.unwrap();
+    let response = client.get(url).send().await.map_err(|_| Error::TransportFailed)?;
     let status = response.status();
-
     if status != StatusCode::OK {
-        todo!("invalid status code {status:?}");
+        return Err(Error::ProtocolError);
     }
 
-    let supported_versions = response.json::<Vec<WirePairingVersion>>().await.unwrap();
+    let supported_versions = response.json::<Vec<WirePairingVersion>>().await.map_err(|_| Error::ProtocolError)?;
 
     for version in supported_versions.into_iter().filter_map(|v| v.try_into().ok()) {
         if SUPPORTED_PAIRING_VERSIONS.contains(&version) {
@@ -137,11 +136,11 @@ async fn v1_get_connection_details(
         .json(&request)
         .send()
         .await
-        .unwrap();
+        .map_err(|_| Error::TransportFailed)?;
     if response.status() != StatusCode::OK {
-        todo!()
+        return Err(Error::ProtocolError);
     }
-    let connection_details = response.json::<ConnectionDetails>().await.unwrap();
+    let connection_details = response.json::<ConnectionDetails>().await.map_err(|_| Error::ProtocolError)?;
     Ok(connection_details)
 }
 
@@ -166,9 +165,9 @@ async fn v1_post_connection_details(
         .json(&request)
         .send()
         .await
-        .unwrap();
+        .map_err(|_| Error::TransportFailed)?;
     if response.status() != StatusCode::NO_CONTENT {
-        todo!()
+        return Err(Error::ProtocolError);
     }
 
     Ok(())
@@ -196,11 +195,11 @@ async fn v1_request_pairing(
         .json(&request)
         .send()
         .await
-        .unwrap();
+        .map_err(|_| Error::TransportFailed)?;
     if response.status() != StatusCode::OK {
-        todo!()
+        return Err(Error::ProtocolError);
     }
-    let request_pairing_response = response.json::<RequestPairingResponse>().await.unwrap();
+    let request_pairing_response = response.json::<RequestPairingResponse>().await.map_err(|_| Error::ProtocolError)?;
     Ok(request_pairing_response)
 }
 
@@ -211,9 +210,9 @@ async fn v1_finalize(client: &reqwest::Client, url: &Url, attempt_id: &PairingAt
         .json(&success)
         .send()
         .await
-        .unwrap();
+        .map_err(|_| Error::TransportFailed)?;
     if response.status() != StatusCode::NO_CONTENT {
-        todo!()
+        return Err(Error::ProtocolError);
     }
 
     Ok(())
