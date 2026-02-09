@@ -66,7 +66,7 @@ impl PairingState {
 
         let version = 'blk: {
             for candidate in [PairingVersion::V1] {
-                if server_versions.0.iter().any(|v| *v == candidate) {
+                if server_versions.0.contains(&candidate) {
                     break 'blk candidate;
                 }
             }
@@ -118,7 +118,7 @@ impl PairingState {
 
         let request_pairing_response = match self.post_request_pairing(request_pairing).await {
             Ok(request_pairing_response) => request_pairing_response,
-            Err(e) => {
+            Err(_e) => {
                 // NOTE: we don't have a pairing_attempt_id yet.
                 todo!()
             }
