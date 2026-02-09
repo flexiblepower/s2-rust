@@ -2,7 +2,7 @@
 #![warn(clippy::clone_on_copy)]
 mod client;
 mod server;
-pub mod transport;
+mod transport;
 
 use rand::Rng;
 
@@ -12,7 +12,7 @@ use transport::{AccessToken, HmacChallenge, HmacChallengeResponse};
 
 pub use client::{PairingRemote, pair};
 pub use server::{PairingToken, Server, ServerConfig};
-pub use transport::{ConnectionVersion, S2EndpointDescription, S2NodeDescription, S2NodeId, S2Role};
+pub use transport::{ConnectionVersion, Deployment, S2EndpointDescription, S2NodeDescription, S2NodeId, S2Role};
 
 use crate::pairing::transport::PairingVersion;
 
