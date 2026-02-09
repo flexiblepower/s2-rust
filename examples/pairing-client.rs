@@ -23,9 +23,7 @@ async fn main() {
         supported_protocol_versions: vec![ConnectionVersion("v1".into())],
     };
 
-    let mut rng = rand::rng();
     let pair_result = pair(
-        &mut rng,
         config,
         PairingRemote {
             url: Url::parse("http://127.0.0.1:8005").unwrap(),
@@ -36,9 +34,11 @@ async fn main() {
     )
     .await
     .unwrap();
-    println!(
-        "url: {:?}, token: {:?}",
-        pair_result.initiate_connection_url,
-        pair_result.access_token.map(|v| v.0)
-    );
+
+    match pair_result.role {
+        s2energy::pairing::PairingRole::CommunicationClient { initiate_url } => {
+            println!("Paired as client, url: {initiate_url}, token: {}", pair_result.token.0)
+        }
+        s2energy::pairing::PairingRole::CommunicationServer => println!("Paired as server, token: {}", pair_result.token.0),
+    }
 }
