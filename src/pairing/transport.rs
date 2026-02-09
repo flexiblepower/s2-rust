@@ -30,7 +30,7 @@ pub enum PairingVersion {
     V1,
 }
 
-#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ConnectionVersion(pub String);
 
 #[derive(Serialize, Deserialize)]
@@ -60,7 +60,7 @@ pub struct RequestPairing {
     pub force_pairing: bool,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct S2EndpointDescription {
     #[serde(default)]
@@ -90,7 +90,7 @@ impl AccessToken {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
 pub struct S2NodeId(pub String);
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct S2NodeDescription {
     pub id: S2NodeId,
@@ -109,7 +109,7 @@ pub enum CommunicationProtocol {
     WebSocket,
 }
 
-#[derive(Serialize, Deserialize, Clone, Copy)]
+#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum S2Role {
     /// Customer Energy Manager.
@@ -118,7 +118,7 @@ pub enum S2Role {
     Rm,
 }
 
-#[derive(Serialize, Deserialize, Clone, Copy)]
+#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum Deployment {
     Wan,

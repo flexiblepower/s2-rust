@@ -18,6 +18,8 @@ use crate::pairing::PairingRole;
 
 use super::{Config, Error, Network, Pairing, PairingResult, S2EndpointDescription, S2NodeDescription, transport::*};
 
+const PERMANENT_PAIRING_BUFFER_SIZE: usize = 1;
+
 pub struct PairingToken(pub Box<[u8]>);
 
 pub struct Server {
@@ -36,11 +38,24 @@ impl PendingPairing {
     }
 }
 
-pub struct RepeatedPairing {}
+pub struct RepeatedPairing {
+    receiver: tokio::sync::mpsc::Receiver<PairingResult<Pairing>>,
+}
+
+impl RepeatedPairing {
+    pub async fn next(&mut self) -> Option<Pairing> {
+        loop {
+            if let Ok(pairing) = self.receiver.recv().await.transpose() {
+                break pairing;
+            }
+        }
+    }
+}
 
 impl Server {
     pub fn new(server_config: ServerConfig) -> Self {
         let state = AppStateInner {
+            permanent_pairings: Mutex::new(HashMap::new()),
             open_pairings: Mutex::new(HashMap::new()),
             attempts: Mutex::new(HashMap::default()),
         };
@@ -57,9 +72,11 @@ impl Server {
 
     pub fn pair_once(&self, config: Arc<Config>, pairing_token: PairingToken) -> Result<PendingPairing, Error> {
         let mut open_pairings = self.state.open_pairings.lock().unwrap();
-        if open_pairings.contains_key(&config.node_description.id) {
+        let mut permanent_pairings = self.state.permanent_pairings.lock().unwrap();
+        if open_pairings.contains_key(&config.node_description.id) || permanent_pairings.contains_key(&config.node_description.id) {
             return Err(Error::AlreadyPending);
         }
+        drop(permanent_pairings);
         let (sender, receiver) = tokio::sync::oneshot::channel();
         open_pairings.insert(
             config.node_description.id.clone(),
@@ -73,22 +90,47 @@ impl Server {
     }
 
     pub fn pair_repeated(&self, config: Arc<Config>, pairing_token: PairingToken) -> Result<RepeatedPairing, Error> {
-        todo!()
+        let mut open_pairings = self.state.open_pairings.lock().unwrap();
+        let mut permanent_pairings = self.state.permanent_pairings.lock().unwrap();
+        if open_pairings.contains_key(&config.node_description.id) || permanent_pairings.contains_key(&config.node_description.id) {
+            return Err(Error::AlreadyPending);
+        }
+        drop(open_pairings);
+        let (sender, receiver) = tokio::sync::mpsc::channel(PERMANENT_PAIRING_BUFFER_SIZE);
+        permanent_pairings.insert(
+            config.node_description.id.clone(),
+            PermanentPairingRequest {
+                config,
+                sender,
+                token: pairing_token,
+            },
+        );
+        Ok(RepeatedPairing { receiver })
     }
 }
 
 enum ResultSender {
     Oneshot(tokio::sync::oneshot::Sender<PairingResult<Pairing>>),
+    Multi(tokio::sync::mpsc::Sender<PairingResult<Pairing>>),
 }
 
 impl ResultSender {
-    fn send(self, result: PairingResult<Pairing>) {
+    async fn send(self, result: PairingResult<Pairing>) {
         match self {
-            ResultSender::Oneshot(sender) => {
+            Self::Oneshot(sender) => {
                 let _ = sender.send(result);
+            }
+            Self::Multi(sender) => {
+                let _ = sender.send(result).await;
             }
         };
     }
+}
+
+struct PermanentPairingRequest {
+    config: Arc<Config>,
+    sender: tokio::sync::mpsc::Sender<PairingResult<Pairing>>,
+    token: PairingToken,
 }
 
 struct PairingRequest {
@@ -145,6 +187,7 @@ type AppState = Arc<AppStateInner>;
 
 struct AppStateInner {
     // rng: ThreadRng,
+    permanent_pairings: Mutex<HashMap<S2NodeId, PermanentPairingRequest>>,
     open_pairings: Mutex<HashMap<S2NodeId, PairingRequest>>,
     attempts: Mutex<HashMap<PairingAttemptId, ExpiringPairingState>>,
 }
@@ -174,10 +217,20 @@ async fn v1_request_pairing(
 
     let open_pairing = {
         let mut open_pairings = state.open_pairings.lock().unwrap();
-        open_pairings
-            .remove_entry(&request_pairing.id)
-            .ok_or(PairingResponseErrorMessage::S2NodeNotFound)?
-            .1
+        if let Some((_, request)) = open_pairings.remove_entry(&request_pairing.id) {
+            request
+        } else {
+            drop(open_pairings);
+            let permanent_pairings = state.permanent_pairings.lock().unwrap();
+            let entry = permanent_pairings
+                .get(&request_pairing.id)
+                .ok_or(PairingResponseErrorMessage::S2NodeNotFound)?;
+            PairingRequest {
+                config: entry.config.clone(),
+                sender: ResultSender::Multi(entry.sender.clone()),
+                token: PairingToken(entry.token.0.clone()),
+            }
+        }
     };
 
     // let network = Wan;
@@ -313,18 +366,23 @@ async fn v1_finalize_pairing(State(state): State<AppState>, headers: HeaderMap, 
         return StatusCode::UNAUTHORIZED;
     };
 
-    let mut attempts = state.attempts.lock().unwrap();
-    let Some(state) = attempts.remove(&pairing_attempt_id) else {
+    let Some(state) = ({
+        let mut attempts = state.attempts.lock().unwrap();
+        attempts.remove(&pairing_attempt_id)
+    }) else {
         return StatusCode::UNAUTHORIZED;
     };
 
     if let Some(state) = state.into_state() {
         if success {
             if let PairingState::Complete(state) = state {
-                state.sender.send(Ok(Pairing {
-                    token: state.access_token,
-                    role: state.role,
-                }));
+                state
+                    .sender
+                    .send(Ok(Pairing {
+                        token: state.access_token,
+                        role: state.role,
+                    }))
+                    .await;
 
                 StatusCode::NO_CONTENT
             } else {
@@ -334,7 +392,7 @@ async fn v1_finalize_pairing(State(state): State<AppState>, headers: HeaderMap, 
             match state {
                 PairingState::Empty => { /* should never happen, but fine to ignore */ }
                 PairingState::Initial(InitialPairingState { sender, .. }) | PairingState::Complete(CompletePairingState { sender, .. }) => {
-                    sender.send(Err(Error::Cancelled))
+                    sender.send(Err(Error::Cancelled)).await;
                 }
             }
 

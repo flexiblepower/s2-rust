@@ -13,6 +13,7 @@ pub use client::{PairingRemote, pair};
 pub use server::{PairingToken, Server, ServerConfig};
 pub use transport::{ConnectionVersion, S2EndpointDescription, S2NodeDescription, S2NodeId, S2Role};
 
+#[derive(Debug, Clone)]
 pub struct Config {
     pub node_description: S2NodeDescription,
     pub endpoint_description: S2EndpointDescription,
