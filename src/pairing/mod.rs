@@ -10,13 +10,23 @@ use reqwest::Url;
 use transport::{AccessToken, HmacChallenge, HmacChallengeResponse};
 
 pub use client::{PairingRemote, pair};
-pub use server::{Server, ServerConfig};
+pub use server::{PairingToken, Server, ServerConfig};
 pub use transport::{ConnectionVersion, S2EndpointDescription, S2NodeDescription, S2NodeId, S2Role};
 
 pub struct Config {
     pub node_description: S2NodeDescription,
     pub endpoint_description: S2EndpointDescription,
     pub supported_protocol_versions: Vec<ConnectionVersion>,
+}
+
+pub enum PairingRole {
+    CommunicationClient { initiate_url: String },
+    CommunicationServer,
+}
+
+pub struct Pairing {
+    pub token: AccessToken,
+    pub role: PairingRole,
 }
 
 pub enum Role {
@@ -57,6 +67,9 @@ impl HmacChallenge {
 #[derive(Debug, Clone)]
 pub enum Error {
     NoSupportedVersion,
+    Timeout,
+    AlreadyPending,
+    Cancelled,
 }
 
 pub type PairingResult<T> = Result<T, Error>;

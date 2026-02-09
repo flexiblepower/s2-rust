@@ -1,7 +1,7 @@
 #![allow(unused)]
 use std::{
     collections::HashMap,
-    sync::{Arc, RwLock},
+    sync::{Arc, Mutex},
     time::Duration,
 };
 
@@ -14,61 +14,130 @@ use axum::{
 use reqwest::StatusCode;
 use tokio::time::Instant;
 
-use super::{Config, Network, S2EndpointDescription, S2NodeDescription, transport::*};
+use crate::pairing::PairingRole;
 
-pub struct Server {}
+use super::{Config, Error, Network, Pairing, PairingResult, S2EndpointDescription, S2NodeDescription, transport::*};
+
+pub struct PairingToken(pub Box<[u8]>);
+
+pub struct Server {
+    state: AppState,
+}
 
 pub struct ServerConfig {}
 
-pub struct PendingPairing {}
+pub struct PendingPairing {
+    receiver: tokio::sync::oneshot::Receiver<PairingResult<Pairing>>,
+}
+
+impl PendingPairing {
+    pub async fn result(self) -> PairingResult<Pairing> {
+        self.receiver.await.unwrap_or(Err(Error::Timeout))
+    }
+}
 
 pub struct RepeatedPairing {}
 
 impl Server {
     pub fn new(server_config: ServerConfig) -> Self {
-        Self {}
+        let state = AppStateInner {
+            open_pairings: Mutex::new(HashMap::new()),
+            attempts: Mutex::new(HashMap::default()),
+        };
+
+        Self { state: Arc::new(state) }
     }
 
     pub fn get_router(&self) -> axum::Router<()> {
-        let server_s2_node_description = S2NodeDescription {
-            id: S2NodeId(String::from("12121212")),
-            brand: String::from("super-reliable-corp"),
-            logo_uri: None,
-            type_: String::from("fancy"),
-            model_name: String::from("the best"),
-            user_defined_name: None,
-            role: S2Role::Rm,
-        };
-
-        let state = AppStateInner {
-            description: server_s2_node_description,
-            attempts: RwLock::new(HashMap::default()),
-        };
-
         Router::new()
             .route("/", get(root))
             .nest("/v1", v1_router())
-            .with_state(Arc::new(state))
+            .with_state(self.state.clone())
     }
 
-    pub fn pair_once(&self, config: Arc<Config>, pairing_token: Vec<u8>) -> PendingPairing {
-        todo!()
+    pub fn pair_once(&self, config: Arc<Config>, pairing_token: PairingToken) -> Result<PendingPairing, Error> {
+        let mut open_pairings = self.state.open_pairings.lock().unwrap();
+        if open_pairings.contains_key(&config.node_description.id) {
+            return Err(Error::AlreadyPending);
+        }
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        open_pairings.insert(
+            config.node_description.id.clone(),
+            PairingRequest {
+                config,
+                sender: ResultSender::Oneshot(sender),
+                token: pairing_token,
+            },
+        );
+        Ok(PendingPairing { receiver })
     }
 
-    pub fn pair_repeated(&self, config: Arc<Config>, pairing_token: Vec<u8>) -> RepeatedPairing {
+    pub fn pair_repeated(&self, config: Arc<Config>, pairing_token: PairingToken) -> Result<RepeatedPairing, Error> {
         todo!()
     }
 }
 
-const PAIRING_TOKEN: &[u8] = &[1, 2, 3];
+enum ResultSender {
+    Oneshot(tokio::sync::oneshot::Sender<PairingResult<Pairing>>),
+}
 
-struct ClientState {
+impl ResultSender {
+    fn send(self, result: PairingResult<Pairing>) {
+        match self {
+            ResultSender::Oneshot(sender) => {
+                let _ = sender.send(result);
+            }
+        };
+    }
+}
+
+struct PairingRequest {
+    config: Arc<Config>,
+    sender: ResultSender,
+    token: PairingToken,
+}
+
+struct InitialPairingState {
+    sender: ResultSender,
+    challenge: HmacChallenge,
+    token: PairingToken,
+    remote_node_description: S2NodeDescription,
+    remote_endpoint_description: S2EndpointDescription,
+}
+struct CompletePairingState {
+    sender: ResultSender,
+    remote_node_description: S2NodeDescription,
+    remote_endpoint_description: S2EndpointDescription,
+    access_token: AccessToken,
+    role: PairingRole,
+}
+
+enum PairingState {
+    Empty,
+    Initial(InitialPairingState),
+    Complete(CompletePairingState),
+}
+
+struct ExpiringPairingState {
     start_time: Instant,
-    hmac_challenge: HmacChallenge,
+    state: PairingState,
 }
-impl ClientState {
-    fn has_expired(&self) -> bool {
-        self.start_time.elapsed() > Duration::from_secs(15)
+
+impl ExpiringPairingState {
+    fn get_state(&mut self) -> Option<&mut PairingState> {
+        if self.start_time.elapsed() > Duration::from_secs(15) {
+            None
+        } else {
+            Some(&mut self.state)
+        }
+    }
+
+    fn into_state(self) -> Option<PairingState> {
+        if self.start_time.elapsed() > Duration::from_secs(15) {
+            None
+        } else {
+            Some(self.state)
+        }
     }
 }
 
@@ -76,8 +145,8 @@ type AppState = Arc<AppStateInner>;
 
 struct AppStateInner {
     // rng: ThreadRng,
-    description: S2NodeDescription,
-    attempts: RwLock<HashMap<PairingAttemptId, ClientState>>,
+    open_pairings: Mutex<HashMap<S2NodeId, PairingRequest>>,
+    attempts: Mutex<HashMap<PairingAttemptId, ExpiringPairingState>>,
 }
 
 async fn root() -> Json<Vec<&'static str>> {
@@ -96,19 +165,41 @@ async fn v1_request_pairing(
     State(state): State<AppState>,
     Json(request_pairing): Json<RequestPairing>,
 ) -> Result<Json<RequestPairingResponse>, Json<PairingResponseErrorMessage>> {
+    if !request_pairing.supported_hashing_algorithms.contains(&HmacHashingAlgorithm::Sha256) {
+        return Err(PairingResponseErrorMessage::IncompatibleHMACHashingAlgorithms.into());
+    }
+
     let mut rng = rand::rng();
     let server_hmac_challenge = HmacChallenge::new(&mut rng);
 
+    let open_pairing = {
+        let mut open_pairings = state.open_pairings.lock().unwrap();
+        open_pairings
+            .remove_entry(&request_pairing.id)
+            .ok_or(PairingResponseErrorMessage::S2NodeNotFound)?
+            .1
+    };
+
+    // let network = Wan;
+    let network = Network::Lan { fingerprint: [0; 32] };
+    let client_hmac_challenge_response = request_pairing.client_hmac_challenge.sha256(&network, &open_pairing.token.0);
+
     let pairing_attempt_id = {
-        let mut attempts = state.attempts.write().unwrap();
+        let mut attempts = state.attempts.lock().unwrap();
         loop {
             let id = PairingAttemptId::new(&mut rng);
             if !attempts.contains_key(&id) {
                 attempts.insert(
                     id.clone(),
-                    ClientState {
+                    ExpiringPairingState {
                         start_time: Instant::now(),
-                        hmac_challenge: server_hmac_challenge.clone(),
+                        state: PairingState::Initial(InitialPairingState {
+                            sender: open_pairing.sender,
+                            challenge: server_hmac_challenge.clone(),
+                            token: open_pairing.token,
+                            remote_node_description: request_pairing.node_description,
+                            remote_endpoint_description: request_pairing.endpoint_description,
+                        }),
                     },
                 );
                 break id;
@@ -116,18 +207,10 @@ async fn v1_request_pairing(
         }
     };
 
-    // let network = Wan;
-    let network = Network::Lan { fingerprint: [0; 32] };
-    let client_hmac_challenge_response = request_pairing.client_hmac_challenge.sha256(&network, PAIRING_TOKEN);
-
     let resp = RequestPairingResponse {
         pairing_attempt_id,
-        server_s2_node_description: state.description.clone(),
-        server_s2_endpoint_description: S2EndpointDescription {
-            name: None,
-            logo_uri: None,
-            deployment: None,
-        },
+        server_s2_node_description: open_pairing.config.node_description.clone(),
+        server_s2_endpoint_description: open_pairing.config.endpoint_description.clone(),
         selected_hmac_hashing_algorithm: HmacHashingAlgorithm::Sha256,
         client_hmac_challenge_response,
         server_hmac_challenge,
@@ -145,30 +228,41 @@ async fn v1_request_connection_details(
         return Err(StatusCode::UNAUTHORIZED);
     };
 
-    let attempts = state.attempts.read().unwrap();
-    let Some(client_state) = attempts.get(&pairing_attempt_id) else {
+    let mut attempts = state.attempts.lock().unwrap();
+    let Some(state) = attempts.get_mut(&pairing_attempt_id) else {
         return Err(StatusCode::UNAUTHORIZED);
     };
 
-    if client_state.has_expired() {
-        return Err(StatusCode::UNAUTHORIZED);
+    if let Some(state_entry) = state.get_state()
+        && let PairingState::Initial(state) = std::mem::replace(state_entry, PairingState::Empty)
+    {
+        // let network = Network::Wan;
+        let network = Network::Lan { fingerprint: [0; 32] };
+
+        let expected = state.challenge.sha256(&network, &state.token.0);
+        if expected != req.server_hmac_challenge_response {
+            todo!();
+        }
+
+        let mut rng = rand::rng();
+        let connection_details = ConnectionDetails {
+            initiate_connection_url: Some(String::from("example.com")),
+            access_token: Some(AccessToken::new(&mut rng)),
+        };
+
+        *state_entry = PairingState::Complete(CompletePairingState {
+            sender: state.sender,
+            remote_node_description: state.remote_node_description,
+            remote_endpoint_description: state.remote_endpoint_description,
+            access_token: AccessToken(connection_details.access_token.as_ref().unwrap().0.clone()),
+            role: PairingRole::CommunicationServer,
+        });
+
+        Ok(Json(connection_details))
+    } else {
+        attempts.remove(&pairing_attempt_id);
+        Err(StatusCode::UNAUTHORIZED)
     }
-
-    // let network = Network::Wan;
-    let network = Network::Lan { fingerprint: [0; 32] };
-
-    let expected = client_state.hmac_challenge.sha256(&network, PAIRING_TOKEN);
-    if expected != req.server_hmac_challenge_response {
-        todo!();
-    }
-
-    let mut rng = rand::rng();
-    let connection_details = ConnectionDetails {
-        initiate_connection_url: Some(String::from("example.com")),
-        access_token: Some(AccessToken::new(&mut rng)),
-    };
-
-    Ok(Json(connection_details))
 }
 
 async fn v1_post_connection_details(
@@ -180,39 +274,73 @@ async fn v1_post_connection_details(
         return StatusCode::UNAUTHORIZED;
     };
 
-    let attempts = state.attempts.read().unwrap();
-    let Some(client_state) = attempts.get(&pairing_attempt_id) else {
+    let mut attempts = state.attempts.lock().unwrap();
+    let Some(state) = attempts.get_mut(&pairing_attempt_id) else {
         return StatusCode::UNAUTHORIZED;
     };
 
-    if client_state.has_expired() {
-        return StatusCode::UNAUTHORIZED;
+    if let Some(state_entry) = state.get_state()
+        && let PairingState::Initial(state) = std::mem::replace(state_entry, PairingState::Empty)
+    {
+        // let network = Network::Wan;
+        let network = Network::Lan { fingerprint: [0; 32] };
+
+        let expected = state.challenge.sha256(&network, &state.token.0);
+        if expected != req.server_hmac_challenge_response {
+            todo!();
+        }
+
+        // Do better error handling here than unwrap
+        *state_entry = PairingState::Complete(CompletePairingState {
+            sender: state.sender,
+            remote_node_description: state.remote_node_description,
+            remote_endpoint_description: state.remote_endpoint_description,
+            access_token: req.connection_details.access_token.unwrap(),
+            role: PairingRole::CommunicationClient {
+                initiate_url: req.connection_details.initiate_connection_url.unwrap(),
+            },
+        });
+
+        StatusCode::NO_CONTENT
+    } else {
+        attempts.remove(&pairing_attempt_id);
+        StatusCode::UNAUTHORIZED
     }
-
-    // let network = Network::Wan;
-    let network = Network::Lan { fingerprint: [0; 32] };
-
-    let expected = client_state.hmac_challenge.sha256(&network, PAIRING_TOKEN);
-    if expected != req.server_hmac_challenge_response {
-        todo!();
-    }
-
-    StatusCode::NO_CONTENT
 }
 
-async fn v1_finalize_pairing(State(state): State<AppState>, headers: HeaderMap, Json(_req): Json<bool>) -> StatusCode {
+async fn v1_finalize_pairing(State(state): State<AppState>, headers: HeaderMap, Json(success): Json<bool>) -> StatusCode {
     let Some(pairing_attempt_id) = PairingAttemptId::from_headers(&headers) else {
         return StatusCode::UNAUTHORIZED;
     };
 
-    let mut attempts = state.attempts.write().unwrap();
-    let Some(client_state) = attempts.remove(&pairing_attempt_id) else {
+    let mut attempts = state.attempts.lock().unwrap();
+    let Some(state) = attempts.remove(&pairing_attempt_id) else {
         return StatusCode::UNAUTHORIZED;
     };
 
-    if client_state.has_expired() {
-        return StatusCode::UNAUTHORIZED;
-    }
+    if let Some(state) = state.into_state() {
+        if success {
+            if let PairingState::Complete(state) = state {
+                state.sender.send(Ok(Pairing {
+                    token: state.access_token,
+                    role: state.role,
+                }));
 
-    StatusCode::NO_CONTENT
+                StatusCode::NO_CONTENT
+            } else {
+                StatusCode::BAD_REQUEST
+            }
+        } else {
+            match state {
+                PairingState::Empty => { /* should never happen, but fine to ignore */ }
+                PairingState::Initial(InitialPairingState { sender, .. }) | PairingState::Complete(CompletePairingState { sender, .. }) => {
+                    sender.send(Err(Error::Cancelled))
+                }
+            }
+
+            StatusCode::NO_CONTENT
+        }
+    } else {
+        StatusCode::UNAUTHORIZED
+    }
 }

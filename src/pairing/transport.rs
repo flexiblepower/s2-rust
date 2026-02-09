@@ -87,7 +87,7 @@ impl AccessToken {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
 pub struct S2NodeId(pub String);
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -125,7 +125,7 @@ pub enum Deployment {
     Lan,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum HmacHashingAlgorithm {
     Sha256,

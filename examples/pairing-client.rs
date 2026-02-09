@@ -29,7 +29,7 @@ async fn main() {
         config,
         PairingRemote {
             url: Url::parse("http://127.0.0.1:8005").unwrap(),
-            id: S2NodeId("elfkje".into()),
+            id: S2NodeId(String::from("12121212")),
         },
         PAIRING_TOKEN,
         Role::CommunicationClient,
