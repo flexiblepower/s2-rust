@@ -20,10 +20,55 @@ const SUPPORTED_PAIRING_VERSIONS: &[PairingVersion] = &[PairingVersion::V1];
 
 #[derive(Debug, Clone)]
 pub struct Config {
-    pub node_description: S2NodeDescription,
-    pub endpoint_description: S2EndpointDescription,
-    pub supported_protocol_versions: Vec<ConnectionVersion>,
+    node_description: S2NodeDescription,
+    endpoint_description: S2EndpointDescription,
+    supported_protocol_versions: Vec<ConnectionVersion>,
 }
+
+impl Config {
+    pub fn node_description(&self) -> &S2NodeDescription {
+        &self.node_description
+    }
+
+    pub fn endpoint_description(&self) -> &S2EndpointDescription {
+        &self.endpoint_description
+    }
+
+    pub fn supported_protocol_versions(&self) -> &[ConnectionVersion] {
+        &self.supported_protocol_versions
+    }
+
+    pub fn builder(
+        node_description: S2NodeDescription,
+        endpoint_description: S2EndpointDescription,
+        supported_protocol_versions: Vec<ConnectionVersion>,
+    ) -> ConfigBuilder {
+        ConfigBuilder {
+            node_description,
+            endpoint_description,
+            supported_protocol_versions,
+        }
+    }
+}
+
+pub struct ConfigBuilder {
+    node_description: S2NodeDescription,
+    endpoint_description: S2EndpointDescription,
+    supported_protocol_versions: Vec<ConnectionVersion>,
+}
+
+impl ConfigBuilder {
+    pub fn build(self) -> Result<Config, ConfigError> {
+        Ok(Config {
+            node_description: self.node_description,
+            endpoint_description: self.endpoint_description,
+            supported_protocol_versions: self.supported_protocol_versions,
+        })
+    }
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum ConfigError {}
 
 pub enum PairingRole {
     CommunicationClient { initiate_url: String },
@@ -88,6 +133,14 @@ pub enum Error {
     InvalidToken,
     // The pairing session was cancelled.
     Cancelled,
+    // The configuration was invalid
+    InvalidConfig(ConfigError),
+}
+
+impl From<ConfigError> for Error {
+    fn from(value: ConfigError) -> Self {
+        Self::InvalidConfig(value)
+    }
 }
 
 pub type PairingResult<T> = Result<T, Error>;
