@@ -71,6 +71,10 @@ impl Server {
     }
 
     pub fn pair_once(&self, config: Arc<Config>, pairing_token: PairingToken) -> Result<PendingPairing, Error> {
+        if config.connection_initiate_url.is_none() {
+            return Err(Error::InvalidConfig(super::ConfigError::MissingInitiateUrl));
+        }
+
         let mut open_pairings = self.state.open_pairings.lock().unwrap();
         let mut permanent_pairings = self.state.permanent_pairings.lock().unwrap();
         if open_pairings.contains_key(&config.node_description.id) || permanent_pairings.contains_key(&config.node_description.id) {
@@ -90,6 +94,10 @@ impl Server {
     }
 
     pub fn pair_repeated(&self, config: Arc<Config>, pairing_token: PairingToken) -> Result<RepeatedPairing, Error> {
+        if config.connection_initiate_url.is_none() {
+            return Err(Error::InvalidConfig(super::ConfigError::MissingInitiateUrl));
+        }
+
         let mut open_pairings = self.state.open_pairings.lock().unwrap();
         let mut permanent_pairings = self.state.permanent_pairings.lock().unwrap();
         if open_pairings.contains_key(&config.node_description.id) || permanent_pairings.contains_key(&config.node_description.id) {
@@ -140,6 +148,7 @@ struct PairingRequest {
 }
 
 struct InitialPairingState {
+    config: Arc<Config>,
     sender: ResultSender,
     challenge: HmacChallenge,
     token: PairingToken,
@@ -247,6 +256,7 @@ async fn v1_request_pairing(
                     ExpiringPairingState {
                         start_time: Instant::now(),
                         state: PairingState::Initial(InitialPairingState {
+                            config: open_pairing.config.clone(),
                             sender: open_pairing.sender,
                             challenge: server_hmac_challenge.clone(),
                             token: open_pairing.token,
@@ -302,7 +312,10 @@ async fn v1_request_connection_details(
 
             let mut rng = rand::rng();
             let connection_details = ConnectionDetails {
-                initiate_connection_url: String::from("example.com"),
+                initiate_connection_url: match &state.config.connection_initiate_url {
+                    Some(url) => url.clone(),
+                    None => return (Err(StatusCode::BAD_REQUEST), None),
+                },
                 access_token: AccessToken::new(&mut rng),
             };
 

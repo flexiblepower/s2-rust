@@ -125,7 +125,7 @@ pub(crate) enum CommunicationProtocol {
     WebSocket,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum S2Role {
     /// Customer Energy Manager.
@@ -134,7 +134,7 @@ pub enum S2Role {
     Rm,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum Deployment {
     Wan,

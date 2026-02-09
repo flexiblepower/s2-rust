@@ -23,6 +23,7 @@ pub struct Config {
     node_description: S2NodeDescription,
     endpoint_description: S2EndpointDescription,
     supported_protocol_versions: Vec<ConnectionVersion>,
+    connection_initiate_url: Option<String>,
 }
 
 impl Config {
@@ -47,6 +48,7 @@ impl Config {
             node_description,
             endpoint_description,
             supported_protocol_versions,
+            connection_initiate_url: None,
         }
     }
 }
@@ -55,20 +57,34 @@ pub struct ConfigBuilder {
     node_description: S2NodeDescription,
     endpoint_description: S2EndpointDescription,
     supported_protocol_versions: Vec<ConnectionVersion>,
+    connection_initiate_url: Option<String>,
 }
 
 impl ConfigBuilder {
+    pub fn with_connection_initiate_url(mut self, connection_initiate_url: String) -> Self {
+        self.connection_initiate_url = Some(connection_initiate_url);
+        self
+    }
+
     pub fn build(self) -> Result<Config, ConfigError> {
+        if (self.node_description.role == S2Role::Cem || self.endpoint_description.deployment == Some(Deployment::Wan))
+            && self.connection_initiate_url.is_none()
+        {
+            return Err(ConfigError::MissingInitiateUrl);
+        }
         Ok(Config {
             node_description: self.node_description,
             endpoint_description: self.endpoint_description,
             supported_protocol_versions: self.supported_protocol_versions,
+            connection_initiate_url: self.connection_initiate_url,
         })
     }
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum ConfigError {}
+pub enum ConfigError {
+    MissingInitiateUrl,
+}
 
 pub enum PairingRole {
     CommunicationClient { initiate_url: String },

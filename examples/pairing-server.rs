@@ -28,6 +28,7 @@ async fn main() {
         },
         vec![ConnectionVersion("v1".into())],
     )
+    .with_connection_initiate_url("test.example.com".into())
     .build()
     .unwrap();
     let app = server.get_router();
