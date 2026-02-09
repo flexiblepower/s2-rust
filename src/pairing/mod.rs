@@ -31,6 +31,8 @@ pub enum PairingRole {
 }
 
 pub struct Pairing {
+    pub remote_node_description: S2NodeDescription,
+    pub remote_endpoint_description: S2EndpointDescription,
     pub token: AccessToken,
     pub role: PairingRole,
 }

@@ -399,6 +399,8 @@ async fn v1_finalize_pairing(State(state): State<AppState>, headers: HeaderMap, 
                 state
                     .sender
                     .send(Ok(Pairing {
+                        remote_endpoint_description: state.remote_endpoint_description,
+                        remote_node_description: state.remote_node_description,
                         token: state.access_token,
                         role: state.role,
                     }))

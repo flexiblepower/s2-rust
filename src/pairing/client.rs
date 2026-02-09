@@ -114,6 +114,8 @@ async fn pair_v1(
                 todo!()
             }
             Pairing {
+                remote_endpoint_description: request_pairing_response.server_s2_endpoint_description,
+                remote_node_description: request_pairing_response.server_s2_node_description,
                 token: access_token,
                 role: PairingRole::CommunicationServer,
             }
@@ -134,6 +136,8 @@ async fn pair_v1(
             }
             let connection_details = response.json::<ConnectionDetails>().await.unwrap();
             Pairing {
+                remote_endpoint_description: request_pairing_response.server_s2_endpoint_description,
+                remote_node_description: request_pairing_response.server_s2_node_description,
                 token: connection_details.access_token,
                 role: PairingRole::CommunicationClient {
                     initiate_url: connection_details.initiate_connection_url,
