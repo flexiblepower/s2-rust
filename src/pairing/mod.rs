@@ -136,6 +136,8 @@ impl HmacChallenge {
 
 #[derive(Debug, Clone)]
 pub enum Error {
+    // Invalid URL for remote
+    InvalidUrl,
     // Something went wrong in the transport layers
     TransportFailed,
     // The remote reacted outside our expectations

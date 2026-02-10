@@ -1,6 +1,5 @@
 use std::{path::PathBuf, sync::Arc};
 
-use reqwest::Url;
 use rustls::pki_types::{CertificateDer, pem::PemObject};
 use s2energy::pairing::{Client, Deployment, EndpointConfig, MessageVersion, PairingRemote, S2NodeDescription, S2NodeId, S2Role};
 
@@ -34,7 +33,7 @@ async fn main() {
     let pair_result = client
         .pair(
             PairingRemote {
-                url: Url::parse("https://test.local:8005").unwrap(),
+                url: "https://test.local:8005".into(),
                 id: S2NodeId(String::from("12121212")),
             },
             PAIRING_TOKEN,
