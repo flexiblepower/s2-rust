@@ -1,7 +1,8 @@
-use std::{path::PathBuf, sync::Arc};
+use std::sync::Arc;
 
-use rustls::pki_types::{CertificateDer, pem::PemObject};
-use s2energy::pairing::{Client, Deployment, EndpointConfig, MessageVersion, PairingRemote, S2NodeDescription, S2NodeId, S2Role};
+use s2energy::pairing::{
+    Client, ClientConfig, Deployment, EndpointConfig, MessageVersion, PairingRemote, S2NodeDescription, S2NodeId, S2Role,
+};
 
 const PAIRING_TOKEN: &[u8] = &[1, 2, 3];
 
@@ -23,10 +24,12 @@ async fn main() {
     .build()
     .unwrap();
 
-    let client = Client::new_with_dev_certificates(
+    let client = Client::new(
         Arc::new(config),
-        vec![CertificateDer::from_pem_file(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("testdata").join("root.pem")).unwrap()],
-        Deployment::Lan,
+        ClientConfig {
+            additional_certificates: vec![],
+            pairing_deployment: Deployment::Lan,
+        },
     )
     .unwrap();
 

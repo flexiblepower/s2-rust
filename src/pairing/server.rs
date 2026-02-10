@@ -22,33 +22,44 @@ use super::{EndpointConfig, Error, Network, Pairing, PairingResult, S2EndpointDe
 
 const PERMANENT_PAIRING_BUFFER_SIZE: usize = 1;
 
+/// Token known to both S2 nodes trying to pair.
+///
+/// This token is used to validate the identity of the nodes.
 pub struct PairingToken(pub Box<[u8]>);
 
+/// Server for handling S2 pairing transactions.
+///
+/// Responsible for providing the HTTP endpoints needed for handling
 pub struct Server {
     state: AppState,
 }
 
+/// Configuration for the S2 pairing server.
 pub struct ServerConfig {
     /// The root certificate of the server, if we are using a self-signed root.
     /// Presence of this field indicates we are deployed on LAN.
     pub root_certificate: Option<CertificateDer<'static>>,
 }
 
+/// A pending one-time pairing transaction.
 pub struct PendingPairing {
     receiver: tokio::sync::oneshot::Receiver<PairingResult<Pairing>>,
 }
 
 impl PendingPairing {
+    /// Wait for the result of the pairing transaction.
     pub async fn result(self) -> PairingResult<Pairing> {
         self.receiver.await.unwrap_or(Err(Error::Timeout))
     }
 }
 
+/// A repeated pairing with a fixed token, that can yield multiple pairings.
 pub struct RepeatedPairing {
     receiver: tokio::sync::mpsc::Receiver<PairingResult<Pairing>>,
 }
 
 impl RepeatedPairing {
+    /// Wait for and return the next pairing result using the token associated with this repeated pairing.
     pub async fn next(&mut self) -> Option<Pairing> {
         loop {
             if let Ok(pairing) = self.receiver.recv().await.transpose() {
@@ -59,6 +70,7 @@ impl RepeatedPairing {
 }
 
 impl Server {
+    /// Create a new server using the given configuration.
     pub fn new(server_config: ServerConfig) -> Self {
         let state = AppStateInner {
             network: server_config
@@ -75,6 +87,9 @@ impl Server {
         Self { state: Arc::new(state) }
     }
 
+    /// Get an [`axum::Router`] handling the endpoints for the pairing protocol.
+    ///
+    /// Incomming http requests can be handled by this router through the [axum-server](https://docs.rs/axum-server/0.8.0/axum_server/) crate.
     pub fn get_router(&self) -> axum::Router<()> {
         Router::new()
             .route("/", get(root))
@@ -82,6 +97,7 @@ impl Server {
             .with_state(self.state.clone())
     }
 
+    /// Start a one-time pairing session for the given endpoint using the given token.
     pub fn pair_once(&self, config: Arc<EndpointConfig>, pairing_token: PairingToken) -> Result<PendingPairing, Error> {
         if config.connection_initiate_url.is_none() {
             return Err(Error::InvalidConfig(super::ConfigError::MissingInitiateUrl));
@@ -105,6 +121,7 @@ impl Server {
         Ok(PendingPairing { receiver })
     }
 
+    /// Allow repeated pairing sessions for the given endpoing using the given token.
     pub fn pair_repeated(&self, config: Arc<EndpointConfig>, pairing_token: PairingToken) -> Result<RepeatedPairing, Error> {
         if config.connection_initiate_url.is_none() {
             return Err(Error::InvalidConfig(super::ConfigError::MissingInitiateUrl));

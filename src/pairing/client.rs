@@ -10,43 +10,44 @@ use super::EndpointConfig;
 use super::wire::*;
 use super::{Error, Network, PairingResult};
 
+/// Remote endpoint to pair with
 pub struct PairingRemote {
+    /// URL at which the remote endpoint can be reached
     pub url: String,
+    /// S2 node id of the remote endpoint.
     pub id: S2NodeId,
 }
 
+/// Configuration for pairing clients.
 pub struct ClientConfig {
+    /// Additional roots of trust for TLS connections. Useful when testing during the development of WAN endpoints.
+    ///
+    /// When the remote is on the LAN, this is not used.
     pub additional_certificates: Vec<CertificateDer<'static>>,
-    pub local_deployment: Deployment,
+    /// Where the pairing is deployed.
+    pub pairing_deployment: Deployment,
 }
 
+/// Client for S2 pairing transactions.
+///
+/// Used as the client end of a pairing interaction.
 pub struct Client {
     config: Arc<EndpointConfig>,
     additional_certificates: Vec<CertificateDer<'static>>,
-    local_deployment: Deployment,
+    pairing_deployment: Deployment,
 }
 
 impl Client {
+    /// Create a new client for pairing on an endpoint with the given configuration.
     pub fn new(config: Arc<EndpointConfig>, client_config: ClientConfig) -> PairingResult<Self> {
         Ok(Self {
             config,
             additional_certificates: client_config.additional_certificates,
-            local_deployment: client_config.local_deployment,
+            pairing_deployment: client_config.pairing_deployment,
         })
     }
 
-    pub fn new_with_dev_certificates(
-        config: Arc<EndpointConfig>,
-        additional_certificates: Vec<CertificateDer<'static>>,
-        local_deployment: Deployment,
-    ) -> PairingResult<Self> {
-        Ok(Self {
-            config,
-            additional_certificates,
-            local_deployment,
-        })
-    }
-
+    /// Pair with a given remote S2 node, using the provided token.
     pub async fn pair(&self, remote: PairingRemote, pairing_token: &[u8]) -> PairingResult<Pairing> {
         let url = Url::try_from(remote.url.as_str()).map_err(|_| Error::InvalidUrl)?;
 
@@ -71,7 +72,7 @@ impl Client {
         match pairing_version {
             PairingVersion::V1 => {
                 V1Session::new(client, url, &self.config)
-                    .pair_v1(certhash, self.local_deployment, remote.id, pairing_token)
+                    .pair_v1(certhash, self.pairing_deployment, remote.id, pairing_token)
                     .await
             }
         }
@@ -79,7 +80,7 @@ impl Client {
 }
 
 async fn negotiate_version(client: &reqwest::Client, url: Url) -> Result<PairingVersion, Error> {
-    let response = dbg!(client.get(url).send().await).map_err(|_| Error::TransportFailed)?;
+    let response = client.get(url).send().await.map_err(|_| Error::TransportFailed)?;
     let status = response.status();
     if status != StatusCode::OK {
         return Err(Error::ProtocolError);
