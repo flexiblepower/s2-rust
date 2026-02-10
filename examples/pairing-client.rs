@@ -2,13 +2,13 @@ use std::{path::PathBuf, sync::Arc};
 
 use reqwest::Url;
 use rustls::pki_types::{CertificateDer, pem::PemObject};
-use s2energy::pairing::{Client, Config, Deployment, MessageVersion, PairingRemote, S2NodeDescription, S2NodeId, S2Role};
+use s2energy::pairing::{Client, EndpointConfig, Deployment, MessageVersion, PairingRemote, S2NodeDescription, S2NodeId, S2Role};
 
 const PAIRING_TOKEN: &[u8] = &[1, 2, 3];
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
-    let config = Config::builder(
+    let config = EndpointConfig::builder(
         S2NodeDescription {
             id: S2NodeId(String::from("12121212")),
             brand: String::from("super-reliable-corp"),

@@ -18,7 +18,7 @@ use crate::pairing::wire::PairingVersion;
 const SUPPORTED_PAIRING_VERSIONS: &[PairingVersion] = &[PairingVersion::V1];
 
 #[derive(Debug, Clone)]
-pub struct Config {
+pub struct EndpointConfig {
     node_description: S2NodeDescription,
     endpoint_description: S2EndpointDescription,
     supported_message_versions: Vec<MessageVersion>,
@@ -26,7 +26,7 @@ pub struct Config {
     connection_initiate_url: Option<String>,
 }
 
-impl Config {
+impl EndpointConfig {
     pub fn node_description(&self) -> &S2NodeDescription {
         &self.node_description
     }
@@ -74,13 +74,13 @@ impl ConfigBuilder {
         self
     }
 
-    pub fn build(self) -> Result<Config, ConfigError> {
+    pub fn build(self) -> Result<EndpointConfig, ConfigError> {
         if (self.node_description.role == S2Role::Cem || self.endpoint_description.deployment == Some(Deployment::Wan))
             && self.connection_initiate_url.is_none()
         {
             return Err(ConfigError::MissingInitiateUrl);
         }
-        Ok(Config {
+        Ok(EndpointConfig {
             node_description: self.node_description,
             endpoint_description: self.endpoint_description,
             supported_message_versions: self.supported_message_versions,

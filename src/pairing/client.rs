@@ -6,7 +6,7 @@ use rustls::pki_types::CertificateDer;
 use crate::pairing::transport::{HashProvider, hash_providing_https_client};
 use crate::pairing::{Pairing, PairingRole, SUPPORTED_PAIRING_VERSIONS};
 
-use super::Config;
+use super::EndpointConfig;
 use super::wire::*;
 use super::{Error, Network, PairingResult};
 
@@ -17,13 +17,13 @@ pub struct PairingRemote {
 }
 
 pub struct Client {
-    config: Arc<Config>,
+    config: Arc<EndpointConfig>,
     additional_certificates: Vec<CertificateDer<'static>>,
     local_deployment: Deployment,
 }
 
 impl Client {
-    pub fn new(config: Arc<Config>, local_deployment: Deployment) -> PairingResult<Self> {
+    pub fn new(config: Arc<EndpointConfig>, local_deployment: Deployment) -> PairingResult<Self> {
         Ok(Self {
             config,
             additional_certificates: vec![],
@@ -32,7 +32,7 @@ impl Client {
     }
 
     pub fn new_with_dev_certificates(
-        config: Arc<Config>,
+        config: Arc<EndpointConfig>,
         additional_certificates: Vec<CertificateDer<'static>>,
         local_deployment: Deployment,
     ) -> PairingResult<Self> {
@@ -91,7 +91,7 @@ async fn pair_v1(
     certhash: Option<HashProvider>,
     local_deployment: Deployment,
     remote: PairingRemote,
-    config: &Config,
+    config: &EndpointConfig,
     pairing_token: &[u8],
 ) -> PairingResult<Pairing> {
     let base_url = remote.url.join("v1/").unwrap();
@@ -257,7 +257,7 @@ async fn v1_post_connection_details(
 async fn v1_request_pairing(
     client: &reqwest::Client,
     base_url: &Url,
-    config: &Config,
+    config: &EndpointConfig,
     id: S2NodeId,
     client_hmac_challenge: &HmacChallenge,
 ) -> PairingResult<RequestPairingResponse> {

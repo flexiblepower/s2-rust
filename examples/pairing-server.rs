@@ -2,7 +2,7 @@ use axum_server::tls_rustls::RustlsConfig;
 use rustls::pki_types::{CertificateDer, pem::PemObject};
 use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 
-use s2energy::pairing::{Config, MessageVersion, PairingToken, S2NodeDescription, S2NodeId, S2Role, Server, ServerConfig};
+use s2energy::pairing::{EndpointConfig, MessageVersion, PairingToken, S2NodeDescription, S2NodeId, S2Role, Server, ServerConfig};
 
 #[allow(unused)]
 const PAIRING_TOKEN: &[u8] = &[1, 2, 3];
@@ -14,7 +14,7 @@ async fn main() {
             CertificateDer::from_pem_file(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("testdata").join("root.pem")).unwrap(),
         ),
     });
-    let config = Config::builder(
+    let config = EndpointConfig::builder(
         S2NodeDescription {
             id: S2NodeId(String::from("12121212")),
             brand: String::from("super-reliable-corp"),

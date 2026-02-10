@@ -18,7 +18,7 @@ use tokio::time::Instant;
 
 use crate::pairing::{PairingRole, SUPPORTED_PAIRING_VERSIONS};
 
-use super::{Config, Error, Network, Pairing, PairingResult, S2EndpointDescription, S2NodeDescription, wire::*};
+use super::{EndpointConfig, Error, Network, Pairing, PairingResult, S2EndpointDescription, S2NodeDescription, wire::*};
 
 const PERMANENT_PAIRING_BUFFER_SIZE: usize = 1;
 
@@ -82,7 +82,7 @@ impl Server {
             .with_state(self.state.clone())
     }
 
-    pub fn pair_once(&self, config: Arc<Config>, pairing_token: PairingToken) -> Result<PendingPairing, Error> {
+    pub fn pair_once(&self, config: Arc<EndpointConfig>, pairing_token: PairingToken) -> Result<PendingPairing, Error> {
         if config.connection_initiate_url.is_none() {
             return Err(Error::InvalidConfig(super::ConfigError::MissingInitiateUrl));
         }
@@ -105,7 +105,7 @@ impl Server {
         Ok(PendingPairing { receiver })
     }
 
-    pub fn pair_repeated(&self, config: Arc<Config>, pairing_token: PairingToken) -> Result<RepeatedPairing, Error> {
+    pub fn pair_repeated(&self, config: Arc<EndpointConfig>, pairing_token: PairingToken) -> Result<RepeatedPairing, Error> {
         if config.connection_initiate_url.is_none() {
             return Err(Error::InvalidConfig(super::ConfigError::MissingInitiateUrl));
         }
@@ -148,19 +148,19 @@ impl ResultSender {
 }
 
 struct PermanentPairingRequest {
-    config: Arc<Config>,
+    config: Arc<EndpointConfig>,
     sender: tokio::sync::mpsc::Sender<PairingResult<Pairing>>,
     token: PairingToken,
 }
 
 struct PairingRequest {
-    config: Arc<Config>,
+    config: Arc<EndpointConfig>,
     sender: ResultSender,
     token: PairingToken,
 }
 
 struct InitialPairingState {
-    config: Arc<Config>,
+    config: Arc<EndpointConfig>,
     sender: ResultSender,
     challenge: HmacChallenge,
     token: PairingToken,
