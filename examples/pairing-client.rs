@@ -2,10 +2,7 @@ use std::{path::PathBuf, sync::Arc};
 
 use reqwest::Url;
 use rustls::pki_types::{CertificateDer, pem::PemObject};
-use s2energy::pairing::{
-    Client, CommunicationProtocol, Config, Deployment, MessageVersion, PairingRemote, S2EndpointDescription, S2NodeDescription, S2NodeId,
-    S2Role,
-};
+use s2energy::pairing::{Client, Config, Deployment, MessageVersion, PairingRemote, S2NodeDescription, S2NodeId, S2Role};
 
 const PAIRING_TOKEN: &[u8] = &[1, 2, 3];
 
@@ -21,13 +18,7 @@ async fn main() {
             user_defined_name: None,
             role: S2Role::Rm,
         },
-        S2EndpointDescription {
-            name: None,
-            logo_uri: None,
-            deployment: None,
-        },
         vec![MessageVersion("v1".into())],
-        vec![CommunicationProtocol("WebSocket".into())],
     )
     .with_connection_initiate_url("client.example.com".into())
     .build()

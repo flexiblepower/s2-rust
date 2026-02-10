@@ -76,7 +76,7 @@ pub(crate) struct RequestPairing {
     pub force_pairing: bool,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Default, Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct S2EndpointDescription {
     #[serde(default)]

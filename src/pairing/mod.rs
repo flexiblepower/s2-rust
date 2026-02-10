@@ -39,17 +39,12 @@ impl Config {
         &self.supported_message_versions
     }
 
-    pub fn builder(
-        node_description: S2NodeDescription,
-        endpoint_description: S2EndpointDescription,
-        supported_message_versions: Vec<MessageVersion>,
-        supported_communication_protocols: Vec<CommunicationProtocol>,
-    ) -> ConfigBuilder {
+    pub fn builder(node_description: S2NodeDescription, supported_message_versions: Vec<MessageVersion>) -> ConfigBuilder {
         ConfigBuilder {
             node_description,
-            endpoint_description,
+            endpoint_description: S2EndpointDescription::default(),
             supported_message_versions,
-            supported_communication_protocols,
+            supported_communication_protocols: vec![CommunicationProtocol("WebSocket".into())],
             connection_initiate_url: None,
         }
     }
@@ -66,6 +61,16 @@ pub struct ConfigBuilder {
 impl ConfigBuilder {
     pub fn with_connection_initiate_url(mut self, connection_initiate_url: String) -> Self {
         self.connection_initiate_url = Some(connection_initiate_url);
+        self
+    }
+
+    pub fn with_supported_communication_protocols(mut self, communication_protocols: Vec<CommunicationProtocol>) -> Self {
+        self.supported_communication_protocols = communication_protocols;
+        self
+    }
+
+    pub fn with_endpoint_description(mut self, endpoint_description: S2EndpointDescription) -> Self {
+        self.endpoint_description = endpoint_description;
         self
     }
 

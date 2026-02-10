@@ -2,10 +2,7 @@ use axum_server::tls_rustls::RustlsConfig;
 use rustls::pki_types::{CertificateDer, pem::PemObject};
 use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 
-use s2energy::pairing::{
-    CommunicationProtocol, Config, MessageVersion, PairingToken, S2EndpointDescription, S2NodeDescription, S2NodeId, S2Role, Server,
-    ServerConfig,
-};
+use s2energy::pairing::{Config, MessageVersion, PairingToken, S2NodeDescription, S2NodeId, S2Role, Server, ServerConfig};
 
 #[allow(unused)]
 const PAIRING_TOKEN: &[u8] = &[1, 2, 3];
@@ -27,13 +24,7 @@ async fn main() {
             user_defined_name: None,
             role: S2Role::Cem,
         },
-        S2EndpointDescription {
-            name: None,
-            logo_uri: None,
-            deployment: None,
-        },
         vec![MessageVersion("v1".into())],
-        vec![CommunicationProtocol("WebSocket".into())],
     )
     .with_connection_initiate_url("test.example.com".into())
     .build()
