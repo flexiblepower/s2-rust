@@ -1,5 +1,7 @@
 use reqwest::{StatusCode, Url};
+use rustls::pki_types::CertificateDer;
 
+use crate::pairing::transport::{HashProvider, hash_providing_https_client};
 use crate::pairing::{Pairing, PairingRole, SUPPORTED_PAIRING_VERSIONS};
 
 use super::Config;
@@ -12,17 +14,37 @@ pub struct PairingRemote {
     pub id: S2NodeId,
 }
 
-pub async fn pair(config: &Config, remote: PairingRemote, pairing_token: &[u8]) -> PairingResult<Pairing> {
-    let client = reqwest::Client::new();
+pub async fn pair(
+    config: &Config,
+    additional_certificates: Vec<CertificateDer<'static>>,
+    remote: PairingRemote,
+    pairing_token: &[u8],
+) -> PairingResult<Pairing> {
+    let (client, certhash) = if remote.url.domain().map(|v| v.ends_with(".local")).unwrap_or_default() {
+        let (client, certhash) = hash_providing_https_client()?;
+        (client, Some(certhash))
+    } else {
+        (
+            reqwest::Client::builder()
+                .tls_certs_merge(
+                    additional_certificates
+                        .into_iter()
+                        .filter_map(|v| reqwest::Certificate::from_der(&v).ok()),
+                )
+                .build()
+                .map_err(|_| Error::TransportFailed)?,
+            None,
+        )
+    };
     let pairing_version = negotiate_version(&client, remote.url.clone()).await?;
 
     match pairing_version {
-        PairingVersion::V1 => pair_v1(client, remote, config, pairing_token).await,
+        PairingVersion::V1 => pair_v1(client, certhash, remote, config, pairing_token).await,
     }
 }
 
 async fn negotiate_version(client: &reqwest::Client, url: Url) -> Result<PairingVersion, Error> {
-    let response = client.get(url).send().await.map_err(|_| Error::TransportFailed)?;
+    let response = dbg!(client.get(url).send().await).map_err(|_| Error::TransportFailed)?;
     let status = response.status();
     if status != StatusCode::OK {
         return Err(Error::ProtocolError);
@@ -39,14 +61,29 @@ async fn negotiate_version(client: &reqwest::Client, url: Url) -> Result<Pairing
     Err(Error::NoSupportedVersion)
 }
 
-async fn pair_v1(client: reqwest::Client, remote: PairingRemote, config: &Config, pairing_token: &[u8]) -> PairingResult<Pairing> {
+async fn pair_v1(
+    client: reqwest::Client,
+    certhash: Option<HashProvider>,
+    remote: PairingRemote,
+    config: &Config,
+    pairing_token: &[u8],
+) -> PairingResult<Pairing> {
     let base_url = remote.url.join("v1/").unwrap();
 
     let our_deployment = config.endpoint_description.deployment.unwrap_or(config.local_deployment);
     let our_role = config.node_description.role;
 
-    // FIXME: Implement proper network autodetection and certificate handling.
-    let network = Network::Lan { fingerprint: [0; 32] };
+    let network = if remote.url.domain().map(|v| v.ends_with(".local")).unwrap_or_default() {
+        if let Some(hash) = certhash.as_ref().and_then(HashProvider::hash) {
+            Network::Lan {
+                fingerprint: hash.try_into().unwrap(),
+            }
+        } else {
+            return Err(Error::ProtocolError);
+        }
+    } else {
+        Network::Wan
+    };
 
     let client_hmac_challenge = HmacChallenge::new(&mut rand::rng());
 
@@ -55,13 +92,7 @@ async fn pair_v1(client: reqwest::Client, remote: PairingRemote, config: &Config
     let remote_deployment = request_pairing_response
         .server_s2_endpoint_description
         .deployment
-        .unwrap_or_else(|| {
-            if remote.url.domain().map(|v| v.ends_with(".local")).unwrap_or_default() {
-                Deployment::Lan
-            } else {
-                Deployment::Wan
-            }
-        });
+        .unwrap_or_else(|| network.as_deployment());
     let remote_role = request_pairing_response.server_s2_node_description.role;
 
     match request_pairing_response.selected_hmac_hashing_algorithm {

@@ -2,6 +2,7 @@
 #![warn(clippy::clone_on_copy)]
 mod client;
 mod server;
+mod transport;
 mod wire;
 
 use rand::Rng;
@@ -166,7 +167,16 @@ impl From<ConfigError> for Error {
 pub type PairingResult<T> = Result<T, Error>;
 
 #[derive(Debug)]
-pub enum Network {
+enum Network {
     Wan,
     Lan { fingerprint: [u8; 32] },
+}
+
+impl Network {
+    fn as_deployment(&self) -> Deployment {
+        match self {
+            Network::Wan => Deployment::Wan,
+            Network::Lan { .. } => Deployment::Lan,
+        }
+    }
 }

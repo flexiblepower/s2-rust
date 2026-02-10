@@ -37,6 +37,9 @@ sha2 = "0.10.9"
 reqwest = { version = "0.13.1", features = ["json"] }
 axum = "0.8.8"
 
+rustls = "0.23.36"
+rustls-platform-verifier = "0.6.2"
+
 [build-dependencies]
 prettyplease = "0.2.37"
 schemars = "0.8.22"
@@ -48,6 +51,7 @@ quote = "1.0.41"
 [dev-dependencies]
 eyre = "0.6.12"
 serde_json = "1.0.145"
+axum-server = { version = "0.8.0", features = ["tls-rustls"] }
 
 # docs.rs-specific configuration
 [package.metadata.docs.rs]

@@ -1,5 +1,6 @@
-use std::{net::SocketAddr, sync::Arc};
-use tokio::net::TcpListener;
+use axum_server::tls_rustls::RustlsConfig;
+use rustls::pki_types::{CertificateDer, pem::PemObject};
+use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 
 use s2energy::pairing::{
     CommunicationProtocol, Config, ConnectionVersion, Deployment, PairingToken, S2EndpointDescription, S2NodeDescription, S2NodeId, S2Role,
@@ -11,7 +12,11 @@ const PAIRING_TOKEN: &[u8] = &[1, 2, 3];
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
-    let server = Server::new(ServerConfig {});
+    let server = Server::new(ServerConfig {
+        root_certificate: Some(
+            CertificateDer::from_pem_file(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("testdata").join("root.pem")).unwrap(),
+        ),
+    });
     let config = Config::builder(
         S2NodeDescription {
             id: S2NodeId(String::from("12121212")),
@@ -37,11 +42,22 @@ async fn main() {
     let app = server.get_router();
 
     let addr = SocketAddr::from(([127, 0, 0, 1], 8005));
-    let listener = TcpListener::bind(addr).await.unwrap();
+
+    let rustls_config = RustlsConfig::from_pem_file(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("testdata")
+            .join("test.local.chain.pem"),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("testdata").join("test.local.key"),
+    )
+    .await
+    .unwrap();
 
     tokio::spawn(async move {
         println!("listening on http://{}", addr);
-        axum::serve(listener, app).await.unwrap();
+        axum_server::bind_rustls(addr, rustls_config)
+            .serve(app.into_make_service())
+            .await
+            .unwrap();
     });
 
     let pairing = server

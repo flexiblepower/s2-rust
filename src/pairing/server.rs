@@ -12,6 +12,8 @@ use axum::{
     routing::{get, post},
 };
 use reqwest::StatusCode;
+use rustls::pki_types::CertificateDer;
+use sha2::Digest;
 use tokio::time::Instant;
 
 use crate::pairing::{PairingRole, SUPPORTED_PAIRING_VERSIONS};
@@ -26,7 +28,11 @@ pub struct Server {
     state: AppState,
 }
 
-pub struct ServerConfig {}
+pub struct ServerConfig {
+    /// The root certificate of the server, if we are using a self-signed root.
+    /// Presence of this field indicates we are deployed on LAN.
+    pub root_certificate: Option<CertificateDer<'static>>,
+}
 
 pub struct PendingPairing {
     receiver: tokio::sync::oneshot::Receiver<PairingResult<Pairing>>,
@@ -55,6 +61,12 @@ impl RepeatedPairing {
 impl Server {
     pub fn new(server_config: ServerConfig) -> Self {
         let state = AppStateInner {
+            network: server_config
+                .root_certificate
+                .map(|v| Network::Lan {
+                    fingerprint: sha2::Sha256::digest(v).into(),
+                })
+                .unwrap_or(Network::Wan),
             permanent_pairings: Mutex::new(HashMap::new()),
             open_pairings: Mutex::new(HashMap::new()),
             attempts: Mutex::new(HashMap::default()),
@@ -196,6 +208,7 @@ type AppState = Arc<AppStateInner>;
 
 struct AppStateInner {
     // rng: ThreadRng,
+    network: Network,
     permanent_pairings: Mutex<HashMap<S2NodeId, PermanentPairingRequest>>,
     open_pairings: Mutex<HashMap<S2NodeId, PairingRequest>>,
     attempts: Mutex<HashMap<PairingAttemptId, ExpiringPairingState>>,
@@ -265,9 +278,7 @@ async fn v1_request_pairing(
         }
     }
 
-    // let network = Wan;
-    let network = Network::Lan { fingerprint: [0; 32] };
-    let client_hmac_challenge_response = request_pairing.client_hmac_challenge.sha256(&network, &open_pairing.token.0);
+    let client_hmac_challenge_response = request_pairing.client_hmac_challenge.sha256(&state.network, &open_pairing.token.0);
 
     let pairing_attempt_id = {
         let mut attempts = state.attempts.lock().unwrap();
@@ -306,7 +317,7 @@ async fn v1_request_pairing(
 }
 
 async fn v1_request_connection_details(
-    State(state): State<AppState>,
+    State(app_state): State<AppState>,
     headers: HeaderMap,
     Json(req): Json<RequestConnectionDetailsRequest>,
 ) -> Result<Json<ConnectionDetails>, StatusCode> {
@@ -316,7 +327,7 @@ async fn v1_request_connection_details(
 
     // We do this with a closure to drop attempts before we run the future for sending results to the caller, if it is present.
     let (result, future) = (|| {
-        let mut attempts = state.attempts.lock().unwrap();
+        let mut attempts = app_state.attempts.lock().unwrap();
         let Some(state) = attempts.get_mut(&pairing_attempt_id) else {
             return (Err(StatusCode::UNAUTHORIZED), None);
         };
@@ -324,10 +335,7 @@ async fn v1_request_connection_details(
         if let Some(state_entry) = state.get_state()
             && let PairingState::Initial(state) = std::mem::replace(state_entry, PairingState::Empty)
         {
-            // let network = Network::Wan;
-            let network = Network::Lan { fingerprint: [0; 32] };
-
-            let expected = state.challenge.sha256(&network, &state.token.0);
+            let expected = state.challenge.sha256(&app_state.network, &state.token.0);
             if expected != req.server_hmac_challenge_response {
                 attempts.remove(&pairing_attempt_id);
                 return (Err(StatusCode::FORBIDDEN), Some(state.sender.send(Err(Error::InvalidToken))));
@@ -365,7 +373,7 @@ async fn v1_request_connection_details(
 }
 
 async fn v1_post_connection_details(
-    State(state): State<AppState>,
+    State(app_state): State<AppState>,
     headers: HeaderMap,
     Json(req): Json<PostConnectionDetailsRequest>,
 ) -> StatusCode {
@@ -375,7 +383,7 @@ async fn v1_post_connection_details(
 
     // We do this with a closure to drop attempts before we run the future for sending results to the caller, if it is present.
     let (result, future) = (|| {
-        let mut attempts: std::sync::MutexGuard<'_, HashMap<PairingAttemptId, ExpiringPairingState>> = state.attempts.lock().unwrap();
+        let mut attempts: std::sync::MutexGuard<'_, HashMap<PairingAttemptId, ExpiringPairingState>> = app_state.attempts.lock().unwrap();
         let Some(state) = attempts.get_mut(&pairing_attempt_id) else {
             return (StatusCode::UNAUTHORIZED, None);
         };
@@ -383,10 +391,7 @@ async fn v1_post_connection_details(
         if let Some(state_entry) = state.get_state()
             && let PairingState::Initial(state) = std::mem::replace(state_entry, PairingState::Empty)
         {
-            // let network = Network::Wan;
-            let network = Network::Lan { fingerprint: [0; 32] };
-
-            let expected = state.challenge.sha256(&network, &state.token.0);
+            let expected = state.challenge.sha256(&app_state.network, &state.token.0);
             if expected != req.server_hmac_challenge_response {
                 attempts.remove(&pairing_attempt_id);
                 return (StatusCode::FORBIDDEN, Some(state.sender.send(Err(Error::InvalidToken))));

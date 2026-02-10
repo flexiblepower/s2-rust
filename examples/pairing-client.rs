@@ -1,4 +1,7 @@
+use std::path::PathBuf;
+
 use reqwest::Url;
+use rustls::pki_types::{CertificateDer, pem::PemObject};
 use s2energy::pairing::{
     CommunicationProtocol, Config, ConnectionVersion, Deployment, PairingRemote, S2EndpointDescription, S2NodeDescription, S2NodeId,
     S2Role, pair,
@@ -33,8 +36,9 @@ async fn main() {
 
     let pair_result = pair(
         &config,
+        vec![CertificateDer::from_pem_file(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("testdata").join("root.pem")).unwrap()],
         PairingRemote {
-            url: Url::parse("http://127.0.0.1:8005").unwrap(),
+            url: Url::parse("https://test.local:8005").unwrap(),
             id: S2NodeId(String::from("12121212")),
         },
         PAIRING_TOKEN,
