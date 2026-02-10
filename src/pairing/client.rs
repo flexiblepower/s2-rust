@@ -16,6 +16,11 @@ pub struct PairingRemote {
     pub id: S2NodeId,
 }
 
+pub struct ClientConfig {
+    pub additional_certificates: Vec<CertificateDer<'static>>,
+    pub local_deployment: Deployment,
+}
+
 pub struct Client {
     config: Arc<EndpointConfig>,
     additional_certificates: Vec<CertificateDer<'static>>,
@@ -23,11 +28,11 @@ pub struct Client {
 }
 
 impl Client {
-    pub fn new(config: Arc<EndpointConfig>, local_deployment: Deployment) -> PairingResult<Self> {
+    pub fn new(config: Arc<EndpointConfig>, client_config: ClientConfig) -> PairingResult<Self> {
         Ok(Self {
             config,
-            additional_certificates: vec![],
-            local_deployment,
+            additional_certificates: client_config.additional_certificates,
+            local_deployment: client_config.local_deployment,
         })
     }
 

@@ -2,7 +2,7 @@ use std::{path::PathBuf, sync::Arc};
 
 use reqwest::Url;
 use rustls::pki_types::{CertificateDer, pem::PemObject};
-use s2energy::pairing::{Client, EndpointConfig, Deployment, MessageVersion, PairingRemote, S2NodeDescription, S2NodeId, S2Role};
+use s2energy::pairing::{Client, Deployment, EndpointConfig, MessageVersion, PairingRemote, S2NodeDescription, S2NodeId, S2Role};
 
 const PAIRING_TOKEN: &[u8] = &[1, 2, 3];
 
