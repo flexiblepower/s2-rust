@@ -50,7 +50,7 @@ impl TryFrom<WirePairingVersion> for PairingVersion {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct ConnectionVersion(pub String);
+pub struct MessageVersion(pub String);
 
 #[derive(Serialize, Deserialize)]
 pub(crate) struct RequestPairing {
@@ -64,7 +64,7 @@ pub(crate) struct RequestPairing {
     pub supported_protocols: Vec<CommunicationProtocol>,
     /// The versions of the S2 JSON message schemas this S2Node implementation currently supports.
     #[serde(rename = "supportedS2MessageVersions")]
-    pub supported_versions: Vec<ConnectionVersion>,
+    pub supported_versions: Vec<MessageVersion>,
     #[serde(rename = "supportedHmacHashingAlgorithms")]
     #[serde(default)]
     pub supported_hashing_algorithms: Vec<HmacHashingAlgorithm>,

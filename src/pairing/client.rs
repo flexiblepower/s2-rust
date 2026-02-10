@@ -266,7 +266,7 @@ async fn v1_request_pairing(
         endpoint_description: config.endpoint_description.clone(),
         id,
         supported_protocols: config.supported_communication_protocols.clone(),
-        supported_versions: config.supported_protocol_versions.clone(),
+        supported_versions: config.supported_message_versions.clone(),
         supported_hashing_algorithms: vec![HmacHashingAlgorithm::Sha256],
         client_hmac_challenge: client_hmac_challenge.clone(),
         force_pairing: false,

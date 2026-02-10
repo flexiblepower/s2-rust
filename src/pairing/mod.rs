@@ -11,7 +11,7 @@ use wire::{AccessToken, HmacChallenge, HmacChallengeResponse};
 
 pub use client::{Client, PairingRemote};
 pub use server::{PairingToken, Server, ServerConfig};
-pub use wire::{CommunicationProtocol, ConnectionVersion, Deployment, S2EndpointDescription, S2NodeDescription, S2NodeId, S2Role};
+pub use wire::{CommunicationProtocol, Deployment, MessageVersion, S2EndpointDescription, S2NodeDescription, S2NodeId, S2Role};
 
 use crate::pairing::wire::PairingVersion;
 
@@ -21,7 +21,7 @@ const SUPPORTED_PAIRING_VERSIONS: &[PairingVersion] = &[PairingVersion::V1];
 pub struct Config {
     node_description: S2NodeDescription,
     endpoint_description: S2EndpointDescription,
-    supported_protocol_versions: Vec<ConnectionVersion>,
+    supported_message_versions: Vec<MessageVersion>,
     supported_communication_protocols: Vec<CommunicationProtocol>,
     connection_initiate_url: Option<String>,
 }
@@ -35,20 +35,20 @@ impl Config {
         &self.endpoint_description
     }
 
-    pub fn supported_protocol_versions(&self) -> &[ConnectionVersion] {
-        &self.supported_protocol_versions
+    pub fn supported_message_versions(&self) -> &[MessageVersion] {
+        &self.supported_message_versions
     }
 
     pub fn builder(
         node_description: S2NodeDescription,
         endpoint_description: S2EndpointDescription,
-        supported_protocol_versions: Vec<ConnectionVersion>,
+        supported_message_versions: Vec<MessageVersion>,
         supported_communication_protocols: Vec<CommunicationProtocol>,
     ) -> ConfigBuilder {
         ConfigBuilder {
             node_description,
             endpoint_description,
-            supported_protocol_versions,
+            supported_message_versions,
             supported_communication_protocols,
             connection_initiate_url: None,
         }
@@ -58,7 +58,7 @@ impl Config {
 pub struct ConfigBuilder {
     node_description: S2NodeDescription,
     endpoint_description: S2EndpointDescription,
-    supported_protocol_versions: Vec<ConnectionVersion>,
+    supported_message_versions: Vec<MessageVersion>,
     supported_communication_protocols: Vec<CommunicationProtocol>,
     connection_initiate_url: Option<String>,
 }
@@ -78,7 +78,7 @@ impl ConfigBuilder {
         Ok(Config {
             node_description: self.node_description,
             endpoint_description: self.endpoint_description,
-            supported_protocol_versions: self.supported_protocol_versions,
+            supported_message_versions: self.supported_message_versions,
             supported_communication_protocols: self.supported_communication_protocols,
             connection_initiate_url: self.connection_initiate_url,
         })

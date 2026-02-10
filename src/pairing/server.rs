@@ -267,7 +267,7 @@ async fn v1_request_pairing(
             return Err(PairingResponseErrorMessage::IncompatibleCommunicationProtocols.into());
         }
         let mut connection_overlap = false;
-        for connection_protocol in &open_pairing.config.supported_protocol_versions {
+        for connection_protocol in &open_pairing.config.supported_message_versions {
             if request_pairing.supported_versions.contains(connection_protocol) {
                 connection_overlap = true;
                 break;

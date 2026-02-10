@@ -3,7 +3,7 @@ use rustls::pki_types::{CertificateDer, pem::PemObject};
 use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 
 use s2energy::pairing::{
-    CommunicationProtocol, Config, ConnectionVersion, PairingToken, S2EndpointDescription, S2NodeDescription, S2NodeId, S2Role, Server,
+    CommunicationProtocol, Config, MessageVersion, PairingToken, S2EndpointDescription, S2NodeDescription, S2NodeId, S2Role, Server,
     ServerConfig,
 };
 
@@ -32,7 +32,7 @@ async fn main() {
             logo_uri: None,
             deployment: None,
         },
-        vec![ConnectionVersion("v1".into())],
+        vec![MessageVersion("v1".into())],
         vec![CommunicationProtocol("WebSocket".into())],
     )
     .with_connection_initiate_url("test.example.com".into())
