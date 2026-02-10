@@ -9,7 +9,7 @@ use rand::Rng;
 
 use wire::{AccessToken, HmacChallenge, HmacChallengeResponse};
 
-pub use client::{PairingRemote, pair};
+pub use client::{Client, PairingRemote};
 pub use server::{PairingToken, Server, ServerConfig};
 pub use wire::{CommunicationProtocol, ConnectionVersion, Deployment, S2EndpointDescription, S2NodeDescription, S2NodeId, S2Role};
 
@@ -23,7 +23,6 @@ pub struct Config {
     endpoint_description: S2EndpointDescription,
     supported_protocol_versions: Vec<ConnectionVersion>,
     supported_communication_protocols: Vec<CommunicationProtocol>,
-    local_deployment: Deployment,
     connection_initiate_url: Option<String>,
 }
 
@@ -45,14 +44,12 @@ impl Config {
         endpoint_description: S2EndpointDescription,
         supported_protocol_versions: Vec<ConnectionVersion>,
         supported_communication_protocols: Vec<CommunicationProtocol>,
-        local_deployment: Deployment,
     ) -> ConfigBuilder {
         ConfigBuilder {
             node_description,
             endpoint_description,
             supported_protocol_versions,
             supported_communication_protocols,
-            local_deployment,
             connection_initiate_url: None,
         }
     }
@@ -63,7 +60,6 @@ pub struct ConfigBuilder {
     endpoint_description: S2EndpointDescription,
     supported_protocol_versions: Vec<ConnectionVersion>,
     supported_communication_protocols: Vec<CommunicationProtocol>,
-    local_deployment: Deployment,
     connection_initiate_url: Option<String>,
 }
 
@@ -74,9 +70,7 @@ impl ConfigBuilder {
     }
 
     pub fn build(self) -> Result<Config, ConfigError> {
-        if (self.node_description.role == S2Role::Cem
-            || self.endpoint_description.deployment == Some(Deployment::Wan)
-            || (self.endpoint_description.deployment.is_none() && self.local_deployment == Deployment::Wan))
+        if (self.node_description.role == S2Role::Cem || self.endpoint_description.deployment == Some(Deployment::Wan))
             && self.connection_initiate_url.is_none()
         {
             return Err(ConfigError::MissingInitiateUrl);
@@ -86,7 +80,6 @@ impl ConfigBuilder {
             endpoint_description: self.endpoint_description,
             supported_protocol_versions: self.supported_protocol_versions,
             supported_communication_protocols: self.supported_communication_protocols,
-            local_deployment: self.local_deployment,
             connection_initiate_url: self.connection_initiate_url,
         })
     }

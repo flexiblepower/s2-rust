@@ -1,10 +1,10 @@
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::Arc};
 
 use reqwest::Url;
 use rustls::pki_types::{CertificateDer, pem::PemObject};
 use s2energy::pairing::{
-    CommunicationProtocol, Config, ConnectionVersion, Deployment, PairingRemote, S2EndpointDescription, S2NodeDescription, S2NodeId,
-    S2Role, pair,
+    Client, CommunicationProtocol, Config, ConnectionVersion, Deployment, PairingRemote, S2EndpointDescription, S2NodeDescription,
+    S2NodeId, S2Role,
 };
 
 const PAIRING_TOKEN: &[u8] = &[1, 2, 3];
@@ -28,23 +28,28 @@ async fn main() {
         },
         vec![ConnectionVersion("v1".into())],
         vec![CommunicationProtocol("WebSocket".into())],
-        Deployment::Lan,
     )
     .with_connection_initiate_url("client.example.com".into())
     .build()
     .unwrap();
 
-    let pair_result = pair(
-        &config,
+    let client = Client::new_with_dev_certificates(
+        Arc::new(config),
         vec![CertificateDer::from_pem_file(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("testdata").join("root.pem")).unwrap()],
-        PairingRemote {
-            url: Url::parse("https://test.local:8005").unwrap(),
-            id: S2NodeId(String::from("12121212")),
-        },
-        PAIRING_TOKEN,
+        Deployment::Lan,
     )
-    .await
     .unwrap();
+
+    let pair_result = client
+        .pair(
+            PairingRemote {
+                url: Url::parse("https://test.local:8005").unwrap(),
+                id: S2NodeId(String::from("12121212")),
+            },
+            PAIRING_TOKEN,
+        )
+        .await
+        .unwrap();
 
     match pair_result.role {
         s2energy::pairing::PairingRole::CommunicationClient { initiate_url } => {

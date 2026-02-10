@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use reqwest::{StatusCode, Url};
 use rustls::pki_types::CertificateDer;
 
@@ -14,32 +16,55 @@ pub struct PairingRemote {
     pub id: S2NodeId,
 }
 
-pub async fn pair(
-    config: &Config,
+pub struct Client {
+    config: Arc<Config>,
     additional_certificates: Vec<CertificateDer<'static>>,
-    remote: PairingRemote,
-    pairing_token: &[u8],
-) -> PairingResult<Pairing> {
-    let (client, certhash) = if remote.url.domain().map(|v| v.ends_with(".local")).unwrap_or_default() {
-        let (client, certhash) = hash_providing_https_client()?;
-        (client, Some(certhash))
-    } else {
-        (
-            reqwest::Client::builder()
-                .tls_certs_merge(
-                    additional_certificates
-                        .into_iter()
-                        .filter_map(|v| reqwest::Certificate::from_der(&v).ok()),
-                )
-                .build()
-                .map_err(|_| Error::TransportFailed)?,
-            None,
-        )
-    };
-    let pairing_version = negotiate_version(&client, remote.url.clone()).await?;
+    local_deployment: Deployment,
+}
 
-    match pairing_version {
-        PairingVersion::V1 => pair_v1(client, certhash, remote, config, pairing_token).await,
+impl Client {
+    pub fn new(config: Arc<Config>, local_deployment: Deployment) -> PairingResult<Self> {
+        Ok(Self {
+            config,
+            additional_certificates: vec![],
+            local_deployment,
+        })
+    }
+
+    pub fn new_with_dev_certificates(
+        config: Arc<Config>,
+        additional_certificates: Vec<CertificateDer<'static>>,
+        local_deployment: Deployment,
+    ) -> PairingResult<Self> {
+        Ok(Self {
+            config,
+            additional_certificates,
+            local_deployment,
+        })
+    }
+
+    pub async fn pair(&self, remote: PairingRemote, pairing_token: &[u8]) -> PairingResult<Pairing> {
+        let (client, certhash) = if remote.url.domain().map(|v| v.ends_with(".local")).unwrap_or_default() {
+            let (client, certhash) = hash_providing_https_client()?;
+            (client, Some(certhash))
+        } else {
+            (
+                reqwest::Client::builder()
+                    .tls_certs_merge(
+                        self.additional_certificates
+                            .iter()
+                            .filter_map(|v| reqwest::Certificate::from_der(v).ok()),
+                    )
+                    .build()
+                    .map_err(|_| Error::TransportFailed)?,
+                None,
+            )
+        };
+        let pairing_version = negotiate_version(&client, remote.url.clone()).await?;
+
+        match pairing_version {
+            PairingVersion::V1 => pair_v1(client, certhash, self.local_deployment, remote, &self.config, pairing_token).await,
+        }
     }
 }
 
@@ -64,13 +89,14 @@ async fn negotiate_version(client: &reqwest::Client, url: Url) -> Result<Pairing
 async fn pair_v1(
     client: reqwest::Client,
     certhash: Option<HashProvider>,
+    local_deployment: Deployment,
     remote: PairingRemote,
     config: &Config,
     pairing_token: &[u8],
 ) -> PairingResult<Pairing> {
     let base_url = remote.url.join("v1/").unwrap();
 
-    let our_deployment = config.endpoint_description.deployment.unwrap_or(config.local_deployment);
+    let our_deployment = config.endpoint_description.deployment.unwrap_or(local_deployment);
     let our_role = config.node_description.role;
 
     let network = if remote.url.domain().map(|v| v.ends_with(".local")).unwrap_or_default() {
