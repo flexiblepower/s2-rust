@@ -15,8 +15,9 @@
 //! # Examples
 //! Setting up a WebSocket server and handling connections to it:
 //! ```no_run
-//! # use s2energy::transport::{S2Transport, websockets_json::{WebsocketServer, WebsocketTransport}};
-//! # use s2energy::connection::ConnectionError;
+//! # use s2energy_messaging::transport::{websockets_json::{WebsocketServer, WebsocketTransport}};
+//! # use s2energy_common::S2Transport;
+//! # use s2energy_messaging::connection::ConnectionError;
 //! # async fn test() -> Result<(), ConnectionError<<WebsocketTransport as S2Transport>::TransportError>> {
 //! let server = WebsocketServer::new("0.0.0.0:8080").await?;
 //! loop {
@@ -28,10 +29,11 @@
 //!
 //! Setting up a connection as a Resource Manager:
 //! ```no_run
-//! # use s2energy::common::{Commodity, CommodityQuantity, ControlType, Currency, Duration, Id, ResourceManagerDetails, Role, RoleType};
-//! # use s2energy::frbc;
-//! # use s2energy::transport::{S2Transport, websockets_json::{connect_as_client, WebsocketTransport}};
-//! # use s2energy::connection::ConnectionError;
+//! # use s2energy_messaging::common::{Commodity, CommodityQuantity, ControlType, Currency, Duration, Id, ResourceManagerDetails, Role, RoleType};
+//! # use s2energy_messaging::frbc;
+//! # use s2energy_messaging::transport::{websockets_json::{connect_as_client, WebsocketTransport}};
+//! # use s2energy_common::S2Transport;
+//! # use s2energy_messaging::connection::ConnectionError;
 //! # async fn test() -> Result<(), ConnectionError<<WebsocketTransport as S2Transport>::TransportError>> {
 //! // Connect to the CEM
 //! let mut s2_connection = connect_as_client("wss://example.com/cem/394727").await?;
@@ -63,7 +65,8 @@
 //!
 //! Once you've set up a connection, you can send and receive messages:
 //! ```no_run
-//! # use s2energy::{frbc, connection::ConnectionError, transport::S2Transport, transport::websockets_json::{connect_as_client, WebsocketTransport}};
+//! # use s2energy_messaging::{frbc, connection::ConnectionError, transport::websockets_json::{connect_as_client, WebsocketTransport}};
+//! # use s2energy_common::S2Transport;
 //! # async fn test() -> Result<(), ConnectionError<<WebsocketTransport as S2Transport>::TransportError>> {
 //! # let mut s2_connection = connect_as_client("no_run").await?;
 //! // Send a StorageStatus message:
@@ -84,9 +87,10 @@
 use crate::{
     common::{Id, Message as S2Message, ReceptionStatus, ReceptionStatusValues},
     connection::{ConnectionError, S2Connection},
-    transport::S2Transport,
 };
 use futures_util::{SinkExt, StreamExt};
+use s2energy_common::S2Transport;
+use serde::{Serialize, de::DeserializeOwned};
 use std::str::FromStr;
 use thiserror::Error;
 use tokio::net::{TcpListener, TcpStream, ToSocketAddrs};
@@ -207,7 +211,7 @@ impl WebsocketTransport {
 impl S2Transport for WebsocketTransport {
     type TransportError = WebsocketTransportError;
 
-    async fn send(&mut self, message: S2Message) -> Result<(), WebsocketTransportError> {
+    async fn send(&mut self, message: impl Serialize) -> Result<(), WebsocketTransportError> {
         let serialized =
             serde_json::to_string(&message).expect("unable to seralize `Message` to JSON; if you see this, you've found a bug in s2energy");
         let tungstenite_message = TungsteniteMessage::text(serialized);
@@ -219,7 +223,7 @@ impl S2Transport for WebsocketTransport {
         Ok(())
     }
 
-    async fn receive(&mut self) -> Result<S2Message, WebsocketTransportError> {
+    async fn receive<Message: DeserializeOwned + Send>(&mut self) -> Result<Message, WebsocketTransportError> {
         // This is set up as a loop so we can harmlessly ignore empty messages and ping/pong messages.
         let message = loop {
             let next = match self {
@@ -234,14 +238,11 @@ impl S2Transport for WebsocketTransport {
             if msg.is_binary() {
                 tracing::warn!("Received binary websocket message, which is not supported. Sending ReceptionStatus INVALID_DATA.");
                 let _ = self
-                    .send(
-                        ReceptionStatus {
-                            diagnostic_label: Some("Binary messages are not supported".to_string()),
-                            status: ReceptionStatusValues::InvalidData,
-                            subject_message_id: Id::from_str("00000000-0000-0000-0000-000000000000").unwrap(),
-                        }
-                        .into(),
-                    )
+                    .send(S2Message::from(ReceptionStatus {
+                        diagnostic_label: Some("Binary messages are not supported".to_string()),
+                        status: ReceptionStatusValues::InvalidData,
+                        subject_message_id: Id::from_str("00000000-0000-0000-0000-000000000000").unwrap(),
+                    }))
                     .await;
 
                 return Err(WebsocketTransportError::ReceivedBinaryMessage);
@@ -258,14 +259,11 @@ impl S2Transport for WebsocketTransport {
                     Err(err) => {
                         tracing::warn!("Failed to parse incoming message. Message: {msg_string}. Error: {err}");
                         let _ = self
-                            .send(
-                                ReceptionStatus {
-                                    diagnostic_label: Some(format!("Failed to parse message. Error: {err}")),
-                                    status: ReceptionStatusValues::InvalidData,
-                                    subject_message_id: Id::from_str("00000000-0000-0000-0000-000000000000").unwrap(),
-                                }
-                                .into(),
-                            )
+                            .send(S2Message::from(ReceptionStatus {
+                                diagnostic_label: Some(format!("Failed to parse message. Error: {err}")),
+                                status: ReceptionStatusValues::InvalidData,
+                                subject_message_id: Id::from_str("00000000-0000-0000-0000-000000000000").unwrap(),
+                            }))
                             .await;
                         return Err(err.into());
                     }
