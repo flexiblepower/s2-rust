@@ -8,7 +8,7 @@
 //! If you want to connect as a WebSocket client, you can use [`connect_as_client`] to obtain an `S2Connection`.
 //! If you want set up a WebSocket server, you should make an [`WebsocketServer`] and accept connections
 //! via [`accept_connection`][WebsocketServer::accept_connection].
-//! 
+//!
 //! **Note:** this module relies on [`tokio_tungstenite`] for WebSocket communication. As a result, you must use
 //! [`tokio`] as your async runtime if you wish to use this module.
 //!
@@ -182,9 +182,10 @@ pub async fn connect_as_client(
 }
 
 /// A WebSocket connection.
-/// 
+///
 /// End-users should not use this type directly; instead, they should acquire an [`S2Connection<WebsocketTransport>`]
 /// (e.g. using [`connect_as_client`]) and use that instead.
+#[expect(clippy::large_enum_variant)]
 pub enum WebsocketTransport {
     /// A WebSocket client connection.
     ClientSocket(WebSocketStream<MaybeTlsStream<TcpStream>>),
