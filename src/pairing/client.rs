@@ -72,7 +72,7 @@ impl Client {
         match pairing_version {
             PairingVersion::V1 => {
                 V1Session::new(client, url, &self.config)
-                    .pair_v1(certhash, self.pairing_deployment, remote.id, pairing_token)
+                    .pair(certhash, self.pairing_deployment, remote.id, pairing_token)
                     .await
             }
         }
@@ -112,7 +112,7 @@ impl<'a> V1Session<'a> {
         }
     }
 
-    async fn pair_v1(
+    async fn pair(
         self,
         certhash: Option<HashProvider>,
         local_deployment: Deployment,
@@ -136,7 +136,7 @@ impl<'a> V1Session<'a> {
 
         let client_hmac_challenge = HmacChallenge::new(&mut rand::rng());
 
-        let request_pairing_response = self.v1_request_pairing(id, &client_hmac_challenge).await?;
+        let request_pairing_response = self.request_pairing(id, &client_hmac_challenge).await?;
         let attempt_id = request_pairing_response.pairing_attempt_id;
         let remote_deployment = request_pairing_response
             .server_s2_endpoint_description
@@ -149,7 +149,7 @@ impl<'a> V1Session<'a> {
                 let expected = client_hmac_challenge.sha256(&network, pairing_token);
 
                 if expected != request_pairing_response.client_hmac_challenge_response {
-                    let _ = self.v1_finalize(&attempt_id, false).await;
+                    let _ = self.finalize(&attempt_id, false).await;
                     return Err(Error::InvalidToken);
                 }
             }
@@ -166,7 +166,7 @@ impl<'a> V1Session<'a> {
 
         let role = match (our_deployment, our_role, remote_deployment, remote_role) {
             (_, S2Role::Rm, _, S2Role::Rm) | (_, S2Role::Cem, _, S2Role::Cem) => {
-                let _ = self.v1_finalize(&attempt_id, false).await;
+                let _ = self.finalize(&attempt_id, false).await;
                 return Err(Error::RemoteOfSameType);
             }
             (Deployment::Lan, _, Deployment::Wan, _) => CommunicationRole::CommunicationClient,
@@ -181,7 +181,7 @@ impl<'a> V1Session<'a> {
             CommunicationRole::CommunicationServer { initiate_connection_url } => {
                 let access_token = AccessToken::new(&mut rand::rng());
                 if let Err(e) = self
-                    .v1_post_connection_details(
+                    .post_connection_details(
                         &attempt_id,
                         server_hmac_challenge_response,
                         initiate_connection_url.clone(),
@@ -189,7 +189,7 @@ impl<'a> V1Session<'a> {
                     )
                     .await
                 {
-                    let _ = self.v1_finalize(&attempt_id, false).await;
+                    let _ = self.finalize(&attempt_id, false).await;
                     return Err(e);
                 }
                 Pairing {
@@ -200,10 +200,10 @@ impl<'a> V1Session<'a> {
                 }
             }
             CommunicationRole::CommunicationClient => {
-                let connection_details = match self.v1_get_connection_details(&attempt_id, server_hmac_challenge_response).await {
+                let connection_details = match self.get_connection_details(&attempt_id, server_hmac_challenge_response).await {
                     Ok(connection_details) => connection_details,
                     Err(e) => {
-                        let _ = self.v1_finalize(&attempt_id, false).await;
+                        let _ = self.finalize(&attempt_id, false).await;
                         return Err(e);
                     }
                 };
@@ -218,12 +218,12 @@ impl<'a> V1Session<'a> {
             }
         };
 
-        self.v1_finalize(&attempt_id, true).await?;
+        self.finalize(&attempt_id, true).await?;
 
         Ok(pairing)
     }
 
-    async fn v1_get_connection_details(
+    async fn get_connection_details(
         &self,
         attempt_id: &PairingAttemptId,
         server_hmac_challenge_response: HmacChallengeResponse,
@@ -246,7 +246,7 @@ impl<'a> V1Session<'a> {
         Ok(connection_details)
     }
 
-    async fn v1_post_connection_details(
+    async fn post_connection_details(
         &self,
         attempt_id: &PairingAttemptId,
         server_hmac_challenge_response: HmacChallengeResponse,
@@ -275,7 +275,7 @@ impl<'a> V1Session<'a> {
         Ok(())
     }
 
-    async fn v1_request_pairing(&self, id: S2NodeId, client_hmac_challenge: &HmacChallenge) -> PairingResult<RequestPairingResponse> {
+    async fn request_pairing(&self, id: S2NodeId, client_hmac_challenge: &HmacChallenge) -> PairingResult<RequestPairingResponse> {
         let request = RequestPairing {
             node_description: self.config.node_description.clone(),
             endpoint_description: self.config.endpoint_description.clone(),
@@ -300,7 +300,7 @@ impl<'a> V1Session<'a> {
         Ok(request_pairing_response)
     }
 
-    async fn v1_finalize(self, attempt_id: &PairingAttemptId, success: bool) -> PairingResult<()> {
+    async fn finalize(self, attempt_id: &PairingAttemptId, success: bool) -> PairingResult<()> {
         let response = self
             .client
             .post(self.base_url.join("finalizePairing").unwrap())
