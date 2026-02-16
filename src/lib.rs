@@ -67,12 +67,12 @@
 //! ```
 //! [`Connection::send_message`](connection::S2Connection::send_message) accepts an `impl Into<Message>`, so you can just give it any compatible
 //! type and it will work.
-//! 
+//!
 //! ### Sending/receiving S2 messages
 //! S2 does not specify a particular transport protocol for S2 messages. As a result, many transport protocols can be used: WebSockets, MQTT, [even D-Bus](https://github.com/victronenergy/venus/wiki/Venus-OS-D%E2%80%90Bus-S2-Interface).
 //! To facilitate the use of different transport protocols, this crates provides a central abstraction in [`connection::S2Connection`] and [`transport::S2Transport`].
 //! An `S2Connection` can use any transport protocol implementing the `S2Transport` trait.
-//! 
+//!
 //! This crate provides some transport implementations for end-users. Currently, only a WebSockets implementation is provided (in [`transport::websockets_json`]).
 //! D-Bus support is also planned for the near future.
 //!
@@ -90,6 +90,7 @@
 //! It assumes that you are familiar with the S2 standard; if this is not the case, it may be useful to refer to [the S2 documentation website](https://docs.s2standard.org/docs/welcome/).
 #![warn(missing_docs)]
 #![cfg_attr(docsrs_s2energy, feature(doc_cfg))]
+#![expect(clippy::clone_on_copy)]
 
 include!(concat!(env!("OUT_DIR"), "/generated.rs"));
 
