@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use s2energy::pairing::{
+use s2energy_connection::pairing::{
     Client, ClientConfig, Deployment, EndpointConfig, MessageVersion, PairingRemote, S2NodeDescription, S2NodeId, S2Role,
 };
 
@@ -45,9 +45,9 @@ async fn main() {
         .unwrap();
 
     match pair_result.role {
-        s2energy::pairing::PairingRole::CommunicationClient { initiate_url } => {
+        s2energy_connection::pairing::PairingRole::CommunicationClient { initiate_url } => {
             println!("Paired as client, url: {initiate_url}, token: {}", pair_result.token.0)
         }
-        s2energy::pairing::PairingRole::CommunicationServer => println!("Paired as server, token: {}", pair_result.token.0),
+        s2energy_connection::pairing::PairingRole::CommunicationServer => println!("Paired as server, token: {}", pair_result.token.0),
     }
 }

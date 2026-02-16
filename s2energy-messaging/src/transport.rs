@@ -10,41 +10,19 @@
 //! WebSockets according to [the official JSON schema](https://github.com/flexiblepower/s2-ws-json).
 //! This is currently the most common and well-supported way to use S2.
 
-use crate::common::Message;
-use std::error::Error;
-
 #[doc(hidden)]
 #[cfg(feature = "dbus")]
 pub mod dbus;
 #[cfg(feature = "websockets-json")]
 pub mod websockets_json;
 
-/// Trait used to abstract the underlying transport protocol.
-///
-/// **End-users are not expected to use this trait directly.** Instead, libraries can implement this trait to provide additional
-/// transport protocols that can be used to talk S2 over.
-pub trait S2Transport {
-    /// Error type for errors occurring at a transport level.
-    type TransportError: Error;
-
-    /// Send an S2 message.
-    fn send(&mut self, message: Message) -> impl Future<Output = Result<(), Self::TransportError>> + Send;
-
-    /// Recceive an S2 message.
-    fn receive(&mut self) -> impl Future<Output = Result<Message, Self::TransportError>> + Send;
-
-    /// Disconnect this connection.
-    ///
-    /// This should do whatever is appropriate for the implemented transport protocol. This may include sending
-    /// e.g. a close frame. When the future resolves, the connection should be fully terminated.
-    fn disconnect(self) -> impl Future<Output = ()> + Send;
-}
-
 // TODO: for some reason, this module is not visible to doctests when annotated with #[cfg(any(test, doctest))]
 // So for now it's just unconditionally public (and it might be useful for other people doing tests, so maybe that's fine?).
 #[doc(hidden)]
 pub mod test {
-    use super::*;
+    use s2energy_common::S2Transport;
+    use serde::{Serialize, de::DeserializeOwned};
+
     use crate::{connection::S2Connection, frbc::StorageStatus};
     use std::convert::Infallible;
 
@@ -59,12 +37,13 @@ pub mod test {
     impl S2Transport for MockTransport {
         type TransportError = Infallible;
 
-        async fn send(&mut self, _: Message) -> Result<(), Self::TransportError> {
+        async fn send(&mut self, _: impl Serialize + Send) -> Result<(), Self::TransportError> {
             Ok(())
         }
 
-        async fn receive(&mut self) -> Result<Message, Self::TransportError> {
-            Ok(Message::FrbcStorageStatus(StorageStatus::new(0.0)))
+        async fn receive<Message: DeserializeOwned>(&mut self) -> Result<Message, Self::TransportError> {
+            let serialized_message = serde_json::to_string(&crate::common::Message::FrbcStorageStatus(StorageStatus::new(0.0))).unwrap();
+            Ok(serde_json::from_str(&serialized_message).unwrap())
         }
 
         async fn disconnect(self) {}
