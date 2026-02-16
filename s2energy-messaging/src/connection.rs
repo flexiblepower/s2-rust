@@ -4,10 +4,10 @@
 //! An `S2Connection` is acquired from an implementing transport protocol, for example by using
 //! [`websockets_json::connect_as_client`](crate::transport::websockets_json::connect_as_client).
 
-use crate::{
-    common::{ControlType, EnergyManagementRole, Handshake, Message, ReceptionStatus, ReceptionStatusValues, ResourceManagerDetails},
-    transport::S2Transport,
+use crate::common::{
+    ControlType, EnergyManagementRole, Handshake, Message, ReceptionStatus, ReceptionStatusValues, ResourceManagerDetails,
 };
+use s2energy_common::S2Transport;
 use semver::VersionReq;
 use thiserror::Error;
 
@@ -198,10 +198,11 @@ impl<T: S2Transport> S2Connection<T> {
 ///
 /// # Examples
 /// ```
-/// # use s2energy::common::{ReceptionStatusValues, Message, Id};
-/// # use s2energy::frbc;
-/// # use s2energy::transport::{S2Transport, test::MockTransport};
-/// # use s2energy::connection::ConnectionError;
+/// # use s2energy_messaging::common::{ReceptionStatusValues, Message, Id};
+/// # use s2energy_messaging::frbc;
+/// # use s2energy_messaging::transport::test::MockTransport;
+/// # use s2energy_messaging::connection::ConnectionError;
+/// # use s2energy_common::S2Transport;
 /// # async fn test() -> Result<(), ConnectionError<<MockTransport as S2Transport>::TransportError>> {
 /// # let mut s2_connection = MockTransport::new_connection();
 /// // Inspect the message and ensure its contents match our expectations:

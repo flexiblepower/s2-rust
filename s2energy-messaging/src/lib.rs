@@ -22,10 +22,10 @@
 //! ### Creating  S2 types
 //! S2 types have all their fields exposed, so you can construct them using regular Rust constructor syntax:
 //! ```
-//! # use s2energy::common::Id;
+//! # use s2energy_messaging::common::Id;
 //! # let actuator_id = Id::generate();
 //! # let operation_mode_id = Id::generate();
-//! use s2energy::{common::NumberRange, frbc::ActuatorStatus};
+//! use s2energy_messaging::{common::NumberRange, frbc::ActuatorStatus};
 //!
 //! let range = NumberRange {
 //!     start_of_range: 1.0,
@@ -47,8 +47,8 @@
 //! When sending or receiving S2 messages, you'll be working with [`common::Message`]. This type represents all possible S2 messages in a big enum. When
 //! receiving messages, you'll want to match on `Message` to determine how to handle it:
 //! ```
-//! # use s2energy::common::Message;
-//! # use s2energy::frbc::StorageStatus;
+//! # use s2energy_messaging::common::Message;
+//! # use s2energy_messaging::frbc::StorageStatus;
 //! # let incoming_message = Message::FrbcStorageStatus(StorageStatus::new(2.1));
 //! match incoming_message {
 //!     Message::FrbcSystemDescription(system_description) => { /* Handle it */ },
@@ -60,8 +60,8 @@
 //! All types that serve as the content of a message (such as [`frbc::SystemDescription`] and [`frbc::StorageStatus`] in the above example) implement
 //! `Into<Message>` for convenience. This means you can do:
 //! ```
-//! # use s2energy::common::Message;
-//! # use s2energy::frbc::StorageStatus;
+//! # use s2energy_messaging::common::Message;
+//! # use s2energy_messaging::frbc::StorageStatus;
 //! let storage_status = StorageStatus::new(2.1);
 //! let message: Message = storage_status.into();
 //! ```
@@ -95,7 +95,6 @@
 include!(concat!(env!("OUT_DIR"), "/generated.rs"));
 
 pub mod connection;
-pub mod pairing;
 pub mod transport;
 
 #[cfg(test)]

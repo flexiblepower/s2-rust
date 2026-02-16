@@ -1,64 +1,39 @@
-[package]
-name = "s2energy"
-version = "0.3.0"
-edition = "2024"
-authors = ["Wester Coenraads <wester.coenraads@tno.nl>"]
-license = "Apache-2.0"
-description = "Provides type definitions and utilities for the S2 energy flexibility standard"
-homepage = "https://s2standard.org"
-repository = "https://github.com/flexiblepower/s2-rust"
-categories = ["api-bindings"]
-keywords = ["s2", "energy", "energy-management", "protocol", "automation"]
+[workspace]
+members = ["s2energy-common", "s2energy-connection", "s2energy-messaging"]
+resolver = "3"
 
-[features]
-default = ["websockets-json", "dbus"]
-websockets-json = ["dep:futures-util", "dep:tokio-tungstenite", "dep:serde_json"]
-dbus = []
-
-[dependencies]
-chrono = { version = "0.4.42", features = ["serde"] }
-regress = "0.10.4" # This dependency is not used directly but necessary for typify to work
-uuid = { version = "1.18.1", features = ["v4", "serde"] }
-serde = { version = "1.0.228", features = ["derive"] }
-semver = "1.0.27"
-bon = "3.8.0"
-tracing = "0.1.43"
-thiserror = "2.0.17"
-
-# feature=websockets-json
-futures-util = { version = "0.3.31", optional = true }
-tokio = { version = "1.47.1", features = ["net"] }
-tokio-tungstenite = { version = "0.28.0", features = ["rustls-tls-webpki-roots"], optional = true }
-serde_json = { version = "1.0.145", optional = true }
-rand = "0.9.2"
-base64 = "0.22.1"
-hmac = "0.12.1"
-sha2 = "0.10.9"
-reqwest = { version = "0.13.1", features = ["json"] }
+[workspace.dependencies]
 axum = "0.8.8"
-
+base64 = "0.22.1"
+bon = "3.8.0"
+chrono = { version = "0.4.42", features = ["serde"] }
+futures-util = "0.3.31"
+hmac = "0.12.1"
+rand = "0.9.2"
+regress = "0.10.4"
+reqwest = { version = "0.13.1", features = ["json"] }
 rustls = "0.23.36"
 rustls-platform-verifier = "0.6.2"
+semver = "1.0.27"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+sha2 = "0.10.9"
+thiserror = "2.0.17"
+tokio = { version = "1.47.1", features = ["net"] }
+tokio-tungstenite = { version = "0.28.0", features = ["rustls-tls-webpki-roots"] }
+tracing = "0.1.43"
+uuid = { version = "1.18.1", features = ["v4", "serde"] }
 
-[build-dependencies]
+# Buildtime
+quote = "1.0.41"
 prettyplease = "0.2.37"
 schemars = "0.8.22"
 syn = { version = "2.0.106", features = ["fold"] }
 typify = "0.5.0"
-serde_json = "1.0.145"
-quote = "1.0.41"
 
-[dev-dependencies]
+# Development
 eyre = "0.6.12"
-serde_json = "1.0.145"
 axum-server = { version = "0.8.0", features = ["tls-rustls"] }
 
-# docs.rs-specific configuration
-[package.metadata.docs.rs]
-all-features = true
-rustdoc-args = ["--cfg", "docsrs_s2energy"]
-
-# We can't use cfg(docsrs), because several dependencies have issues when passing
-# --cfg docsrs as a compiler arg. So here we define our own docsrs cfg.
-[lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(docsrs_s2energy)'] }
+# Internal
+s2energy-common = { path = "./s2energy-common", version = "0.1.0" }
