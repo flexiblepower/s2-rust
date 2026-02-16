@@ -3,6 +3,7 @@ use std::sync::Arc;
 use reqwest::{StatusCode, Url};
 use rustls::pki_types::CertificateDer;
 
+use crate::common::wire::{AccessToken, Deployment, PairingVersion, S2NodeId, S2Role, WirePairingVersion};
 use crate::pairing::transport::{HashProvider, hash_providing_https_client};
 use crate::pairing::{Pairing, PairingRole, SUPPORTED_PAIRING_VERSIONS};
 

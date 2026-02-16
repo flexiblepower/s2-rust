@@ -16,9 +16,12 @@ use rustls::pki_types::CertificateDer;
 use sha2::Digest;
 use tokio::time::Instant;
 
-use crate::pairing::{PairingRole, SUPPORTED_PAIRING_VERSIONS};
+use crate::{
+    common::wire::{AccessToken, PairingVersion, S2EndpointDescription, S2NodeDescription, S2NodeId},
+    pairing::{PairingRole, SUPPORTED_PAIRING_VERSIONS},
+};
 
-use super::{EndpointConfig, Error, Network, Pairing, PairingResult, S2EndpointDescription, S2NodeDescription, wire::*};
+use super::{EndpointConfig, Error, Network, Pairing, PairingResult, wire::*};
 
 const PERMANENT_PAIRING_BUFFER_SIZE: usize = 1;
 

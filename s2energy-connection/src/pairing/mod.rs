@@ -7,7 +7,8 @@
 //! The main configuration struct [`EndpointConfig`] describes an S2 endpoint. It is constructed through
 //! a builder pattern. For simple configuration, the builder can immediately be build:
 //! ```rust
-//! # use s2energy_connection::pairing::{EndpointConfig, MessageVersion, S2NodeDescription, S2NodeId, S2Role};
+//! # use s2energy_connection::pairing::EndpointConfig;
+//! # use s2energy_connection::{MessageVersion, S2NodeDescription, S2NodeId, S2Role};
 //! let _config = EndpointConfig::builder(S2NodeDescription {
 //!     id: S2NodeId(String::from("12121212")),
 //!     brand: String::from("super-reliable-corp"),
@@ -23,7 +24,8 @@
 //!
 //! Additional information can be added through methods on the builder. For example, we can add a connection initiate url through:
 //! ```rust
-//! # use s2energy_connection::pairing::{EndpointConfig, MessageVersion, S2NodeDescription, S2NodeId, S2Role};
+//! # use s2energy_connection::pairing::EndpointConfig;
+//! # use s2energy_connection::{MessageVersion, S2NodeDescription, S2NodeId, S2Role};
 //! let _config = EndpointConfig::builder(S2NodeDescription {
 //!     id: S2NodeId(String::from("12121212")),
 //!     brand: String::from("super-reliable-corp"),
@@ -44,7 +46,8 @@
 //! server. For this, you will also need to know the id of the node, and the URL on which its pairing server is reachable.
 //! ```rust
 //! # use std::sync::Arc;
-//! # use s2energy_connection::pairing::{Client, ClientConfig, Deployment, EndpointConfig, MessageVersion, PairingRemote, S2NodeDescription, S2NodeId, S2Role};
+//! # use s2energy_connection::pairing::{Client, ClientConfig, EndpointConfig, PairingRemote};
+//! # use s2energy_connection::{Deployment, MessageVersion, S2NodeDescription, S2NodeId, S2Role};
 //! # let config = EndpointConfig::builder(S2NodeDescription {
 //! #     id: S2NodeId(String::from("12121212")),
 //! #     brand: String::from("super-reliable-corp"),
@@ -102,7 +105,8 @@
 //! ```no_run
 //! # use std::{path::PathBuf, net::SocketAddr, sync::Arc};
 //! # use axum_server::tls_rustls::RustlsConfig;
-//! # use s2energy_connection::pairing::{EndpointConfig, MessageVersion, PairingToken, Server, ServerConfig, S2NodeDescription, S2NodeId, S2Role};
+//! # use s2energy_connection::pairing::{EndpointConfig, PairingToken, Server, ServerConfig};
+//! # use s2energy_connection::{MessageVersion, S2NodeDescription, S2NodeId, S2Role};
 //! # #[tokio::main(flavor = "current_thread")]
 //! # async fn main() {
 //! # let tls_config = RustlsConfig::from_pem_file(
@@ -137,7 +141,8 @@
 //! ```no_run
 //! # use std::{path::PathBuf, net::SocketAddr, sync::Arc};
 //! # use axum_server::tls_rustls::RustlsConfig;
-//! # use s2energy_connection::pairing::{EndpointConfig, MessageVersion, PairingToken, Server, ServerConfig, S2NodeDescription, S2NodeId, S2Role};
+//! # use s2energy_connection::pairing::{EndpointConfig, PairingToken, Server, ServerConfig};
+//! # use s2energy_connection::{MessageVersion, S2NodeDescription, S2NodeId, S2Role};
 //! # #[tokio::main(flavor = "current_thread")]
 //! # async fn main() {
 //! # let tls_config = RustlsConfig::from_pem_file(
@@ -183,13 +188,15 @@ mod wire;
 
 use rand::Rng;
 
-use wire::{AccessToken, HmacChallenge, HmacChallengeResponse};
+use wire::{HmacChallenge, HmacChallengeResponse};
 
 pub use client::{Client, ClientConfig, PairingRemote};
 pub use server::{PairingToken, PendingPairing, RepeatedPairing, Server, ServerConfig};
-pub use wire::{CommunicationProtocol, Deployment, MessageVersion, S2EndpointDescription, S2NodeDescription, S2NodeId, S2Role};
 
-use crate::pairing::wire::PairingVersion;
+use crate::{
+    CommunicationProtocol, Deployment, MessageVersion, S2EndpointDescription, S2NodeDescription, S2Role,
+    common::wire::{AccessToken, PairingVersion},
+};
 
 const SUPPORTED_PAIRING_VERSIONS: &[PairingVersion] = &[PairingVersion::V1];
 

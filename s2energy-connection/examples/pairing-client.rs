@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
-use s2energy_connection::pairing::{
-    Client, ClientConfig, Deployment, EndpointConfig, MessageVersion, PairingRemote, S2NodeDescription, S2NodeId, S2Role,
+use s2energy_connection::{
+    Deployment, MessageVersion, S2NodeDescription, S2NodeId, S2Role,
+    pairing::{Client, ClientConfig, EndpointConfig, PairingRemote},
 };
 
 const PAIRING_TOKEN: &[u8] = &[1, 2, 3];

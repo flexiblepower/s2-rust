@@ -2,8 +2,9 @@ use axum_server::tls_rustls::RustlsConfig;
 use rustls::pki_types::{CertificateDer, pem::PemObject};
 use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 
-use s2energy_connection::pairing::{
-    EndpointConfig, MessageVersion, PairingToken, S2NodeDescription, S2NodeId, S2Role, Server, ServerConfig,
+use s2energy_connection::{
+    MessageVersion, S2NodeDescription, S2NodeId, S2Role,
+    pairing::{EndpointConfig, PairingToken, Server, ServerConfig},
 };
 
 #[allow(unused)]
