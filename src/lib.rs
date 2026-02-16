@@ -94,6 +94,7 @@
 include!(concat!(env!("OUT_DIR"), "/generated.rs"));
 
 pub mod connection;
+pub mod pairing;
 pub mod transport;
 
 #[cfg(test)]

@@ -13,6 +13,7 @@ use thiserror::Error;
 
 /// An error from the S2 connection.
 #[derive(Error, Debug)]
+#[expect(clippy::large_enum_variant)]
 pub enum ConnectionError<T: std::error::Error> {
     /// An error from the underlying [`S2Transport`].
     #[error("an error occurred in the underlying transport: {0}")]
