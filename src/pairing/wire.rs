@@ -1,0 +1,275 @@
+use axum::http::{HeaderMap, HeaderName, HeaderValue};
+use serde::*;
+use thiserror::Error;
+
+#[derive(Error, Debug, Serialize, Deserialize)]
+pub(crate) enum PairingResponseErrorMessage {
+    #[error("Invalid combination of roles")]
+    InvalidCombinationOfRoles,
+    #[error("Incompatible S2 message versions")]
+    IncompatibleS2MessageVersions,
+    #[error("Incompatible HMAC hashing algorithms")]
+    IncompatibleHMACHashingAlgorithms,
+    #[error("Incompatible communication protocols")]
+    IncompatibleCommunicationProtocols,
+    #[error("S2Node not found")]
+    S2NodeNotFound,
+    #[error("No S2Node provided")]
+    S2NodeNotProvided,
+    #[error("No valid pairingToken on PairingServer")]
+    InvalidPairingToken,
+    #[error("Parsing error")]
+    ParsingError,
+    #[error("Other")]
+    Other,
+}
+
+#[derive(Serialize, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum PairingVersion {
+    V1,
+}
+
+#[derive(Deserialize, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum WirePairingVersion {
+    V1,
+    #[serde(other)]
+    Other,
+}
+
+impl TryFrom<WirePairingVersion> for PairingVersion {
+    type Error = ();
+
+    fn try_from(value: WirePairingVersion) -> Result<Self, Self::Error> {
+        match value {
+            WirePairingVersion::V1 => Ok(PairingVersion::V1),
+            WirePairingVersion::Other => Err(()),
+        }
+    }
+}
+
+/// Message schema version.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct MessageVersion(pub String);
+
+#[derive(Serialize, Deserialize)]
+pub(crate) struct RequestPairing {
+    #[serde(rename = "clientS2NodeDescription")]
+    pub node_description: S2NodeDescription,
+    #[serde(rename = "clientS2EndpointDescription")]
+    pub endpoint_description: S2EndpointDescription,
+    #[serde(rename = "pairingS2NodeId")]
+    pub id: S2NodeId,
+    #[serde(rename = "supportedCommunicationProtocols")]
+    pub supported_protocols: Vec<CommunicationProtocol>,
+    /// The versions of the S2 JSON message schemas this S2Node implementation currently supports.
+    #[serde(rename = "supportedS2MessageVersions")]
+    pub supported_versions: Vec<MessageVersion>,
+    #[serde(rename = "supportedHmacHashingAlgorithms")]
+    #[serde(default)]
+    pub supported_hashing_algorithms: Vec<HmacHashingAlgorithm>,
+    #[serde(rename = "clientHmacChallenge")]
+    pub client_hmac_challenge: HmacChallenge,
+    /// Forces the server to attempt pairing, even though the S2 message versions are not compatible. In this case the S2Nodes won't be able to communicate after pairing, but this could later be solved through a software update on one or both of the S2Nodes.
+    #[serde(rename = "forcePairing")]
+    #[serde(default)]
+    pub force_pairing: bool,
+}
+
+/// Information about the pairing endpoint of a S2 node
+#[derive(Default, Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct S2EndpointDescription {
+    /// Name of the endpoint
+    #[serde(default)]
+    pub name: Option<String>,
+    /// URI of a logo to be used for the endpoint in GUIs
+    #[serde(default)]
+    pub logo_uri: Option<String>,
+    /// Type of deployment used by the endpoint (local or globally routable).
+    #[serde(default)]
+    pub deployment: Option<Deployment>,
+}
+
+/// One-time access token for secure access to the S2 message communication channel. It must be renewed every time a client wants to access
+/// the S2 message communication channel by calling the requestToken endpoint. This token is valid for one time login, with a maximum 5
+/// years, and should have a minimum length of 32 bytes.
+#[derive(Serialize, Deserialize, Clone)]
+pub struct AccessToken(pub String);
+
+impl AccessToken {
+    pub fn new(rng: &mut impl rand::Rng) -> Self {
+        use base64::{Engine as _, engine::general_purpose::STANDARD};
+
+        let mut bytes = [0u8; 32];
+        rng.fill(&mut bytes);
+
+        let encoded = STANDARD.encode(bytes);
+        Self(encoded)
+    }
+}
+
+/// Unique identifier of the S2 node
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
+pub struct S2NodeId(pub String);
+
+/// Information about the S2 node
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct S2NodeDescription {
+    /// Unique identifier of the node
+    pub id: S2NodeId,
+    /// Brandname used for the node
+    pub brand: String,
+    /// URI of a logo to be used for the node in GUIs
+    #[serde(default)]
+    pub logo_uri: Option<String>,
+    /// The type of this node.
+    pub type_: String,
+    /// Model name of the device this node belongs to.
+    pub model_name: String,
+    /// A name for the device configured by the end user/owner.
+    #[serde(default)]
+    pub user_defined_name: Option<String>,
+    /// The S2 role this device has (e.g. CEM or RM).
+    pub role: S2Role,
+}
+
+/// Identifier of a protocol that can be used for communication of S2 messages between nodes, for example `"WebSocket"`
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
+pub struct CommunicationProtocol(pub String);
+
+/// Role within the S2 standard.
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum S2Role {
+    /// Customer Energy Manager.
+    Cem,
+    /// Resource Manager.
+    Rm,
+}
+
+/// Place of deployment for an S2 Node
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum Deployment {
+    /// On a WAN, reachable over the internet
+    Wan,
+    /// On the local network, only reachable near the place the device is located.
+    Lan,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash)]
+#[serde(rename_all = "UPPERCASE")]
+pub(crate) enum HmacHashingAlgorithm {
+    Sha256,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub(crate) struct HmacChallenge(
+    #[serde(
+        serialize_with = "base64_bytes::serialize",
+        deserialize_with = "base64_bytes::deserialize::<_, 32>"
+    )]
+    pub(crate) [u8; 32],
+);
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub(crate) struct HmacChallengeResponse(
+    #[serde(
+        serialize_with = "base64_bytes::serialize",
+        deserialize_with = "base64_bytes::deserialize::<_, 32>"
+    )]
+    pub(crate) [u8; 32],
+);
+
+/// An identifier that is generated by the server for each pairing attempt.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct PairingAttemptId(String);
+
+impl PairingAttemptId {
+    pub const HEADER_NAME: &'static str = "authorization";
+
+    pub fn new(rng: &mut impl rand::Rng) -> Self {
+        use base64::{Engine as _, engine::general_purpose::STANDARD};
+
+        let mut bytes = [0u8; 32];
+        rng.fill(&mut bytes);
+
+        let encoded = STANDARD.encode(bytes);
+        Self(encoded)
+    }
+
+    pub fn header_name() -> HeaderName {
+        HeaderName::from_static(Self::HEADER_NAME)
+    }
+
+    pub fn header_value(&self) -> HeaderValue {
+        HeaderValue::from_str(&self.0).expect("base64 makes a valid HeaderValue")
+    }
+
+    pub fn from_headers(headers: &HeaderMap) -> Option<PairingAttemptId> {
+        let value = headers.get(Self::header_name())?;
+        Some(Self(value.to_str().ok()?.to_string()))
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RequestPairingResponse {
+    pub pairing_attempt_id: PairingAttemptId,
+    pub server_s2_node_description: S2NodeDescription,
+    pub server_s2_endpoint_description: S2EndpointDescription,
+    pub selected_hmac_hashing_algorithm: HmacHashingAlgorithm,
+    pub client_hmac_challenge_response: HmacChallengeResponse,
+    pub server_hmac_challenge: HmacChallenge,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RequestConnectionDetailsRequest {
+    pub server_hmac_challenge_response: HmacChallengeResponse,
+}
+
+/// Details the Connection client needs to set up an S2 session.
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ConnectionDetails {
+    pub initiate_connection_url: String,
+    pub access_token: AccessToken,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PostConnectionDetailsRequest {
+    pub server_hmac_challenge_response: HmacChallengeResponse,
+    pub connection_details: ConnectionDetails,
+}
+
+mod base64_bytes {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    use serde::{Deserialize, Deserializer, Serializer, de};
+
+    pub(crate) fn serialize<S, T>(value: &T, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+        T: AsRef<[u8]>,
+    {
+        let encoded = STANDARD.encode(value.as_ref());
+        serializer.serialize_str(&encoded)
+    }
+
+    pub(crate) fn deserialize<'de, D, const N: usize>(deserializer: D) -> Result<[u8; N], D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        let decoded = STANDARD.decode(&s).map_err(de::Error::custom)?;
+
+        decoded
+            .as_slice()
+            .try_into()
+            .map_err(|_| de::Error::custom(format!("expected {N} bytes after base64 decoding, got {}", decoded.len())))
+    }
+}

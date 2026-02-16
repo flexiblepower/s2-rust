@@ -12,7 +12,7 @@ keywords = ["s2", "energy", "energy-management", "protocol", "automation"]
 
 [features]
 default = ["websockets-json", "dbus"]
-websockets-json = ["dep:futures-util", "dep:tokio", "dep:tokio-tungstenite", "dep:serde_json"]
+websockets-json = ["dep:futures-util", "dep:tokio-tungstenite", "dep:serde_json"]
 dbus = []
 
 [dependencies]
@@ -27,9 +27,18 @@ thiserror = "2.0.17"
 
 # feature=websockets-json
 futures-util = { version = "0.3.31", optional = true }
-tokio = { version = "1.47.1", features = ["net"], optional = true }
+tokio = { version = "1.47.1", features = ["net"] }
 tokio-tungstenite = { version = "0.28.0", features = ["rustls-tls-webpki-roots"], optional = true }
 serde_json = { version = "1.0.145", optional = true }
+rand = "0.9.2"
+base64 = "0.22.1"
+hmac = "0.12.1"
+sha2 = "0.10.9"
+reqwest = { version = "0.13.1", features = ["json"] }
+axum = "0.8.8"
+
+rustls = "0.23.36"
+rustls-platform-verifier = "0.6.2"
 
 [build-dependencies]
 prettyplease = "0.2.37"
@@ -42,6 +51,7 @@ quote = "1.0.41"
 [dev-dependencies]
 eyre = "0.6.12"
 serde_json = "1.0.145"
+axum-server = { version = "0.8.0", features = ["tls-rustls"] }
 
 # docs.rs-specific configuration
 [package.metadata.docs.rs]
