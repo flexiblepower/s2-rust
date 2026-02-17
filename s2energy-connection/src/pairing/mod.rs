@@ -195,10 +195,8 @@ pub use server::{PairingToken, PendingPairing, RepeatedPairing, Server, ServerCo
 
 use crate::{
     CommunicationProtocol, Deployment, MessageVersion, S2EndpointDescription, S2NodeDescription, S2Role,
-    common::wire::{AccessToken, PairingVersion},
+    common::{BaseError, wire::AccessToken},
 };
-
-const SUPPORTED_PAIRING_VERSIONS: &[PairingVersion] = &[PairingVersion::V1];
 
 /// Full description of an S2 endpoint
 #[derive(Debug, Clone)]
@@ -382,6 +380,16 @@ pub enum Error {
     RemoteOfSameType,
     /// The configuration was invalid
     InvalidConfig(ConfigError),
+}
+
+impl From<BaseError> for Error {
+    fn from(value: BaseError) -> Self {
+        match value {
+            BaseError::TransportFailed => Self::TransportFailed,
+            BaseError::ProtocolError => Self::ProtocolError,
+            BaseError::NoSupportedVersion => Self::NoSupportedVersion,
+        }
+    }
 }
 
 impl From<ConfigError> for Error {

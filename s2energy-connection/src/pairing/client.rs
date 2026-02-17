@@ -3,9 +3,10 @@ use std::sync::Arc;
 use reqwest::{StatusCode, Url};
 use rustls::pki_types::CertificateDer;
 
-use crate::common::wire::{AccessToken, Deployment, PairingVersion, S2NodeId, S2Role, WirePairingVersion};
+use crate::common::negotiate_version;
+use crate::common::wire::{AccessToken, Deployment, PairingVersion, S2NodeId, S2Role};
 use crate::pairing::transport::{HashProvider, hash_providing_https_client};
-use crate::pairing::{Pairing, PairingRole, SUPPORTED_PAIRING_VERSIONS};
+use crate::pairing::{Pairing, PairingRole};
 
 use super::EndpointConfig;
 use super::wire::*;
@@ -78,24 +79,6 @@ impl Client {
             }
         }
     }
-}
-
-async fn negotiate_version(client: &reqwest::Client, url: Url) -> Result<PairingVersion, Error> {
-    let response = client.get(url).send().await.map_err(|_| Error::TransportFailed)?;
-    let status = response.status();
-    if status != StatusCode::OK {
-        return Err(Error::ProtocolError);
-    }
-
-    let supported_versions = response.json::<Vec<WirePairingVersion>>().await.map_err(|_| Error::ProtocolError)?;
-
-    for version in supported_versions.into_iter().filter_map(|v| v.try_into().ok()) {
-        if SUPPORTED_PAIRING_VERSIONS.contains(&version) {
-            return Ok(version);
-        }
-    }
-
-    Err(Error::NoSupportedVersion)
 }
 
 struct V1Session<'a> {
