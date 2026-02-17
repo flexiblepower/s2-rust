@@ -1,3 +1,6 @@
+use axum::extract::FromRequestParts;
+use axum_extra::{TypedHeader, headers};
+use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -26,11 +29,11 @@ impl TryFrom<WirePairingVersion> for PairingVersion {
 }
 
 /// Message schema version.
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct MessageVersion(pub String);
 
 /// Information about the pairing endpoint of a S2 node
-#[derive(Default, Debug, Serialize, Deserialize, Clone)]
+#[derive(Default, Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
 #[serde(rename_all = "camelCase")]
 pub struct S2EndpointDescription {
     /// Name of the endpoint
@@ -47,7 +50,7 @@ pub struct S2EndpointDescription {
 /// One-time access token for secure access to the S2 message communication channel. It must be renewed every time a client wants to access
 /// the S2 message communication channel by calling the requestToken endpoint. This token is valid for one time login, with a maximum 5
 /// years, and should have a minimum length of 32 bytes.
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
 pub struct AccessToken(pub String);
 
 impl AccessToken {
@@ -62,12 +65,34 @@ impl AccessToken {
     }
 }
 
+impl AsRef<AccessToken> for AccessToken {
+    fn as_ref(&self) -> &AccessToken {
+        self
+    }
+}
+
+impl<S: Sync + Send> FromRequestParts<S> for AccessToken {
+    type Rejection = StatusCode;
+
+    async fn from_request_parts(parts: &mut axum::http::request::Parts, state: &S) -> Result<Self, Self::Rejection> {
+        let Some(token) = Option::<TypedHeader<headers::Authorization<headers::authorization::Bearer>>>::from_request_parts(parts, state)
+            .await
+            .ok()
+            .flatten()
+        else {
+            return Err(StatusCode::UNAUTHORIZED);
+        };
+
+        Ok(AccessToken(token.token().into()))
+    }
+}
+
 /// Unique identifier of the S2 node
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
 pub struct S2NodeId(pub String);
 
 /// Information about the S2 node
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
 #[serde(rename_all = "camelCase")]
 pub struct S2NodeDescription {
     /// Unique identifier of the node
