@@ -1,5 +1,6 @@
 #![cfg(feature = "dbus")]
 use futures_util::StreamExt;
+use s2energy::transport::S2Transport;
 use std::time::Duration;
 use zbus::{Connection, fdo::DBusProxy, names::OwnedBusName, proxy};
 
@@ -16,17 +17,21 @@ impl DBusServer {
         Ok(Self { connection, pending_names })
     }
 
-    async fn receive_connection(&mut self) -> eyre::Result<String> {
+    async fn receive_connection(&mut self) -> eyre::Result<DBusConnection> {
         while let Some(name) = self.pending_names.pop() {
-            // TODO: check the name
-            S2RmProxy::builder(&self.connection).destination(name).unwrap().build().await.unwrap();
+            let proxy = match S2RmProxy::builder(&self.connection).destination(name)?.build().await {
+                Ok(result) => result,
+                Err(_) => continue,
+            };
+            let connection_handle = DBusConnection(String::new(), proxy);
+            return Ok(connection_handle);
         }
 
         let dbus = DBusProxy::new(&self.connection).await?;
         let changed = dbus.receive_name_owner_changed().await?.next().await.ok_or(eyre::eyre!("oh no"))?;
         dbg!(changed.args().unwrap());
         // Ok(changed.to_string())
-        Ok("ok".to_string())
+        Ok(todo!())
     }
 }
 
@@ -42,6 +47,24 @@ trait S2Rm {
     fn message(cem_id: String, message: String);
     #[zbus(signal)]
     fn disconnect(cem_id: String, reason: String);
+}
+
+struct DBusConnection(String, S2RmProxy<'static>);
+
+impl S2Transport for DBusConnection {
+    type TransportError = std::io::Error;
+
+    async fn send(&mut self, message: s2energy::common::Message) -> Result<(), Self::TransportError> {
+        todo!()
+    }
+
+    async fn receive(&mut self) -> Result<s2energy::common::Message, Self::TransportError> {
+        todo!()
+    }
+
+    async fn disconnect(self) {
+        self.1.disconnect(self.0).await;
+    }
 }
 
 #[tokio::main]
