@@ -10,7 +10,7 @@
 //! # use s2energy_connection::pairing::EndpointConfig;
 //! # use s2energy_connection::{MessageVersion, S2NodeDescription, S2NodeId, S2Role};
 //! let _config = EndpointConfig::builder(S2NodeDescription {
-//!     id: S2NodeId(String::from("12121212")),
+//!     id: S2NodeId::try_from("67e55044-10b1-426f-9247-bb680e5fe0c8").unwrap(),
 //!     brand: String::from("super-reliable-corp"),
 //!     logo_uri: None,
 //!     type_: String::from("fancy"),
@@ -27,7 +27,7 @@
 //! # use s2energy_connection::pairing::EndpointConfig;
 //! # use s2energy_connection::{MessageVersion, S2NodeDescription, S2NodeId, S2Role};
 //! let _config = EndpointConfig::builder(S2NodeDescription {
-//!     id: S2NodeId(String::from("12121212")),
+//!     id: S2NodeId::try_from("67e55044-10b1-426f-9247-bb680e5fe0c8").unwrap(),
 //!     brand: String::from("super-reliable-corp"),
 //!     logo_uri: None,
 //!     type_: String::from("fancy"),
@@ -49,7 +49,7 @@
 //! # use s2energy_connection::pairing::{Client, ClientConfig, EndpointConfig, PairingRemote};
 //! # use s2energy_connection::{Deployment, MessageVersion, S2NodeDescription, S2NodeId, S2Role};
 //! # let config = EndpointConfig::builder(S2NodeDescription {
-//! #     id: S2NodeId(String::from("12121212")),
+//! #     id: S2NodeId::new(),
 //! #     brand: String::from("super-reliable-corp"),
 //! #     logo_uri: None,
 //! #     type_: String::from("fancy"),
@@ -68,7 +68,7 @@
 //!
 //! let pairing_result = client.pair(PairingRemote {
 //!     url: "https://remote.example.com".into(),
-//!     id: S2NodeId(String::from("56565656")),
+//!     id: S2NodeId::try_from("67e55044-10b1-426f-9247-bb680e5fe0c8").unwrap(),
 //! }, b"ABCDEF0123456");
 //! ```
 //!
@@ -122,7 +122,7 @@
 //! #     root_certificate: None,
 //! # });
 //! # let config = Arc::new(EndpointConfig::builder(S2NodeDescription {
-//! #     id: S2NodeId(String::from("12121212")),
+//! #     id: S2NodeId::new(),
 //! #     brand: String::from("super-reliable-corp"),
 //! #     logo_uri: None,
 //! #     type_: String::from("fancy"),
@@ -158,7 +158,7 @@
 //! #     root_certificate: None,
 //! # });
 //! # let config = Arc::new(EndpointConfig::builder(S2NodeDescription {
-//! #     id: S2NodeId(String::from("12121212")),
+//! #     id: S2NodeId::new(),
 //! #     brand: String::from("super-reliable-corp"),
 //! #     logo_uri: None,
 //! #     type_: String::from("fancy"),

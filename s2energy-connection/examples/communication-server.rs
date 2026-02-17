@@ -4,6 +4,7 @@ use std::{
     path::PathBuf,
     sync::{Arc, Mutex},
 };
+use uuid::uuid;
 
 use axum_server::tls_rustls::RustlsConfig;
 use s2energy_connection::{
@@ -26,8 +27,8 @@ impl MemoryPairingStore {
         MemoryPairingStore(Arc::new(Mutex::new(MemoryPairingStoreInner {
             token: AccessToken("0123456789ABCDEF".into()),
             config: Arc::new(NodeConfig::builder(vec![MessageVersion("v1".into())]).build()),
-            server: S2NodeId("12".into()),
-            client: S2NodeId("34".into()),
+            server: uuid!("67e55044-10b1-426f-9247-bb680e5fe0c8").into(),
+            client: uuid!("67e55044-10b1-426f-9247-bb680e5fe0c7").into(),
         })))
     }
 }

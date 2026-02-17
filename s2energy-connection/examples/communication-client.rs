@@ -1,4 +1,5 @@
 use std::{convert::Infallible, path::PathBuf, sync::Arc};
+use uuid::uuid;
 
 use rustls::pki_types::{CertificateDer, pem::PemObject};
 use s2energy_connection::{
@@ -53,8 +54,8 @@ async fn main() {
     let mut pairing = MemoryPairing {
         communication_url: "https://localhost:8005/".into(),
         tokens: vec![AccessToken("0123456789ABCDEF".into())],
-        server: S2NodeId("12".into()),
-        client: S2NodeId("34".into()),
+        server: uuid!("67e55044-10b1-426f-9247-bb680e5fe0c8").into(),
+        client: uuid!("67e55044-10b1-426f-9247-bb680e5fe0c7").into(),
     };
 
     let connection_info = client.connect(&mut pairing).await.unwrap();
