@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 axum.workspace = true
+axum-extra.workspace = true
 base64.workspace = true
 hmac.workspace = true
 rand.workspace = true
