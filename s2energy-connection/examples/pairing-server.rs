@@ -1,9 +1,10 @@
 use axum_server::tls_rustls::RustlsConfig;
 use rustls::pki_types::{CertificateDer, pem::PemObject};
 use std::{net::SocketAddr, path::PathBuf, sync::Arc};
+use uuid::uuid;
 
 use s2energy_connection::{
-    MessageVersion, S2NodeDescription, S2NodeId, S2Role,
+    MessageVersion, S2NodeDescription, S2Role,
     pairing::{EndpointConfig, PairingToken, Server, ServerConfig},
 };
 
@@ -19,7 +20,7 @@ async fn main() {
     });
     let config = EndpointConfig::builder(
         S2NodeDescription {
-            id: S2NodeId(String::from("12121212")),
+            id: uuid!("67e55044-10b1-426f-9247-bb680e5fe0c8").into(),
             brand: String::from("super-reliable-corp"),
             logo_uri: None,
             type_: String::from("fancy"),
