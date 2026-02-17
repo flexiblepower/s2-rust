@@ -17,8 +17,11 @@ use sha2::Digest;
 use tokio::time::Instant;
 
 use crate::{
-    common::wire::{AccessToken, PairingVersion, S2EndpointDescription, S2NodeDescription, S2NodeId},
-    pairing::{PairingRole, SUPPORTED_PAIRING_VERSIONS},
+    common::{
+        root,
+        wire::{AccessToken, PairingVersion, S2EndpointDescription, S2NodeDescription, S2NodeId},
+    },
+    pairing::PairingRole,
 };
 
 use super::{EndpointConfig, Error, Network, Pairing, PairingResult, wire::*};
@@ -232,10 +235,6 @@ struct AppStateInner {
     permanent_pairings: Mutex<HashMap<S2NodeId, PermanentPairingRequest>>,
     open_pairings: Mutex<HashMap<S2NodeId, PairingRequest>>,
     attempts: Mutex<HashMap<PairingAttemptId, ExpiringPairingState>>,
-}
-
-async fn root() -> Json<&'static [PairingVersion]> {
-    Json(SUPPORTED_PAIRING_VERSIONS)
 }
 
 fn v1_router() -> Router<AppState> {
