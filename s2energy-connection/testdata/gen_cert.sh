@@ -42,7 +42,7 @@ EOF
 openssl x509 -req -in "$FILENAME".csr -CA "$CA".pem -CAkey "$CA".key -out "$FILENAME".pem -days 365 -sha256 -extfile "$FILENAME".ext
 
 # generate the full certificate chain version
-cat "$FILENAME".pem "$CA".pem > "$FILENAME".fullchain.pem
+cat "$FILENAME".pem "$CA".pem > "$FILENAME".chain.pem
 
 # cleanup
 rm "$FILENAME".csr "$FILENAME".ext
