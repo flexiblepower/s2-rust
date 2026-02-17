@@ -2,6 +2,7 @@ use axum::extract::FromRequestParts;
 use axum_extra::{TypedHeader, headers};
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 #[derive(Serialize, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "lowercase")]
@@ -87,9 +88,81 @@ impl<S: Sync + Send> FromRequestParts<S> for AccessToken {
     }
 }
 
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub struct InvalidNodeId(uuid::Error);
+
+impl core::fmt::Display for InvalidNodeId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl std::error::Error for InvalidNodeId {}
+
+impl From<uuid::Error> for InvalidNodeId {
+    fn from(value: uuid::Error) -> Self {
+        Self(value)
+    }
+}
+
 /// Unique identifier of the S2 node
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
-pub struct S2NodeId(pub String);
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct S2NodeId(Uuid);
+
+impl From<Uuid> for S2NodeId {
+    fn from(value: Uuid) -> Self {
+        Self(value)
+    }
+}
+
+impl From<S2NodeId> for Uuid {
+    fn from(value: S2NodeId) -> Self {
+        value.0
+    }
+}
+
+impl TryFrom<String> for S2NodeId {
+    type Error = InvalidNodeId;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Ok(Self(Uuid::try_from(value)?))
+    }
+}
+
+impl TryFrom<&str> for S2NodeId {
+    type Error = InvalidNodeId;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        Ok(Self(Uuid::try_from(value)?))
+    }
+}
+
+impl std::ops::Deref for S2NodeId {
+    type Target = Uuid;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for S2NodeId {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl core::fmt::Display for S2NodeId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.as_hyphenated().fmt(f)
+    }
+}
+
+impl S2NodeId {
+    #[expect(clippy::new_without_default, reason = "New uses non-trivial randomness")]
+    pub fn new() -> Self {
+        Self(Uuid::new_v4())
+    }
+}
 
 /// Information about the S2 node
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]

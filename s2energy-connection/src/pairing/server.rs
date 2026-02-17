@@ -117,7 +117,7 @@ impl Server {
         drop(permanent_pairings);
         let (sender, receiver) = tokio::sync::oneshot::channel();
         open_pairings.insert(
-            config.node_description.id.clone(),
+            config.node_description.id,
             PairingRequest {
                 config,
                 sender: ResultSender::Oneshot(sender),
@@ -141,7 +141,7 @@ impl Server {
         drop(open_pairings);
         let (sender, receiver) = tokio::sync::mpsc::channel(PERMANENT_PAIRING_BUFFER_SIZE);
         permanent_pairings.insert(
-            config.node_description.id.clone(),
+            config.node_description.id,
             PermanentPairingRequest {
                 config,
                 sender,
