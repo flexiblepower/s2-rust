@@ -16,9 +16,15 @@ use rustls::pki_types::CertificateDer;
 use sha2::Digest;
 use tokio::time::Instant;
 
-use crate::pairing::{PairingRole, SUPPORTED_PAIRING_VERSIONS};
+use crate::{
+    common::{
+        root,
+        wire::{AccessToken, PairingVersion, S2EndpointDescription, S2NodeDescription, S2NodeId},
+    },
+    pairing::PairingRole,
+};
 
-use super::{EndpointConfig, Error, Network, Pairing, PairingResult, S2EndpointDescription, S2NodeDescription, wire::*};
+use super::{EndpointConfig, Error, Network, Pairing, PairingResult, wire::*};
 
 const PERMANENT_PAIRING_BUFFER_SIZE: usize = 1;
 
@@ -229,10 +235,6 @@ struct AppStateInner {
     permanent_pairings: Mutex<HashMap<S2NodeId, PermanentPairingRequest>>,
     open_pairings: Mutex<HashMap<S2NodeId, PairingRequest>>,
     attempts: Mutex<HashMap<PairingAttemptId, ExpiringPairingState>>,
-}
-
-async fn root() -> Json<&'static [PairingVersion]> {
-    Json(SUPPORTED_PAIRING_VERSIONS)
 }
 
 fn v1_router() -> Router<AppState> {
