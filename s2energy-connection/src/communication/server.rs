@@ -194,6 +194,7 @@ async fn v1_initiate_connection<Store: ServerPairingStore>(
 
     let mut pending_tokens = state.pending_tokens.lock().unwrap();
 
+    // Collisions are unlikely but technically possible.
     let new_access_token = loop {
         let candidate = AccessToken::new(&mut rand::rng());
         if !pending_tokens.contains_key(&candidate) {
