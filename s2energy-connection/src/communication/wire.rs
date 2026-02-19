@@ -83,11 +83,8 @@ impl<S: Sync + Send> FromRequestParts<S> for CommunicationToken {
     type Rejection = StatusCode;
 
     async fn from_request_parts(parts: &mut axum::http::request::Parts, state: &S) -> Result<Self, Self::Rejection> {
-        let Some(token) = Option::<TypedHeader<headers::Authorization<headers::authorization::Bearer>>>::from_request_parts(parts, state)
-            .await
-            .ok()
-            .flatten()
-        else {
+        type BearerHeader = TypedHeader<headers::Authorization<headers::authorization::Bearer>>;
+        let Some(token) = Option::<BearerHeader>::from_request_parts(parts, state).await.ok().flatten() else {
             return Err(StatusCode::UNAUTHORIZED);
         };
 
