@@ -331,8 +331,8 @@ pub struct Pairing {
 }
 
 impl HmacChallenge {
-    pub fn new(rng: &mut impl Rng) -> Self {
-        Self(rng.random())
+    pub fn new(rng: &mut impl Rng, len: usize) -> Self {
+        Self(rng.random_iter().take(len).collect())
     }
 
     pub fn sha256(&self, network: &Network, pairing_token: &[u8]) -> HmacChallengeResponse {
@@ -353,7 +353,7 @@ impl HmacChallenge {
             }
         }
 
-        HmacChallengeResponse(mac.finalize().into_bytes().into())
+        HmacChallengeResponse(mac.finalize().into_bytes().to_vec())
     }
 }
 

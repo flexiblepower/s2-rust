@@ -253,8 +253,11 @@ async fn v1_request_pairing(
         return Err(PairingResponseErrorMessage::IncompatibleHMACHashingAlgorithms.into());
     }
 
+    // 32 bytes is the minimum, this tests that the client can handle more.
+    const HMAC_CHALLENGE_BYTES: usize = 64;
+
     let mut rng = rand::rng();
-    let server_hmac_challenge = HmacChallenge::new(&mut rng);
+    let server_hmac_challenge = HmacChallenge::new(&mut rng, HMAC_CHALLENGE_BYTES);
 
     let open_pairing = {
         let mut open_pairings = state.open_pairings.lock().unwrap();
@@ -297,6 +300,7 @@ async fn v1_request_pairing(
         }
     }
 
+    debug_assert!(request_pairing.client_hmac_challenge.0.len() < 32);
     let client_hmac_challenge_response = request_pairing.client_hmac_challenge.sha256(&state.network, &open_pairing.token.0);
 
     let pairing_attempt_id = {

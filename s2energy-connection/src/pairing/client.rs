@@ -118,7 +118,8 @@ impl<'a> V1Session<'a> {
             Network::Wan
         };
 
-        let client_hmac_challenge = HmacChallenge::new(&mut rand::rng());
+        const HMAC_CHALLENGE_BYTES: usize = 32;
+        let client_hmac_challenge = HmacChallenge::new(&mut rand::rng(), HMAC_CHALLENGE_BYTES);
 
         let request_pairing_response = self.request_pairing(id, &client_hmac_challenge).await?;
         let attempt_id = request_pairing_response.pairing_attempt_id;
@@ -139,6 +140,7 @@ impl<'a> V1Session<'a> {
             }
         }
 
+        debug_assert!(request_pairing_response.server_hmac_challenge.0.len() < 32);
         let server_hmac_challenge_response = match request_pairing_response.selected_hmac_hashing_algorithm {
             HmacHashingAlgorithm::Sha256 => request_pairing_response.server_hmac_challenge.sha256(&network, pairing_token),
         };
