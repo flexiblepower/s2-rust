@@ -34,20 +34,12 @@ pub(crate) enum HmacHashingAlgorithm {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub(crate) struct HmacChallenge(
-    #[serde(
-        serialize_with = "base64_bytes::serialize",
-        deserialize_with = "base64_bytes::deserialize::<_, 32>"
-    )]
-    pub(crate) [u8; 32],
+    #[serde(serialize_with = "base64_bytes::serialize", deserialize_with = "base64_bytes::deserialize")] pub(crate) Vec<u8>,
 );
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub(crate) struct HmacChallengeResponse(
-    #[serde(
-        serialize_with = "base64_bytes::serialize",
-        deserialize_with = "base64_bytes::deserialize::<_, 32>"
-    )]
-    pub(crate) [u8; 32],
+    #[serde(serialize_with = "base64_bytes::serialize", deserialize_with = "base64_bytes::deserialize")] pub(crate) Vec<u8>,
 );
 
 #[derive(Serialize, Deserialize)]
@@ -150,16 +142,13 @@ mod base64_bytes {
         serializer.serialize_str(&encoded)
     }
 
-    pub(crate) fn deserialize<'de, D, const N: usize>(deserializer: D) -> Result<[u8; N], D::Error>
+    pub(crate) fn deserialize<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
     where
         D: Deserializer<'de>,
     {
         let s = String::deserialize(deserializer)?;
         let decoded = STANDARD.decode(&s).map_err(de::Error::custom)?;
 
-        decoded
-            .as_slice()
-            .try_into()
-            .map_err(|_| de::Error::custom(format!("expected {N} bytes after base64 decoding, got {}", decoded.len())))
+        Ok(decoded)
     }
 }
