@@ -331,8 +331,8 @@ pub struct Pairing {
 }
 
 impl HmacChallenge {
-    pub fn new(rng: &mut impl Rng) -> Self {
-        Self(rng.random())
+    pub fn new(rng: &mut impl Rng, len: usize) -> Self {
+        Self(rng.random_iter().take(len).collect())
     }
 
     pub fn sha256(&self, network: &Network, pairing_token: &[u8]) -> HmacChallengeResponse {
@@ -353,7 +353,7 @@ impl HmacChallenge {
             }
         }
 
-        HmacChallengeResponse(mac.finalize().into_bytes().into())
+        HmacChallengeResponse(mac.finalize().into_bytes().to_vec())
     }
 }
 
@@ -374,6 +374,8 @@ pub enum Error {
     AlreadyPending,
     /// Provided token was invalid.
     InvalidToken,
+    /// Provided hmac challenge was invalid, e.g. too short.
+    InvalidHmacChallenge,
     /// The pairing session was cancelled.
     Cancelled,
     /// The remote is of the same type
