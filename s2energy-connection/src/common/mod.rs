@@ -21,8 +21,8 @@ pub(crate) enum BaseError {
 
 pub(crate) async fn negotiate_version(client: &reqwest::Client, url: Url) -> Result<PairingVersion, BaseError> {
     let response = client.get(url).send().await.map_err(|_| BaseError::TransportFailed)?;
-    let status = response.status();
-    if status != StatusCode::OK {
+
+    if response.status() != StatusCode::OK {
         return Err(BaseError::ProtocolError);
     }
 
