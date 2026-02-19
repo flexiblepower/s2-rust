@@ -48,7 +48,7 @@ pub struct S2EndpointDescription {
 }
 
 /// One-time access token for secure access to the S2 message communication channel. It must be renewed every time a client wants to access
-/// the S2 message communication channel by calling the requestToken endpoint. This token is valid for one time login, with a maximum 5
+/// the S2 message communication channel by calling the requestToken endpoint. This token is valid for one time login, with a maximum of 5
 /// years, and should have a minimum length of 32 bytes.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
 pub struct AccessToken(pub String);
@@ -131,7 +131,7 @@ pub enum S2Role {
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum Deployment {
-    /// On a WAN, reachable over the internet
+    /// On a WAN, reachable over the internet.
     Wan,
     /// On the local network, only reachable near the place the device is located.
     Lan,
