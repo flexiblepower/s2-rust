@@ -85,7 +85,7 @@ impl Client {
                     endpoint_description: self.endpoint_description.clone(),
                 };
 
-                let Some((initiate_response, current_token)) = ('found: {
+                let (initiate_response, current_token) = 'found: {
                     for token in pairing.access_tokens().as_ref() {
                         let response = client
                             .post(base_url.join("initiateConnection").unwrap())
@@ -102,16 +102,16 @@ impl Client {
                             return Err(Error::TransportFailed);
                         }
 
-                        break 'found Some((
+                        break 'found (
                             response
                                 .json::<InitiateConnectionResponse>()
                                 .await
                                 .map_err(|_| Error::TransportFailed)?,
                             token.clone(),
-                        ));
+                        );
                     }
-                    None
-                }) else {
+
+                    // Exhausted all the possible options.
                     return Err(Error::NotPaired);
                 };
 
