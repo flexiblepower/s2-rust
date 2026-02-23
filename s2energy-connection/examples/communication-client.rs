@@ -2,6 +2,7 @@ use std::{convert::Infallible, path::PathBuf, sync::Arc};
 use uuid::uuid;
 
 use rustls::pki_types::{CertificateDer, pem::PemObject};
+use s2energy_common::S2Transport;
 use s2energy_connection::{
     AccessToken, MessageVersion, S2NodeId,
     communication::{Client, ClientConfig, ClientPairing, NodeConfig},
@@ -58,17 +59,9 @@ async fn main() {
         client: uuid!("67e55044-10b1-426f-9247-bb680e5fe0c7").into(),
     };
 
-    let connection_info = client.connect(&mut pairing).await.unwrap();
+    let mut connection_info = client.connect(&mut pairing).await.unwrap();
 
-    println!(
-        "Url: {}, token: {}",
-        connection_info.communication_url, connection_info.communication_token.0
-    );
-
-    let connection_info = client.connect(&mut pairing).await.unwrap();
-
-    println!(
-        "Url: {}, token: {}",
-        connection_info.communication_url, connection_info.communication_token.0
-    );
+    connection_info.transport.send("Hello from client").await.unwrap();
+    let received: String = connection_info.transport.receive().await.unwrap();
+    println!("{received}");
 }

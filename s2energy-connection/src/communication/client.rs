@@ -1,14 +1,16 @@
 use std::sync::Arc;
 
+use axum::http;
 use reqwest::{StatusCode, Url};
 use rustls::pki_types::CertificateDer;
+use tokio_tungstenite::{Connector, connect_async_tls_with_config, tungstenite::ClientRequestBuilder};
 
 use crate::{
-    AccessToken, CommunicationProtocol, MessageVersion, S2EndpointDescription, S2NodeDescription, S2NodeId,
+    AccessToken, CommunicationProtocol, S2EndpointDescription, S2NodeId,
     common::negotiate_version,
     communication::{
-        CommunicationResult, Error, NodeConfig,
-        wire::{CommunicationDetails, CommunicationToken, InitiateConnectionRequest, InitiateConnectionResponse},
+        CommunicationResult, ConnectionInfo, Error, NodeConfig, WebSocketTransport,
+        wire::{CommunicationDetails, InitiateConnectionRequest, InitiateConnectionResponse},
     },
 };
 
@@ -26,16 +28,6 @@ pub struct Client {
     config: Arc<NodeConfig>,
     additional_certificates: Vec<CertificateDer<'static>>,
     endpoint_description: Option<S2EndpointDescription>,
-}
-
-pub struct ConnectionInfo {
-    pub server_node_description: Option<S2NodeDescription>,
-    pub server_endpoint_description: Option<S2EndpointDescription>,
-    pub message_version: MessageVersion,
-
-    // TODO: replace with actual transport.
-    pub communication_token: CommunicationToken,
-    pub communication_url: String,
 }
 
 pub trait ClientPairing: Send {
@@ -134,13 +126,41 @@ impl Client {
                 let communication_details = response.json::<CommunicationDetails>().await.map_err(|_| Error::TransportFailed)?;
 
                 match communication_details {
-                    CommunicationDetails::WebSocket(web_socket_communication_details) => Ok(ConnectionInfo {
-                        server_node_description: initiate_response.node_description,
-                        server_endpoint_description: initiate_response.endpoint_description,
-                        message_version: initiate_response.message_version,
-                        communication_token: web_socket_communication_details.websocket_token,
-                        communication_url: web_socket_communication_details.websocket_url,
-                    }),
+                    CommunicationDetails::WebSocket(web_socket_communication_details) => {
+                        let tls_config_builder = rustls::ClientConfig::builder();
+                        let cert_verifier = rustls_platform_verifier::Verifier::new_with_extra_roots(
+                            self.additional_certificates.iter().cloned(),
+                            tls_config_builder.crypto_provider().clone(),
+                        )
+                        .map_err(|_| Error::TransportFailed)?;
+                        let tls_config = tls_config_builder
+                            .dangerous()
+                            .with_custom_certificate_verifier(Arc::new(cert_verifier))
+                            .with_no_client_auth();
+
+                        let request = ClientRequestBuilder::new(
+                            web_socket_communication_details
+                                .websocket_url
+                                .try_into()
+                                .map_err(|_| Error::ProtocolError)?,
+                        )
+                        .with_header(
+                            http::header::AUTHORIZATION.as_str(),
+                            format!("Bearer {}", web_socket_communication_details.websocket_token.0),
+                        );
+
+                        let (websocket, _) =
+                            connect_async_tls_with_config(request, None, false, Some(Connector::Rustls(Arc::new(tls_config))))
+                                .await
+                                .map_err(|_| Error::TransportFailed)?;
+
+                        Ok(ConnectionInfo {
+                            server_node_description: initiate_response.node_description,
+                            server_endpoint_description: initiate_response.endpoint_description,
+                            message_version: initiate_response.message_version,
+                            transport: WebSocketTransport::new_client(websocket),
+                        })
+                    }
                 }
             }
         }
