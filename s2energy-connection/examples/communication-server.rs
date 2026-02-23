@@ -7,6 +7,7 @@ use std::{
 use uuid::uuid;
 
 use axum_server::tls_rustls::RustlsConfig;
+use s2energy_common::S2Transport;
 use s2energy_connection::{
     AccessToken, MessageVersion, S2NodeId,
     communication::{NodeConfig, PairingLookupResult, Server, ServerConfig, ServerPairing, ServerPairingStore},
@@ -81,9 +82,9 @@ impl ServerPairing for MemoryPairingStore {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
-    let server = Server::new(
+    let mut server = Server::new(
         ServerConfig {
-            base_url: "localhost".into(),
+            base_url: "localhost:8005".into(),
             endpoint_description: None,
         },
         MemoryPairingStore::new(),
@@ -100,9 +101,22 @@ async fn main() {
     .await
     .unwrap();
 
-    println!("listening on http://{}", addr);
-    axum_server::bind_rustls(addr, rustls_config)
-        .serve(server.get_router().into_make_service())
-        .await
-        .unwrap();
+    let router = server.get_router();
+    tokio::spawn(async move {
+        println!("listening on http://{}", addr);
+        axum_server::bind_rustls(addr, rustls_config)
+            .serve(router.into_make_service())
+            .await
+            .unwrap();
+    });
+
+    loop {
+        let (pairing, mut connection) = server.next_connection().await;
+        tokio::spawn(async move {
+            println!("New connection between {:?} and {:?}", pairing.client, pairing.server);
+            connection.transport.send("Hello from server").await.unwrap();
+            let received: String = connection.transport.receive().await.unwrap();
+            println!("Received from {:?}: {received}", pairing.client);
+        });
+    }
 }

@@ -7,22 +7,25 @@ use std::{
 use axum::{
     Json, Router,
     extract::State,
-    response::IntoResponse,
+    response::{IntoResponse, Response},
     routing::{get, post},
 };
 use reqwest::StatusCode;
 
 use crate::{
     CommunicationProtocol, MessageVersion, S2EndpointDescription, S2NodeDescription, S2NodeId,
-    common::{root, wire::AccessToken},
+    common::{root, websocket_extractor::WebSocketUpgrade, wire::AccessToken},
     communication::{
-        NodeConfig,
+        ConnectionInfo, NodeConfig, WebSocketTransport,
         wire::{
             CommunicationDetails, CommunicationDetailsErrorMessage, CommunicationToken, InitiateConnectionRequest,
             InitiateConnectionResponse, WebSocketCommunicationDetails,
         },
     },
 };
+
+// Maximum number of pending connections on the channel between the actual server handler and the server api.
+const BUFFER_SIZE: usize = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 /// A pairing to be looked up.
@@ -72,24 +75,27 @@ pub struct ServerConfig {
 
 pub struct Server<Store> {
     app_state: AppState<Store>,
+    connection_receiver: tokio::sync::mpsc::Receiver<(PairingLookup, ConnectionInfo)>,
 }
 
 type AppState<Store> = Arc<AppStateInner<Store>>;
 
 struct AppStateInner<Store> {
     store: Store,
-    pending_tokens: Mutex<HashMap<AccessToken, ExpiringSession>>,
+    pending_tokens: Mutex<HashMap<AccessToken, Expiring<Session>>>,
+    pending_websockets: Mutex<HashMap<CommunicationToken, Expiring<PendingWebsocket>>>,
     base_url: String,
     endpoint_description: Option<S2EndpointDescription>,
+    connection_sender: tokio::sync::mpsc::Sender<(PairingLookup, ConnectionInfo)>,
 }
 
-struct ExpiringSession {
+struct Expiring<S> {
     start_time: tokio::time::Instant,
-    session: Session,
+    session: S,
 }
 
-impl ExpiringSession {
-    fn into_state(self) -> Option<Session> {
+impl<S> Expiring<S> {
+    fn into_state(self) -> Option<S> {
         if self.start_time.elapsed() > Duration::from_secs(15) {
             None
         } else {
@@ -108,15 +114,26 @@ struct Session {
     communication_protocol: CommunicationProtocol,
 }
 
+struct PendingWebsocket {
+    lookup: PairingLookup,
+    node_description: Option<S2NodeDescription>,
+    endpoint_description: Option<S2EndpointDescription>,
+    message_version: MessageVersion,
+}
+
 impl<Store: ServerPairingStore> Server<Store> {
     pub fn new(config: ServerConfig, store: Store) -> Self {
+        let (connection_sender, connection_receiver) = tokio::sync::mpsc::channel(BUFFER_SIZE);
         Server {
             app_state: Arc::new(AppStateInner {
                 store,
                 pending_tokens: Mutex::new(HashMap::new()),
+                pending_websockets: Mutex::new(HashMap::new()),
                 base_url: config.base_url,
                 endpoint_description: config.endpoint_description,
+                connection_sender,
             }),
+            connection_receiver,
         }
     }
 
@@ -128,6 +145,11 @@ impl<Store: ServerPairingStore> Server<Store> {
             .route("/", get(root))
             .nest("/v1", v1_router())
             .with_state(self.app_state.clone())
+    }
+
+    pub async fn next_connection(&mut self) -> (PairingLookup, ConnectionInfo) {
+        // The other end will always exist.
+        self.connection_receiver.recv().await.unwrap()
     }
 }
 
@@ -157,6 +179,7 @@ fn v1_router<Store: ServerPairingStore>() -> Router<AppState<Store>> {
     Router::new()
         .route("/initiateConnection", post(v1_initiate_connection))
         .route("/confirmAccessToken", post(v1_confirm_access_token))
+        .route("/websocket", get(v1_websocket))
 }
 
 async fn v1_initiate_connection<Store: ServerPairingStore>(
@@ -204,7 +227,7 @@ async fn v1_initiate_connection<Store: ServerPairingStore>(
 
     pending_tokens.insert(
         new_access_token.clone(),
-        ExpiringSession {
+        Expiring {
             start_time: tokio::time::Instant::now(),
             session: Session {
                 lookup,
@@ -256,9 +279,61 @@ async fn v1_confirm_access_token<Store: ServerPairingStore>(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    // TODO: Implement websocket communication
+    let websocket_token = {
+        let mut pending_websockets = state.pending_websockets.lock().unwrap();
+        let websocket_token = loop {
+            let websocket_token = CommunicationToken::new(&mut rand::rng());
+            if !pending_websockets.contains_key(&websocket_token) {
+                break websocket_token;
+            }
+        };
+        pending_websockets.insert(
+            websocket_token.clone(),
+            Expiring {
+                start_time: tokio::time::Instant::now(),
+                session: PendingWebsocket {
+                    lookup: session.lookup,
+                    node_description: session.node_description,
+                    endpoint_description: session.endpoint_description,
+                    message_version: session.message_version,
+                },
+            },
+        );
+        websocket_token
+    };
+
     Ok(CommunicationDetails::WebSocket(WebSocketCommunicationDetails {
-        websocket_token: CommunicationToken::new(&mut rand::rng()),
+        websocket_token,
         websocket_url: format!("wss://{}/v1/websocket", state.base_url),
     }))
+}
+
+async fn v1_websocket<Store: ServerPairingStore>(
+    State(state): State<AppState<Store>>,
+    token: CommunicationToken,
+    ws: WebSocketUpgrade,
+) -> Response {
+    let Some(pending_websocket) = ({
+        let mut pending_websocket = state.pending_websockets.lock().unwrap();
+
+        pending_websocket.remove(&token).and_then(Expiring::into_state)
+    }) else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+
+    ws.on_upgrade(|socket| async move {
+        state
+            .connection_sender
+            .send((
+                pending_websocket.lookup,
+                ConnectionInfo {
+                    server_node_description: pending_websocket.node_description,
+                    server_endpoint_description: pending_websocket.endpoint_description,
+                    message_version: pending_websocket.message_version,
+                    transport: WebSocketTransport::new_server(socket),
+                },
+            ))
+            .await
+            .ok();
+    })
 }

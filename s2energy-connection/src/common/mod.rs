@@ -1,5 +1,6 @@
 use axum::Json;
 
+pub(crate) mod websocket_extractor;
 pub(crate) mod wire;
 
 use reqwest::{StatusCode, Url};

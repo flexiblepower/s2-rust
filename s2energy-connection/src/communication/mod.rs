@@ -1,11 +1,13 @@
-use crate::{MessageVersion, S2NodeDescription, common::BaseError};
+use crate::{MessageVersion, S2EndpointDescription, S2NodeDescription, common::BaseError};
 
 mod client;
 mod server;
+mod websocket;
 mod wire;
 
-pub use client::{Client, ClientConfig, ClientPairing, ConnectionInfo};
+pub use client::{Client, ClientConfig, ClientPairing};
 pub use server::{PairingLookup, PairingLookupResult, Server, ServerConfig, ServerPairing, ServerPairingStore};
+pub use websocket::{WebSocketError, WebSocketTransport};
 
 /// Full description of an S2 endpoint
 #[derive(Debug, Clone)]
@@ -92,3 +94,11 @@ impl From<BaseError> for Error {
 
 /// Convenience type for [`Result<T, Error>`]
 pub type CommunicationResult<T> = Result<T, Error>;
+
+pub struct ConnectionInfo {
+    pub server_node_description: Option<S2NodeDescription>,
+    pub server_endpoint_description: Option<S2EndpointDescription>,
+    pub message_version: MessageVersion,
+
+    pub transport: WebSocketTransport,
+}
