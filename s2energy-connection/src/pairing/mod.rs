@@ -182,6 +182,7 @@
 //! how a simple server setup can be done using the [`axum-server`](https://docs.rs/axum-server/0.8.0/axum_server/) crate.
 #![warn(clippy::clone_on_copy)]
 mod client;
+mod error;
 mod server;
 mod transport;
 mod wire;
@@ -191,11 +192,11 @@ use rand::CryptoRng;
 use wire::{HmacChallenge, HmacChallengeResponse};
 
 pub use client::{Client, ClientConfig, PairingRemote};
+pub use error::{ConfigError, Error, ErrorKind};
 pub use server::{PairingToken, PendingPairing, RepeatedPairing, Server, ServerConfig};
 
 use crate::{
-    CommunicationProtocol, Deployment, MessageVersion, S2EndpointDescription, S2NodeDescription, S2Role,
-    common::{BaseError, wire::AccessToken},
+    CommunicationProtocol, Deployment, MessageVersion, S2EndpointDescription, S2NodeDescription, S2Role, common::wire::AccessToken,
 };
 
 /// Full description of an S2 endpoint
@@ -298,13 +299,6 @@ impl ConfigBuilder {
     }
 }
 
-/// Error for problems with inconsistent [`EndpointConfig`]
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum ConfigError {
-    /// The [`EndpointConfig`] doesn't have an `connection_initiate_url` even though it is needed for the configuration to make sense.
-    MissingInitiateUrl,
-}
-
 /// Role for the communication protocol assigned to the node in the pairing process
 pub enum PairingRole {
     /// This node must initiate the connection protocol.
@@ -356,47 +350,6 @@ impl HmacChallenge {
         }
 
         HmacChallengeResponse(mac.finalize().into_bytes().to_vec())
-    }
-}
-
-/// Error that occured during the pairing process.
-#[derive(Debug, Clone)]
-pub enum Error {
-    /// Invalid URL for remote
-    InvalidUrl,
-    /// Something went wrong in the transport layers
-    TransportFailed,
-    /// The remote reacted outside our expectations
-    ProtocolError,
-    /// No shared version with the remote.
-    NoSupportedVersion,
-    /// Session timed out.
-    Timeout,
-    /// Already a pending pairing session with that node id.
-    AlreadyPending,
-    /// Provided token was invalid.
-    InvalidToken,
-    /// The pairing session was cancelled.
-    Cancelled,
-    /// The remote is of the same type
-    RemoteOfSameType,
-    /// The configuration was invalid
-    InvalidConfig(ConfigError),
-}
-
-impl From<BaseError> for Error {
-    fn from(value: BaseError) -> Self {
-        match value {
-            BaseError::TransportFailed => Self::TransportFailed,
-            BaseError::ProtocolError => Self::ProtocolError,
-            BaseError::NoSupportedVersion => Self::NoSupportedVersion,
-        }
-    }
-}
-
-impl From<ConfigError> for Error {
-    fn from(value: ConfigError) -> Self {
-        Self::InvalidConfig(value)
     }
 }
 

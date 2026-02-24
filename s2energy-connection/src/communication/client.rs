@@ -9,7 +9,7 @@ use crate::{
     AccessToken, CommunicationProtocol, S2EndpointDescription, S2NodeId,
     common::negotiate_version,
     communication::{
-        CommunicationResult, ConnectionInfo, Error, NodeConfig, WebSocketTransport,
+        CommunicationResult, ConnectionInfo, Error, ErrorKind, NodeConfig, WebSocketTransport,
         wire::{CommunicationDetails, InitiateConnectionRequest, InitiateConnectionResponse},
     },
 };
@@ -31,7 +31,7 @@ pub struct Client {
 }
 
 pub trait ClientPairing: Send {
-    type Error: std::error::Error;
+    type Error: std::error::Error + 'static;
 
     fn client_id(&self) -> S2NodeId;
     fn server_id(&self) -> S2NodeId;
@@ -58,9 +58,9 @@ impl Client {
                     .filter_map(|v| reqwest::Certificate::from_der(v).ok()),
             )
             .build()
-            .map_err(|_| Error::TransportFailed)?;
+            .map_err(|e| Error::new(ErrorKind::TransportFailed, e))?;
 
-        let communication_url = Url::parse(pairing.communication_url().as_ref()).map_err(|_| Error::InvalidUrl)?;
+        let communication_url = Url::parse(pairing.communication_url().as_ref()).map_err(|e| Error::new(ErrorKind::InvalidUrl, e))?;
 
         let version = negotiate_version(&client, communication_url.clone()).await?;
 
@@ -85,45 +85,48 @@ impl Client {
                             .json(&request)
                             .send()
                             .await
-                            .map_err(|_| Error::TransportFailed)?;
+                            .map_err(|e| Error::new(ErrorKind::TransportFailed, e))?;
 
                         if response.status() == StatusCode::UNAUTHORIZED {
                             continue;
                         }
                         if response.status() != StatusCode::OK {
-                            return Err(Error::TransportFailed);
+                            return Err(ErrorKind::ProtocolError.into());
                         }
 
                         break 'found (
                             response
                                 .json::<InitiateConnectionResponse>()
                                 .await
-                                .map_err(|_| Error::TransportFailed)?,
+                                .map_err(|e| Error::new(ErrorKind::TransportFailed, e))?,
                             token.clone(),
                         );
                     }
 
                     // Exhausted all the possible options.
-                    return Err(Error::NotPaired);
+                    return Err(ErrorKind::NotPaired.into());
                 };
 
                 pairing
                     .set_access_tokens(vec![current_token, initiate_response.access_token.clone()])
                     .await
-                    .map_err(|_| Error::Storage)?;
+                    .map_err(|e| Error::new(ErrorKind::Storage, Box::new(e) as Box<_>))?;
 
                 let response = client
                     .post(base_url.join("confirmAccessToken").unwrap())
                     .bearer_auth(&initiate_response.access_token.0)
                     .send()
                     .await
-                    .map_err(|_| Error::TransportFailed)?;
+                    .map_err(|e| Error::new(ErrorKind::TransportFailed, e))?;
 
                 if response.status() != StatusCode::OK {
-                    return Err(Error::ProtocolError);
+                    return Err(ErrorKind::ProtocolError.into());
                 }
 
-                let communication_details = response.json::<CommunicationDetails>().await.map_err(|_| Error::TransportFailed)?;
+                let communication_details = response
+                    .json::<CommunicationDetails>()
+                    .await
+                    .map_err(|e| Error::new(ErrorKind::TransportFailed, e))?;
 
                 match communication_details {
                     CommunicationDetails::WebSocket(web_socket_communication_details) => {
@@ -132,7 +135,7 @@ impl Client {
                             self.additional_certificates.iter().cloned(),
                             tls_config_builder.crypto_provider().clone(),
                         )
-                        .map_err(|_| Error::TransportFailed)?;
+                        .map_err(|e| Error::new(ErrorKind::TransportFailed, e))?;
                         let tls_config = tls_config_builder
                             .dangerous()
                             .with_custom_certificate_verifier(Arc::new(cert_verifier))
@@ -142,7 +145,7 @@ impl Client {
                             web_socket_communication_details
                                 .websocket_url
                                 .try_into()
-                                .map_err(|_| Error::ProtocolError)?,
+                                .map_err(|e| Error::new(ErrorKind::ProtocolError, e))?,
                         )
                         .with_header(
                             http::header::AUTHORIZATION.as_str(),
@@ -152,7 +155,7 @@ impl Client {
                         let (websocket, _) =
                             connect_async_tls_with_config(request, None, false, Some(Connector::Rustls(Arc::new(tls_config))))
                                 .await
-                                .map_err(|_| Error::TransportFailed)?;
+                                .map_err(|e| Error::new(ErrorKind::TransportFailed, e))?;
 
                         Ok(ConnectionInfo {
                             server_node_description: initiate_response.node_description,

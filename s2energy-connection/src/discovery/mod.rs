@@ -1,3 +1,5 @@
+mod error;
+
 use std::collections::HashMap;
 
 use thiserror::Error;
@@ -7,18 +9,15 @@ use zeroconf_tokio::{
     prelude::{TMdnsBrowser, TMdnsService, TTxtRecord},
 };
 
-use crate::{Deployment, S2Role};
+use crate::{
+    Deployment, S2Role,
+    discovery::error::{Error, ErrorKind},
+};
 
 #[derive(Debug, Clone, Error, Eq, PartialEq)]
 pub enum BuilderError {
     #[error("Invalid url provided")]
     InvalidUrl,
-}
-
-#[derive(Debug, Clone, Error, Eq, PartialEq)]
-pub enum Error {
-    #[error("mDNS failed")]
-    MdnsError,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -262,9 +261,9 @@ pub async fn advertise(port: u16, endpoint: DiscoverableS2Endpoint) -> Result<S2
 
     service.set_txt_record(TxtRecord::from(attributes));
 
-    let mut advertised_service = MdnsServiceAsync::new(service).map_err(|_| Error::MdnsError)?;
+    let mut advertised_service = MdnsServiceAsync::new(service).map_err(|e| Error::new(ErrorKind::MdnsError, e))?;
 
-    advertised_service.start().await.map_err(|_| Error::MdnsError)?;
+    advertised_service.start().await.map_err(|e| Error::new(ErrorKind::MdnsError, e))?;
 
     Ok(S2Advertisement {
         advertisement: advertised_service,
@@ -291,9 +290,9 @@ impl S2Discoverer {
         let mut browser = MdnsBrowserAsync::new(MdnsBrowser::new(
             ServiceType::with_sub_types("s2emp", "tcp", vec![role.service_subtype()]).unwrap(),
         ))
-        .map_err(|_| Error::MdnsError)?;
+        .map_err(|e| Error::new(ErrorKind::MdnsError, e))?;
 
-        browser.start().await.map_err(|_| Error::MdnsError)?;
+        browser.start().await.map_err(|e| Error::new(ErrorKind::MdnsError, e))?;
 
         Ok(Self { browser })
     }
@@ -305,9 +304,9 @@ impl S2Discoverer {
                 .next()
                 .await
                 .transpose()
-                .map_err(|_| Error::MdnsError)
+                .map_err(|e| Error::new(ErrorKind::MdnsError, e))
                 .transpose()
-                .unwrap_or(Err(Error::MdnsError))?;
+                .unwrap_or(Err(ErrorKind::MdnsError.into()))?;
 
             match event {
                 zeroconf_tokio::BrowserEvent::Add(service_discovery) => {

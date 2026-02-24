@@ -7,7 +7,9 @@ use rustls::{
 };
 use sha2::Digest;
 
-use super::{Error, PairingResult};
+use crate::pairing::Error;
+
+use super::{ErrorKind, PairingResult};
 
 #[derive(Debug)]
 struct HashingCertificateVerifier {
@@ -156,7 +158,7 @@ pub(crate) fn hash_providing_https_client() -> PairingResult<(reqwest::Client, H
     let self_signed_state = Arc::new(OnceLock::new());
     let state = self_signed_state.clone();
     let verifier = HashingCertificateVerifier {
-        inner: rustls_platform_verifier::Verifier::new(crypto_provider).map_err(|_| Error::TransportFailed)?,
+        inner: rustls_platform_verifier::Verifier::new(crypto_provider).map_err(|e| Error::new(ErrorKind::TransportFailed, e))?,
         self_signed_state,
     };
     let client_config = rustls_config_builder
@@ -167,7 +169,7 @@ pub(crate) fn hash_providing_https_client() -> PairingResult<(reqwest::Client, H
     let client = reqwest::Client::builder()
         .use_preconfigured_tls(client_config)
         .build()
-        .map_err(|_| Error::TransportFailed)?;
+        .map_err(|e| Error::new(ErrorKind::TransportFailed, e))?;
 
     Ok((client, HashProvider { state }))
 }
