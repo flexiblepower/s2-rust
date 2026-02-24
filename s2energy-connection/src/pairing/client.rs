@@ -6,11 +6,11 @@ use rustls::pki_types::CertificateDer;
 use crate::common::negotiate_version;
 use crate::common::wire::{AccessToken, Deployment, PairingVersion, S2NodeId, S2Role};
 use crate::pairing::transport::{HashProvider, hash_providing_https_client};
-use crate::pairing::{Pairing, PairingRole};
+use crate::pairing::{Error, Pairing, PairingRole};
 
 use super::EndpointConfig;
 use super::wire::*;
-use super::{Error, Network, PairingResult};
+use super::{ErrorKind, Network, PairingResult};
 
 /// Remote endpoint to pair with
 pub struct PairingRemote {
@@ -51,7 +51,7 @@ impl Client {
 
     /// Pair with a given remote S2 node, using the provided token.
     pub async fn pair(&self, remote: PairingRemote, pairing_token: &[u8]) -> PairingResult<Pairing> {
-        let url = Url::try_from(remote.url.as_str()).map_err(|_| Error::InvalidUrl)?;
+        let url = Url::try_from(remote.url.as_str()).map_err(|e| Error::new(ErrorKind::InvalidUrl, e))?;
 
         let (client, certhash) = if url.domain().map(|v| v.ends_with(".local")).unwrap_or_default() {
             let (client, certhash) = hash_providing_https_client()?;
@@ -65,7 +65,7 @@ impl Client {
                             .filter_map(|v| reqwest::Certificate::from_der(v).ok()),
                     )
                     .build()
-                    .map_err(|_| Error::TransportFailed)?,
+                    .map_err(|e| Error::new(ErrorKind::TransportFailed, e))?,
                 None,
             )
         };
@@ -112,7 +112,7 @@ impl<'a> V1Session<'a> {
                     fingerprint: hash.try_into().unwrap(),
                 }
             } else {
-                return Err(Error::ProtocolError);
+                return Err(ErrorKind::ProtocolError.into());
             }
         } else {
             Network::Wan
@@ -135,7 +135,7 @@ impl<'a> V1Session<'a> {
 
                 if expected != request_pairing_response.client_hmac_challenge_response {
                     let _ = self.finalize(&attempt_id, false).await;
-                    return Err(Error::InvalidToken);
+                    return Err(ErrorKind::InvalidToken.into());
                 }
             }
         }
@@ -153,7 +153,7 @@ impl<'a> V1Session<'a> {
         let role = match (our_deployment, our_role, remote_deployment, remote_role) {
             (_, S2Role::Rm, _, S2Role::Rm) | (_, S2Role::Cem, _, S2Role::Cem) => {
                 let _ = self.finalize(&attempt_id, false).await;
-                return Err(Error::RemoteOfSameType);
+                return Err(ErrorKind::RemoteOfSameType.into());
             }
             (Deployment::Lan, _, Deployment::Wan, _) => CommunicationRole::CommunicationClient,
             // unwrap is okay here, as Deployment::Wan or S2Role::Cem locally means we will ALWAYS have a connection initiate url.
@@ -224,11 +224,14 @@ impl<'a> V1Session<'a> {
             .json(&request)
             .send()
             .await
-            .map_err(|_| Error::TransportFailed)?;
+            .map_err(|e| Error::new(ErrorKind::TransportFailed, e))?;
         if response.status() != StatusCode::OK {
-            return Err(Error::ProtocolError);
+            return Err(ErrorKind::ProtocolError.into());
         }
-        let connection_details = response.json::<ConnectionDetails>().await.map_err(|_| Error::ProtocolError)?;
+        let connection_details = response
+            .json::<ConnectionDetails>()
+            .await
+            .map_err(|e| Error::new(ErrorKind::ProtocolError, e))?;
         Ok(connection_details)
     }
 
@@ -253,9 +256,9 @@ impl<'a> V1Session<'a> {
             .json(&request)
             .send()
             .await
-            .map_err(|_| Error::TransportFailed)?;
+            .map_err(|e| Error::new(ErrorKind::TransportFailed, e))?;
         if response.status() != StatusCode::NO_CONTENT {
-            return Err(Error::ProtocolError);
+            return Err(ErrorKind::ProtocolError.into());
         }
 
         Ok(())
@@ -278,11 +281,14 @@ impl<'a> V1Session<'a> {
             .json(&request)
             .send()
             .await
-            .map_err(|_| Error::TransportFailed)?;
+            .map_err(|e| Error::new(ErrorKind::TransportFailed, e))?;
         if response.status() != StatusCode::OK {
-            return Err(Error::ProtocolError);
+            return Err(ErrorKind::ProtocolError.into());
         }
-        let request_pairing_response = response.json::<RequestPairingResponse>().await.map_err(|_| Error::ProtocolError)?;
+        let request_pairing_response = response
+            .json::<RequestPairingResponse>()
+            .await
+            .map_err(|e| Error::new(ErrorKind::ProtocolError, e))?;
         Ok(request_pairing_response)
     }
 
@@ -294,9 +300,9 @@ impl<'a> V1Session<'a> {
             .json(&success)
             .send()
             .await
-            .map_err(|_| Error::TransportFailed)?;
+            .map_err(|e| Error::new(ErrorKind::TransportFailed, e))?;
         if response.status() != StatusCode::NO_CONTENT {
-            return Err(Error::ProtocolError);
+            return Err(ErrorKind::ProtocolError.into());
         }
 
         Ok(())

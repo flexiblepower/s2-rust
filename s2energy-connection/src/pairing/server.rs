@@ -24,7 +24,7 @@ use crate::{
     pairing::PairingRole,
 };
 
-use super::{EndpointConfig, Error, Network, Pairing, PairingResult, wire::*};
+use super::{EndpointConfig, ErrorKind, Network, Pairing, PairingResult, wire::*};
 
 const PERMANENT_PAIRING_BUFFER_SIZE: usize = 1;
 
@@ -55,7 +55,7 @@ pub struct PendingPairing {
 impl PendingPairing {
     /// Wait for the result of the pairing transaction.
     pub async fn result(self) -> PairingResult<Pairing> {
-        self.receiver.await.unwrap_or(Err(Error::Timeout))
+        self.receiver.await.unwrap_or(Err(ErrorKind::Timeout.into()))
     }
 }
 
@@ -104,15 +104,15 @@ impl Server {
     }
 
     /// Start a one-time pairing session for the given endpoint using the given token.
-    pub fn pair_once(&self, config: Arc<EndpointConfig>, pairing_token: PairingToken) -> Result<PendingPairing, Error> {
+    pub fn pair_once(&self, config: Arc<EndpointConfig>, pairing_token: PairingToken) -> Result<PendingPairing, ErrorKind> {
         if config.connection_initiate_url.is_none() {
-            return Err(Error::InvalidConfig(super::ConfigError::MissingInitiateUrl));
+            return Err(ErrorKind::InvalidConfig(super::ConfigError::MissingInitiateUrl));
         }
 
         let mut open_pairings = self.state.open_pairings.lock().unwrap();
         let mut permanent_pairings = self.state.permanent_pairings.lock().unwrap();
         if open_pairings.contains_key(&config.node_description.id) || permanent_pairings.contains_key(&config.node_description.id) {
-            return Err(Error::AlreadyPending);
+            return Err(ErrorKind::AlreadyPending);
         }
         drop(permanent_pairings);
         let (sender, receiver) = tokio::sync::oneshot::channel();
@@ -128,15 +128,15 @@ impl Server {
     }
 
     /// Allow repeated pairing sessions for the given endpoing using the given token.
-    pub fn pair_repeated(&self, config: Arc<EndpointConfig>, pairing_token: PairingToken) -> Result<RepeatedPairing, Error> {
+    pub fn pair_repeated(&self, config: Arc<EndpointConfig>, pairing_token: PairingToken) -> Result<RepeatedPairing, ErrorKind> {
         if config.connection_initiate_url.is_none() {
-            return Err(Error::InvalidConfig(super::ConfigError::MissingInitiateUrl));
+            return Err(ErrorKind::InvalidConfig(super::ConfigError::MissingInitiateUrl));
         }
 
         let mut open_pairings = self.state.open_pairings.lock().unwrap();
         let mut permanent_pairings = self.state.permanent_pairings.lock().unwrap();
         if open_pairings.contains_key(&config.node_description.id) || permanent_pairings.contains_key(&config.node_description.id) {
-            return Err(Error::AlreadyPending);
+            return Err(ErrorKind::AlreadyPending);
         }
         drop(open_pairings);
         let (sender, receiver) = tokio::sync::mpsc::channel(PERMANENT_PAIRING_BUFFER_SIZE);
@@ -361,7 +361,10 @@ async fn v1_request_connection_details(
             let expected = state.challenge.sha256(&app_state.network, &state.token.0);
             if expected != req.server_hmac_challenge_response {
                 attempts.remove(&pairing_attempt_id);
-                return (Err(StatusCode::FORBIDDEN), Some(state.sender.send(Err(Error::InvalidToken))));
+                return (
+                    Err(StatusCode::FORBIDDEN),
+                    Some(state.sender.send(Err(ErrorKind::InvalidToken.into()))),
+                );
             }
 
             let mut rng = rand::rng();
@@ -417,7 +420,7 @@ async fn v1_post_connection_details(
             let expected = state.challenge.sha256(&app_state.network, &state.token.0);
             if expected != req.server_hmac_challenge_response {
                 attempts.remove(&pairing_attempt_id);
-                return (StatusCode::FORBIDDEN, Some(state.sender.send(Err(Error::InvalidToken))));
+                return (StatusCode::FORBIDDEN, Some(state.sender.send(Err(ErrorKind::InvalidToken.into()))));
             }
 
             // Do better error handling here than unwrap
@@ -478,7 +481,7 @@ async fn v1_finalize_pairing(State(state): State<AppState>, headers: HeaderMap, 
             match state {
                 PairingState::Empty => { /* should never happen, but fine to ignore */ }
                 PairingState::Initial(InitialPairingState { sender, .. }) | PairingState::Complete(CompletePairingState { sender, .. }) => {
-                    sender.send(Err(Error::Cancelled)).await;
+                    sender.send(Err(ErrorKind::Cancelled.into())).await;
                 }
             }
 

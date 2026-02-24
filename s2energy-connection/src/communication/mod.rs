@@ -1,11 +1,13 @@
-use crate::{MessageVersion, S2EndpointDescription, S2NodeDescription, common::BaseError};
+use crate::{MessageVersion, S2EndpointDescription, S2NodeDescription};
 
 mod client;
+mod error;
 mod server;
 mod websocket;
 mod wire;
 
 pub use client::{Client, ClientConfig, ClientPairing};
+pub use error::{Error, ErrorKind};
 pub use server::{PairingLookup, PairingLookupResult, Server, ServerConfig, ServerPairing, ServerPairingStore};
 pub use websocket::{WebSocketError, WebSocketTransport};
 
@@ -59,35 +61,6 @@ impl ConfigBuilder {
         NodeConfig {
             node_description: self.node_description,
             supported_message_versions: self.supported_message_versions,
-        }
-    }
-}
-
-/// Error that occured during the communication process.
-#[derive(Debug, Clone)]
-pub enum Error {
-    /// Invalid URL for remote
-    InvalidUrl,
-    /// Something went wrong in the transport layers
-    TransportFailed,
-    /// The remote reacted outside our expectations
-    ProtocolError,
-    /// No shared version with the remote.
-    NoSupportedVersion,
-    /// The nodes are no longer paired
-    Unpaired,
-    /// The nodes were not paired
-    NotPaired,
-    /// Storage failed to persist token
-    Storage,
-}
-
-impl From<BaseError> for Error {
-    fn from(value: BaseError) -> Self {
-        match value {
-            BaseError::TransportFailed => Self::TransportFailed,
-            BaseError::ProtocolError => Self::ProtocolError,
-            BaseError::NoSupportedVersion => Self::NoSupportedVersion,
         }
     }
 }
