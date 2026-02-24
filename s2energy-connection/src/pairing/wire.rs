@@ -87,11 +87,11 @@ pub(crate) struct PairingAttemptId(String);
 impl PairingAttemptId {
     pub const HEADER_NAME: &'static str = "authorization";
 
-    pub fn new(rng: &mut impl rand::Rng) -> Self {
+    pub fn new(rng: &mut impl rand::CryptoRng) -> Self {
         use base64::{Engine as _, engine::general_purpose::STANDARD};
 
         let mut bytes = [0u8; 32];
-        rng.fill(&mut bytes);
+        rng.fill_bytes(&mut bytes);
 
         let encoded = STANDARD.encode(bytes);
         Self(encoded)
