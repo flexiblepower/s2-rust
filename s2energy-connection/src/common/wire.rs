@@ -2,15 +2,16 @@ use axum::extract::FromRequestParts;
 use axum_extra::{TypedHeader, headers};
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
+use tracing::info;
 use uuid::Uuid;
 
-#[derive(Serialize, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum PairingVersion {
     V1,
 }
 
-#[derive(Deserialize, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum WirePairingVersion {
     V1,
@@ -81,6 +82,7 @@ impl<S: Sync + Send> FromRequestParts<S> for AccessToken {
             .ok()
             .flatten()
         else {
+            info!(uri = ?parts.uri, "Missing or invalid authorization header.");
             return Err(StatusCode::UNAUTHORIZED);
         };
 

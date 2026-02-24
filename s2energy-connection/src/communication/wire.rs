@@ -3,6 +3,7 @@ use axum_extra::{TypedHeader, headers};
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use tracing::info;
 
 use crate::{CommunicationProtocol, MessageVersion, S2EndpointDescription, S2NodeDescription, S2NodeId, common::wire::AccessToken};
 
@@ -85,6 +86,7 @@ impl<S: Sync + Send> FromRequestParts<S> for CommunicationToken {
     async fn from_request_parts(parts: &mut axum::http::request::Parts, state: &S) -> Result<Self, Self::Rejection> {
         type BearerHeader = TypedHeader<headers::Authorization<headers::authorization::Bearer>>;
         let Some(token) = Option::<BearerHeader>::from_request_parts(parts, state).await.ok().flatten() else {
+            info!(uri = ?parts.uri, "Missing or invalid authorization header.");
             return Err(StatusCode::UNAUTHORIZED);
         };
 

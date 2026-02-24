@@ -24,6 +24,7 @@ sha2.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tokio-tungstenite.workspace = true
+tracing.workspace = true
 url.workspace = true
 uuid.workspace = true
 zeroconf-tokio.workspace = true
@@ -31,3 +32,4 @@ zeroconf-tokio.workspace = true
 [dev-dependencies]
 axum-server.workspace = true
 tokio = { workspace = true, features = ["signal"] }
+tracing-subscriber.workspace = true

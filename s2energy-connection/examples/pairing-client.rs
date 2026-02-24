@@ -5,11 +5,17 @@ use s2energy_connection::{
     Deployment, MessageVersion, S2NodeDescription, S2Role,
     pairing::{Client, ClientConfig, EndpointConfig, PairingRemote},
 };
+use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
 const PAIRING_TOKEN: &[u8] = &[1, 2, 3];
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
+    tracing_subscriber::registry()
+        .with(fmt::layer())
+        .with(EnvFilter::from_default_env())
+        .init();
+
     let config = EndpointConfig::builder(
         S2NodeDescription {
             id: uuid!("67e55044-10b1-426f-9247-bb680e5fe0c7").into(),

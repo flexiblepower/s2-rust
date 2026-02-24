@@ -7,6 +7,7 @@ use s2energy_connection::{
     AccessToken, MessageVersion, S2NodeId,
     communication::{Client, ClientConfig, ClientPairing, NodeConfig},
 };
+use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
 struct MemoryPairing {
     communication_url: String,
@@ -42,6 +43,11 @@ impl ClientPairing for &mut MemoryPairing {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
+    tracing_subscriber::registry()
+        .with(fmt::layer())
+        .with(EnvFilter::from_default_env())
+        .init();
+
     let client = Client::new(
         ClientConfig {
             additional_certificates: vec![

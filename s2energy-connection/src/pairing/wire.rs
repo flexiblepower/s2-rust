@@ -26,7 +26,7 @@ pub(crate) enum PairingResponseErrorMessage {
     Other,
 }
 
-#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash)]
 #[serde(rename_all = "UPPERCASE")]
 pub(crate) enum HmacHashingAlgorithm {
     Sha256,

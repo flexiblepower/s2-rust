@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use reqwest::{StatusCode, Url};
 use rustls::pki_types::CertificateDer;
+use tracing::{debug, trace};
 
 use crate::common::negotiate_version;
 use crate::common::wire::{AccessToken, Deployment, PairingVersion, S2NodeId, S2Role};
@@ -13,6 +14,7 @@ use super::wire::*;
 use super::{ErrorKind, Network, PairingResult};
 
 /// Remote endpoint to pair with
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PairingRemote {
     /// URL at which the remote endpoint can be reached
     pub url: String,
@@ -50,7 +52,9 @@ impl Client {
     }
 
     /// Pair with a given remote S2 node, using the provided token.
+    #[tracing::instrument(skip_all, fields(local = %self.config.node_description.id, remote = ?remote), level = tracing::Level::ERROR)]
     pub async fn pair(&self, remote: PairingRemote, pairing_token: &[u8]) -> PairingResult<Pairing> {
+        trace!("Start pairing with new remote.");
         let url = Url::try_from(remote.url.as_str()).map_err(|e| Error::new(ErrorKind::InvalidUrl, e))?;
 
         let (client, certhash) = if url.domain().map(|v| v.ends_with(".local")).unwrap_or_default() {
@@ -69,6 +73,9 @@ impl Client {
                 None,
             )
         };
+
+        trace!("Prepared reqwest client.");
+
         let pairing_version = negotiate_version(&client, url.clone()).await?;
 
         match pairing_version {
@@ -118,6 +125,8 @@ impl<'a> V1Session<'a> {
             Network::Wan
         };
 
+        trace!(?network, "Determined network type of remote.");
+
         const HMAC_CHALLENGE_BYTES: usize = 32;
         let client_hmac_challenge = HmacChallenge::new(&mut rand::rng(), HMAC_CHALLENGE_BYTES);
 
@@ -128,6 +137,8 @@ impl<'a> V1Session<'a> {
             .deployment
             .unwrap_or_else(|| network.as_deployment());
         let remote_role = request_pairing_response.server_s2_node_description.role;
+
+        trace!("Requested pairing from remote.");
 
         match request_pairing_response.selected_hmac_hashing_algorithm {
             HmacHashingAlgorithm::Sha256 => {
@@ -140,10 +151,14 @@ impl<'a> V1Session<'a> {
             }
         }
 
+        trace!("Validated remote has same pairing token.");
+
         debug_assert!(request_pairing_response.server_hmac_challenge.0.len() >= 32);
         let server_hmac_challenge_response = match request_pairing_response.selected_hmac_hashing_algorithm {
             HmacHashingAlgorithm::Sha256 => request_pairing_response.server_hmac_challenge.sha256(&network, pairing_token),
         };
+
+        trace!("Computed pairing token challenge response.");
 
         enum CommunicationRole {
             CommunicationServer { initiate_connection_url: String },
@@ -162,6 +177,8 @@ impl<'a> V1Session<'a> {
             },
             (_, S2Role::Rm, _, S2Role::Cem) => CommunicationRole::CommunicationClient,
         };
+
+        trace!("Determined communication role.");
 
         let pairing = match role {
             CommunicationRole::CommunicationServer { initiate_connection_url } => {
@@ -204,7 +221,11 @@ impl<'a> V1Session<'a> {
             }
         };
 
+        trace!("Exchanged communication details.");
+
         self.finalize(&attempt_id, true).await?;
+
+        trace!("Confirmed pairing with remote.");
 
         Ok(pairing)
     }
@@ -226,6 +247,7 @@ impl<'a> V1Session<'a> {
             .await
             .map_err(|e| Error::new(ErrorKind::TransportFailed, e))?;
         if response.status() != StatusCode::OK {
+            debug!(status = ?response.status(), "Unexpected status code in response to requestConnectionDetails.");
             return Err(ErrorKind::ProtocolError.into());
         }
         let connection_details = response
@@ -258,6 +280,7 @@ impl<'a> V1Session<'a> {
             .await
             .map_err(|e| Error::new(ErrorKind::TransportFailed, e))?;
         if response.status() != StatusCode::NO_CONTENT {
+            debug!(status = ?response.status(), "Unexpected status code in response to postConnectionDetails.");
             return Err(ErrorKind::ProtocolError.into());
         }
 
@@ -283,6 +306,7 @@ impl<'a> V1Session<'a> {
             .await
             .map_err(|e| Error::new(ErrorKind::TransportFailed, e))?;
         if response.status() != StatusCode::OK {
+            debug!(status = ?response.status(), "Unexpected status code in response to requestPairing.");
             return Err(ErrorKind::ProtocolError.into());
         }
         let request_pairing_response = response
@@ -302,6 +326,7 @@ impl<'a> V1Session<'a> {
             .await
             .map_err(|e| Error::new(ErrorKind::TransportFailed, e))?;
         if response.status() != StatusCode::NO_CONTENT {
+            debug!(status = ?response.status(), "Unexpected status code in response to finalize.");
             return Err(ErrorKind::ProtocolError.into());
         }
 
