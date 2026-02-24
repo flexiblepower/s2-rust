@@ -200,6 +200,15 @@ pub enum S2Role {
     Rm,
 }
 
+impl S2Role {
+    pub(crate) fn service_subtype(self) -> &'static str {
+        match self {
+            Self::Cem => "cem",
+            Self::Rm => "rm",
+        }
+    }
+}
+
 /// Place of deployment for an S2 Node
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash)]
 #[serde(rename_all = "UPPERCASE")]
