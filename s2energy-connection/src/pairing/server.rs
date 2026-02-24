@@ -300,7 +300,7 @@ async fn v1_request_pairing(
         }
     }
 
-    debug_assert!(request_pairing.client_hmac_challenge.0.len() < 32);
+    debug_assert!(request_pairing.client_hmac_challenge.0.len() >= 32);
     let client_hmac_challenge_response = request_pairing.client_hmac_challenge.sha256(&state.network, &open_pairing.token.0);
 
     let pairing_attempt_id = {
