@@ -4,6 +4,7 @@ pub(crate) mod websocket_extractor;
 pub(crate) mod wire;
 
 use reqwest::{StatusCode, Url};
+use tracing::{debug, trace};
 use wire::PairingVersion;
 
 use crate::common::wire::WirePairingVersion;
@@ -93,6 +94,7 @@ impl std::fmt::Display for BaseErrorKind {
 }
 
 pub(crate) async fn negotiate_version(client: &reqwest::Client, url: Url) -> Result<PairingVersion, BaseError> {
+    trace!("Start negotiating pairing protocol version.");
     let response = client
         .get(url)
         .send()
@@ -100,6 +102,7 @@ pub(crate) async fn negotiate_version(client: &reqwest::Client, url: Url) -> Res
         .map_err(|e| BaseError::new(BaseErrorKind::TransportFailed, e))?;
 
     if response.status() != StatusCode::OK {
+        debug!(status = ?response.status(), "Unexpected status in response to version request.");
         return Err(BaseErrorKind::ProtocolError.into());
     }
 
@@ -108,11 +111,15 @@ pub(crate) async fn negotiate_version(client: &reqwest::Client, url: Url) -> Res
         .await
         .map_err(|e| BaseError::new(BaseErrorKind::ProtocolError, e))?;
 
+    trace!(?supported_versions, "Received supported versions.");
+
     for version in supported_versions.into_iter().filter_map(|v| v.try_into().ok()) {
         if SUPPORTED_PAIRING_VERSIONS.contains(&version) {
+            trace!(?version, "Negotiated version of pairing protocol.");
             return Ok(version);
         }
     }
 
+    trace!("No shared pairing version between client and server.");
     Err(BaseErrorKind::NoSupportedVersion.into())
 }

@@ -15,6 +15,7 @@ use reqwest::StatusCode;
 use rustls::pki_types::CertificateDer;
 use sha2::Digest;
 use tokio::time::Instant;
+use tracing::{Instrument, info, trace};
 
 use crate::{
     common::{
@@ -183,6 +184,7 @@ struct PairingRequest {
 }
 
 struct InitialPairingState {
+    session_span: tracing::Span,
     config: Arc<EndpointConfig>,
     sender: ResultSender,
     challenge: HmacChallenge,
@@ -191,6 +193,7 @@ struct InitialPairingState {
     remote_endpoint_description: S2EndpointDescription,
 }
 struct CompletePairingState {
+    session_span: tracing::Span,
     sender: ResultSender,
     remote_node_description: S2NodeDescription,
     remote_endpoint_description: S2EndpointDescription,
@@ -202,6 +205,16 @@ enum PairingState {
     Empty,
     Initial(InitialPairingState),
     Complete(CompletePairingState),
+}
+
+impl PairingState {
+    fn get_session_span(&self) -> Option<&tracing::Span> {
+        match self {
+            PairingState::Empty => None,
+            PairingState::Initial(initial_pairing_state) => Some(&initial_pairing_state.session_span),
+            PairingState::Complete(complete_pairing_state) => Some(&complete_pairing_state.session_span),
+        }
+    }
 }
 
 struct ExpiringPairingState {
@@ -245,19 +258,21 @@ fn v1_router() -> Router<AppState> {
         .route("/finalizePairing", post(v1_finalize_pairing))
 }
 
+#[tracing::instrument(skip_all, level = tracing::Level::INFO)]
 async fn v1_request_pairing(
     State(state): State<AppState>,
     Json(request_pairing): Json<RequestPairing>,
 ) -> Result<Json<RequestPairingResponse>, Json<PairingResponseErrorMessage>> {
+    trace!("Received pairing request.");
     if !request_pairing.supported_hashing_algorithms.contains(&HmacHashingAlgorithm::Sha256) {
+        info!(remote_hashing_algorithms = ?request_pairing.supported_hashing_algorithms, "No shared hashing algorithm with remote");
         return Err(PairingResponseErrorMessage::IncompatibleHMACHashingAlgorithms.into());
     }
 
     // 32 bytes is the minimum, this tests that the client can handle more.
     const HMAC_CHALLENGE_BYTES: usize = 64;
 
-    let mut rng = rand::rng();
-    let server_hmac_challenge = HmacChallenge::new(&mut rng, HMAC_CHALLENGE_BYTES);
+    let server_hmac_challenge = HmacChallenge::new(&mut rand::rng(), HMAC_CHALLENGE_BYTES);
 
     let open_pairing = {
         let mut open_pairings = state.open_pairings.lock().unwrap();
@@ -277,74 +292,93 @@ async fn v1_request_pairing(
         }
     };
 
-    if !request_pairing.force_pairing {
-        let mut communication_overlap = false;
-        for communication_protocol in &open_pairing.config.supported_communication_protocols {
-            if request_pairing.supported_protocols.contains(communication_protocol) {
-                communication_overlap = true;
-                break;
+    let session_span = tracing::span!(parent: None, tracing::Level::ERROR, "Pairing session", local = %open_pairing.config.node_description.id, remote = %request_pairing.node_description.id);
+    let session_span_clone = session_span.clone();
+
+    async move {
+        trace!("Found open pairing session.");
+
+        if !request_pairing.force_pairing {
+            let mut communication_overlap = false;
+            for communication_protocol in &open_pairing.config.supported_communication_protocols {
+                if request_pairing.supported_protocols.contains(communication_protocol) {
+                    communication_overlap = true;
+                    break;
+                }
+            }
+            if !communication_overlap {
+                return Err(PairingResponseErrorMessage::IncompatibleCommunicationProtocols.into());
+            }
+            let mut connection_overlap = false;
+            for connection_protocol in &open_pairing.config.supported_message_versions {
+                if request_pairing.supported_versions.contains(connection_protocol) {
+                    connection_overlap = true;
+                    break;
+                }
+            }
+            if !connection_overlap {
+                return Err(PairingResponseErrorMessage::IncompatibleS2MessageVersions.into());
             }
         }
-        if !communication_overlap {
-            return Err(PairingResponseErrorMessage::IncompatibleCommunicationProtocols.into());
-        }
-        let mut connection_overlap = false;
-        for connection_protocol in &open_pairing.config.supported_message_versions {
-            if request_pairing.supported_versions.contains(connection_protocol) {
-                connection_overlap = true;
-                break;
+
+        trace!("Checked communication protocol and s2 message version compatibility.");
+
+        debug_assert!(request_pairing.client_hmac_challenge.0.len() >= 32);
+        let client_hmac_challenge_response = request_pairing.client_hmac_challenge.sha256(&state.network, &open_pairing.token.0);
+
+        trace!("Calculated response to remote challenge.");
+
+        let pairing_attempt_id = {
+            let mut attempts = state.attempts.lock().unwrap();
+            loop {
+                let id = PairingAttemptId::new(&mut rand::rng());
+                if !attempts.contains_key(&id) {
+                    attempts.insert(
+                        id.clone(),
+                        ExpiringPairingState {
+                            start_time: Instant::now(),
+                            state: PairingState::Initial(InitialPairingState {
+                                session_span,
+                                config: open_pairing.config.clone(),
+                                sender: open_pairing.sender,
+                                challenge: server_hmac_challenge.clone(),
+                                token: open_pairing.token,
+                                remote_node_description: request_pairing.node_description,
+                                remote_endpoint_description: request_pairing.endpoint_description,
+                            }),
+                        },
+                    );
+                    break id;
+                }
             }
-        }
-        if !connection_overlap {
-            return Err(PairingResponseErrorMessage::IncompatibleS2MessageVersions.into());
-        }
+        };
+
+        trace!("Created session for pairing attempt.");
+
+        let resp = RequestPairingResponse {
+            pairing_attempt_id,
+            server_s2_node_description: open_pairing.config.node_description.clone(),
+            server_s2_endpoint_description: open_pairing.config.endpoint_description.clone(),
+            selected_hmac_hashing_algorithm: HmacHashingAlgorithm::Sha256,
+            client_hmac_challenge_response,
+            server_hmac_challenge,
+        };
+
+        Ok(Json(resp))
     }
-
-    debug_assert!(request_pairing.client_hmac_challenge.0.len() >= 32);
-    let client_hmac_challenge_response = request_pairing.client_hmac_challenge.sha256(&state.network, &open_pairing.token.0);
-
-    let pairing_attempt_id = {
-        let mut attempts = state.attempts.lock().unwrap();
-        loop {
-            let id = PairingAttemptId::new(&mut rng);
-            if !attempts.contains_key(&id) {
-                attempts.insert(
-                    id.clone(),
-                    ExpiringPairingState {
-                        start_time: Instant::now(),
-                        state: PairingState::Initial(InitialPairingState {
-                            config: open_pairing.config.clone(),
-                            sender: open_pairing.sender,
-                            challenge: server_hmac_challenge.clone(),
-                            token: open_pairing.token,
-                            remote_node_description: request_pairing.node_description,
-                            remote_endpoint_description: request_pairing.endpoint_description,
-                        }),
-                    },
-                );
-                break id;
-            }
-        }
-    };
-
-    let resp = RequestPairingResponse {
-        pairing_attempt_id,
-        server_s2_node_description: open_pairing.config.node_description.clone(),
-        server_s2_endpoint_description: open_pairing.config.endpoint_description.clone(),
-        selected_hmac_hashing_algorithm: HmacHashingAlgorithm::Sha256,
-        client_hmac_challenge_response,
-        server_hmac_challenge,
-    };
-
-    Ok(Json(resp))
+    .instrument(session_span_clone)
+    .await
 }
 
+#[tracing::instrument(skip_all, level = tracing::Level::INFO)]
 async fn v1_request_connection_details(
     State(app_state): State<AppState>,
     headers: HeaderMap,
     Json(req): Json<RequestConnectionDetailsRequest>,
 ) -> Result<Json<ConnectionDetails>, StatusCode> {
+    trace!("Received request for connection details.");
     let Some(pairing_attempt_id) = PairingAttemptId::from_headers(&headers) else {
+        info!("Missing pairing attempt id.");
         return Err(StatusCode::UNAUTHORIZED);
     };
 
@@ -352,12 +386,19 @@ async fn v1_request_connection_details(
     let (result, future) = (|| {
         let mut attempts = app_state.attempts.lock().unwrap();
         let Some(state) = attempts.get_mut(&pairing_attempt_id) else {
+            info!("No active pairing session found for requesting connection details.");
             return (Err(StatusCode::UNAUTHORIZED), None);
         };
 
         if let Some(state_entry) = state.get_state()
             && let PairingState::Initial(state) = std::mem::replace(state_entry, PairingState::Empty)
         {
+            // It is ok to manually enter the span here as this closure is not async.
+            let session_span_clone = state.session_span.clone();
+            let _entered_span = session_span_clone.enter();
+
+            trace!("Found pairing session.");
+
             let expected = state.challenge.sha256(&app_state.network, &state.token.0);
             if expected != req.server_hmac_challenge_response {
                 attempts.remove(&pairing_attempt_id);
@@ -366,6 +407,8 @@ async fn v1_request_connection_details(
                     Some(state.sender.send(Err(ErrorKind::InvalidToken.into()))),
                 );
             }
+
+            trace!("Validated remote's response to pairing token challenge.");
 
             let mut rng = rand::rng();
             let connection_details = ConnectionDetails {
@@ -376,7 +419,10 @@ async fn v1_request_connection_details(
                 access_token: AccessToken::new(&mut rng),
             };
 
+            trace!("Generated connection details");
+
             *state_entry = PairingState::Complete(CompletePairingState {
+                session_span: state.session_span,
                 sender: state.sender,
                 remote_node_description: state.remote_node_description,
                 remote_endpoint_description: state.remote_endpoint_description,
@@ -386,6 +432,7 @@ async fn v1_request_connection_details(
 
             (Ok(Json(connection_details)), None)
         } else {
+            info!("Pairing session was expired, or in unexpected state for requesting connection details.");
             attempts.remove(&pairing_attempt_id);
             (Err(StatusCode::UNAUTHORIZED), None)
         }
@@ -398,12 +445,15 @@ async fn v1_request_connection_details(
     result
 }
 
+#[tracing::instrument(skip_all, level = tracing::Level::INFO)]
 async fn v1_post_connection_details(
     State(app_state): State<AppState>,
     headers: HeaderMap,
     Json(req): Json<PostConnectionDetailsRequest>,
 ) -> StatusCode {
+    trace!("Received post of connection details");
     let Some(pairing_attempt_id) = PairingAttemptId::from_headers(&headers) else {
+        info!("Missing pairing attempt id.");
         return StatusCode::UNAUTHORIZED;
     };
 
@@ -411,20 +461,30 @@ async fn v1_post_connection_details(
     let (result, future) = (|| {
         let mut attempts: std::sync::MutexGuard<'_, HashMap<PairingAttemptId, ExpiringPairingState>> = app_state.attempts.lock().unwrap();
         let Some(state) = attempts.get_mut(&pairing_attempt_id) else {
+            info!("No active pairing session found for posting connection details.");
             return (StatusCode::UNAUTHORIZED, None);
         };
 
         if let Some(state_entry) = state.get_state()
             && let PairingState::Initial(state) = std::mem::replace(state_entry, PairingState::Empty)
         {
+            // It is ok to manually enter the span here as this closure is not async.
+            let session_span_clone = state.session_span.clone();
+            let _entered_span = session_span_clone.enter();
+
+            trace!("Found pairing session.");
+
             let expected = state.challenge.sha256(&app_state.network, &state.token.0);
             if expected != req.server_hmac_challenge_response {
                 attempts.remove(&pairing_attempt_id);
                 return (StatusCode::FORBIDDEN, Some(state.sender.send(Err(ErrorKind::InvalidToken.into()))));
             }
 
+            trace!("Validated remote's response to pairing token challenge.");
+
             // Do better error handling here than unwrap
             *state_entry = PairingState::Complete(CompletePairingState {
+                session_span: state.session_span,
                 sender: state.sender,
                 remote_node_description: state.remote_node_description,
                 remote_endpoint_description: state.remote_endpoint_description,
@@ -434,8 +494,11 @@ async fn v1_post_connection_details(
                 },
             });
 
+            trace!("Stored received connection details in session state.");
+
             (StatusCode::NO_CONTENT, None)
         } else {
+            info!("Pairing session was expired, or in unexpected state for posting connection details.");
             attempts.remove(&pairing_attempt_id);
             (StatusCode::UNAUTHORIZED, None)
         }
@@ -448,8 +511,11 @@ async fn v1_post_connection_details(
     result
 }
 
+#[tracing::instrument(skip_all, level = tracing::Level::INFO)]
 async fn v1_finalize_pairing(State(state): State<AppState>, headers: HeaderMap, Json(success): Json<bool>) -> StatusCode {
+    trace!("Received request to finalize pairing session.");
     let Some(pairing_attempt_id) = PairingAttemptId::from_headers(&headers) else {
+        info!("Missing pairing attempt id.");
         return StatusCode::UNAUTHORIZED;
     };
 
@@ -457,37 +523,53 @@ async fn v1_finalize_pairing(State(state): State<AppState>, headers: HeaderMap, 
         let mut attempts = state.attempts.lock().unwrap();
         attempts.remove(&pairing_attempt_id)
     }) else {
+        info!("No active pairing session found for finalizing pairing.");
         return StatusCode::UNAUTHORIZED;
     };
 
     if let Some(state) = state.into_state() {
-        if success {
-            if let PairingState::Complete(state) = state {
-                state
-                    .sender
-                    .send(Ok(Pairing {
-                        remote_endpoint_description: state.remote_endpoint_description,
-                        remote_node_description: state.remote_node_description,
-                        token: state.access_token,
-                        role: state.role,
-                    }))
-                    .await;
+        let session_span_clone = state.get_session_span().cloned();
+        let completion = async move {
+            if success {
+                if let PairingState::Complete(state) = state {
+                    state
+                        .sender
+                        .send(Ok(Pairing {
+                            remote_endpoint_description: state.remote_endpoint_description,
+                            remote_node_description: state.remote_node_description,
+                            token: state.access_token,
+                            role: state.role,
+                        }))
+                        .await;
+
+                    trace!("Finalized pairing session.");
+
+                    StatusCode::NO_CONTENT
+                } else {
+                    info!("Remote tried to finalize pairing session that did not yet have all the data exchanged.");
+                    StatusCode::BAD_REQUEST
+                }
+            } else {
+                match state {
+                    PairingState::Empty => { /* should never happen, but fine to ignore */ }
+                    PairingState::Initial(InitialPairingState { sender, .. })
+                    | PairingState::Complete(CompletePairingState { sender, .. }) => {
+                        sender.send(Err(ErrorKind::Cancelled.into())).await;
+                    }
+                }
+
+                info!("Pairing session was cancelled by remote.");
 
                 StatusCode::NO_CONTENT
-            } else {
-                StatusCode::BAD_REQUEST
             }
+        };
+        if let Some(session_span) = session_span_clone {
+            completion.instrument(session_span).await
         } else {
-            match state {
-                PairingState::Empty => { /* should never happen, but fine to ignore */ }
-                PairingState::Initial(InitialPairingState { sender, .. }) | PairingState::Complete(CompletePairingState { sender, .. }) => {
-                    sender.send(Err(ErrorKind::Cancelled.into())).await;
-                }
-            }
-
-            StatusCode::NO_CONTENT
+            completion.await
         }
     } else {
+        info!("Pairing session was expired during finalization.");
         StatusCode::UNAUTHORIZED
     }
 }

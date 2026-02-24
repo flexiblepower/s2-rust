@@ -11,6 +11,7 @@ use axum::{
     routing::{get, post},
 };
 use reqwest::StatusCode;
+use tracing::{Instrument, info, trace};
 
 use crate::{
     CommunicationProtocol, MessageVersion, S2EndpointDescription, S2NodeDescription, S2NodeId,
@@ -106,6 +107,7 @@ impl<S> Expiring<S> {
 
 #[expect(unused)]
 struct Session {
+    span: tracing::Span,
     lookup: PairingLookup,
     token: AccessToken,
     node_description: Option<S2NodeDescription>,
@@ -182,72 +184,97 @@ fn v1_router<Store: ServerPairingStore>() -> Router<AppState<Store>> {
         .route("/websocket", get(v1_websocket))
 }
 
+#[tracing::instrument(skip_all, level = tracing::Level::INFO)]
 async fn v1_initiate_connection<Store: ServerPairingStore>(
     State(state): State<AppState<Store>>,
     token: AccessToken,
     Json(request): Json<InitiateConnectionRequest>,
 ) -> axum::response::Response {
-    let lookup = PairingLookup {
-        client: request.client_node_id,
-        server: request.server_node_id,
-    };
+    let session_span = tracing::span!(parent: None, tracing::Level::ERROR, "Communication session", client = %request.client_node_id, server = %request.server_node_id);
+    let session_span_clone = session_span.clone();
 
-    let pairing = match state.store.lookup(lookup.clone()).await {
-        Ok(PairingLookupResult::Pairing(pairing)) => pairing,
-        Ok(PairingLookupResult::Unpaired) => return CommunicationDetailsErrorMessage::NoLongerPaired.into_response(),
-        Ok(PairingLookupResult::NeverPaired) => return StatusCode::UNAUTHORIZED.into_response(),
-        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-    };
+    async move {
+        trace!("Received request for connection initiation.");
 
-    if pairing.access_token().as_ref() != &token {
-        return StatusCode::UNAUTHORIZED.into_response();
-    }
+        let lookup = PairingLookup {
+            client: request.client_node_id,
+            server: request.server_node_id,
+        };
 
-    let config = pairing.config();
+        let pairing = match state.store.lookup(lookup.clone()).await {
+            Ok(PairingLookupResult::Pairing(pairing)) => pairing,
+            Ok(PairingLookupResult::Unpaired) => return CommunicationDetailsErrorMessage::NoLongerPaired.into_response(),
+            Ok(PairingLookupResult::NeverPaired) => return StatusCode::UNAUTHORIZED.into_response(),
+            Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        };
 
-    let Some(communication_protocol) = select_overlap(
-        &request.supported_communication_protocols,
-        &[CommunicationProtocol("WebSocket".into())],
-    ) else {
-        return CommunicationDetailsErrorMessage::IncompatibleCommunicationProtocols.into_response();
-    };
-    let Some(message_version) = select_overlap(&request.supported_message_versions, config.as_ref().supported_message_versions()) else {
-        return CommunicationDetailsErrorMessage::IncompatibleS2MessageVersions.into_response();
-    };
+        trace!("Found pairing.");
 
-    let mut pending_tokens = state.pending_tokens.lock().unwrap();
-
-    // Collisions are unlikely but technically possible.
-    let new_access_token = loop {
-        let candidate = AccessToken::new(&mut rand::rng());
-        if !pending_tokens.contains_key(&candidate) {
-            break candidate;
+        if pairing.access_token().as_ref() != &token {
+            info!("Received incorrect access token for connection initiation.");
+            return StatusCode::UNAUTHORIZED.into_response();
         }
-    };
 
-    pending_tokens.insert(
-        new_access_token.clone(),
-        Expiring {
-            start_time: tokio::time::Instant::now(),
-            session: Session {
-                lookup,
-                token,
-                node_description: request.node_description,
-                endpoint_description: request.endpoint_description,
-                message_version: message_version.clone(),
-                communication_protocol: communication_protocol.clone(),
+        let config = pairing.config();
+
+        let Some(communication_protocol) = select_overlap(
+            &request.supported_communication_protocols,
+            &[CommunicationProtocol("WebSocket".into())],
+        ) else {
+            info!("No overlap in communication protocols between client and server.");
+            return CommunicationDetailsErrorMessage::IncompatibleCommunicationProtocols.into_response();
+        };
+        let Some(message_version) = select_overlap(&request.supported_message_versions, config.as_ref().supported_message_versions())
+        else {
+            info!("No overlap in S2 message versions between client and server.");
+            return CommunicationDetailsErrorMessage::IncompatibleS2MessageVersions.into_response();
+        };
+
+        trace!(
+            ?communication_protocol,
+            ?message_version,
+            "Selected communication protocol and message version."
+        );
+
+        let mut pending_tokens = state.pending_tokens.lock().unwrap();
+
+        // Collisions are unlikely but technically possible.
+        let new_access_token = loop {
+            let candidate = AccessToken::new(&mut rand::rng());
+            if !pending_tokens.contains_key(&candidate) {
+                break candidate;
+            }
+        };
+
+        pending_tokens.insert(
+            new_access_token.clone(),
+            Expiring {
+                start_time: tokio::time::Instant::now(),
+                session: Session {
+                    span: session_span,
+                    lookup,
+                    token,
+                    node_description: request.node_description,
+                    endpoint_description: request.endpoint_description,
+                    message_version: message_version.clone(),
+                    communication_protocol: communication_protocol.clone(),
+                },
             },
-        },
-    );
+        );
 
-    InitiateConnectionResponse {
-        communication_protocol,
-        message_version,
-        access_token: new_access_token,
-        node_description: config.as_ref().node_description().cloned(),
-        endpoint_description: state.endpoint_description.clone(),
+        trace!("Stored session.");
+
+        InitiateConnectionResponse {
+            communication_protocol,
+            message_version,
+            access_token: new_access_token,
+            node_description: config.as_ref().node_description().cloned(),
+            endpoint_description: state.endpoint_description.clone(),
+        }
+        .into_response()
     }
-    .into_response()
+    .instrument(session_span_clone)
+    .await
 }
 
 impl IntoResponse for CommunicationDetails {
@@ -256,10 +283,13 @@ impl IntoResponse for CommunicationDetails {
     }
 }
 
+#[tracing::instrument(skip_all, level = tracing::Level::INFO)]
 async fn v1_confirm_access_token<Store: ServerPairingStore>(
     State(state): State<AppState<Store>>,
     token: AccessToken,
 ) -> Result<CommunicationDetails, StatusCode> {
+    trace!("Received request to confirm access token.");
+
     let session = {
         let mut pending_tokens = state.pending_tokens.lock().unwrap();
         pending_tokens
@@ -268,44 +298,41 @@ async fn v1_confirm_access_token<Store: ServerPairingStore>(
             .ok_or(StatusCode::UNAUTHORIZED)?
     };
 
-    let mut pairing = match state.store.lookup(session.lookup.clone()).await {
-        Ok(PairingLookupResult::Pairing(pairing)) => pairing,
-        Ok(PairingLookupResult::Unpaired | PairingLookupResult::NeverPaired) => return Err(StatusCode::UNAUTHORIZED),
-        Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR),
-    };
+    let session_span_clone = session.span.clone();
 
-    pairing
-        .set_access_token(token)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    async move {
+        trace!("Found session, looking up pairing.");
 
-    let websocket_token = {
-        let mut pending_websockets = state.pending_websockets.lock().unwrap();
-        let websocket_token = loop {
-            let websocket_token = CommunicationToken::new(&mut rand::rng());
-            if !pending_websockets.contains_key(&websocket_token) {
-                break websocket_token;
-            }
-        };
-        pending_websockets.insert(
-            websocket_token.clone(),
-            Expiring {
-                start_time: tokio::time::Instant::now(),
-                session: PendingWebsocket {
-                    lookup: session.lookup,
-                    node_description: session.node_description,
-                    endpoint_description: session.endpoint_description,
-                    message_version: session.message_version,
+        let websocket_token = {
+            let mut pending_websockets = state.pending_websockets.lock().unwrap();
+            let websocket_token = loop {
+                let websocket_token = CommunicationToken::new(&mut rand::rng());
+                if !pending_websockets.contains_key(&websocket_token) {
+                    break websocket_token;
+                }
+            };
+            pending_websockets.insert(
+                websocket_token.clone(),
+                Expiring {
+                    start_time: tokio::time::Instant::now(),
+                    session: PendingWebsocket {
+                        lookup: session.lookup,
+                        node_description: session.node_description,
+                        endpoint_description: session.endpoint_description,
+                        message_version: session.message_version,
+                    },
                 },
-            },
-        );
-        websocket_token
-    };
+            );
+            websocket_token
+        };
 
-    Ok(CommunicationDetails::WebSocket(WebSocketCommunicationDetails {
-        websocket_token,
-        websocket_url: format!("wss://{}/v1/websocket", state.base_url),
-    }))
+        Ok(CommunicationDetails::WebSocket(WebSocketCommunicationDetails {
+            websocket_token,
+            websocket_url: format!("wss://{}/v1/websocket", state.base_url),
+        }))
+    }
+    .instrument(session_span_clone)
+    .await
 }
 
 async fn v1_websocket<Store: ServerPairingStore>(

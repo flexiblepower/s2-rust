@@ -12,6 +12,7 @@ use s2energy_connection::{
     AccessToken, MessageVersion, S2NodeId,
     communication::{NodeConfig, PairingLookupResult, Server, ServerConfig, ServerPairing, ServerPairingStore},
 };
+use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
 struct MemoryPairingStoreInner {
     token: AccessToken,
@@ -82,6 +83,11 @@ impl ServerPairing for MemoryPairingStore {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
+    tracing_subscriber::registry()
+        .with(fmt::layer())
+        .with(EnvFilter::from_default_env())
+        .init();
+
     let mut server = Server::new(
         ServerConfig {
             base_url: "localhost:8005".into(),

@@ -7,12 +7,18 @@ use s2energy_connection::{
     MessageVersion, S2NodeDescription, S2Role,
     pairing::{EndpointConfig, PairingToken, Server, ServerConfig},
 };
+use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
 #[allow(unused)]
 const PAIRING_TOKEN: &[u8] = &[1, 2, 3];
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
+    tracing_subscriber::registry()
+        .with(fmt::layer())
+        .with(EnvFilter::from_default_env())
+        .init();
+
     let server = Server::new(ServerConfig {
         root_certificate: Some(
             CertificateDer::from_pem_file(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("testdata").join("root.pem")).unwrap(),

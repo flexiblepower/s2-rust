@@ -4,6 +4,7 @@ use axum::http;
 use reqwest::{StatusCode, Url};
 use rustls::pki_types::CertificateDer;
 use tokio_tungstenite::{Connector, connect_async_tls_with_config, tungstenite::ClientRequestBuilder};
+use tracing::{debug, trace};
 
 use crate::{
     AccessToken, CommunicationProtocol, S2EndpointDescription, S2NodeId,
@@ -50,7 +51,9 @@ impl Client {
         }
     }
 
+    #[tracing::instrument(skip_all, fields(client = %pairing.client_id(), server = %pairing.server_id()), level = tracing::Level::ERROR)]
     pub async fn connect(&self, mut pairing: impl ClientPairing) -> CommunicationResult<ConnectionInfo> {
+        trace!("Establishing new communication connection.");
         let client = reqwest::Client::builder()
             .tls_certs_merge(
                 self.additional_certificates
@@ -59,6 +62,8 @@ impl Client {
             )
             .build()
             .map_err(|e| Error::new(ErrorKind::TransportFailed, e))?;
+
+        trace!("Prepared reqwest client.");
 
         let communication_url = Url::parse(pairing.communication_url().as_ref()).map_err(|e| Error::new(ErrorKind::InvalidUrl, e))?;
 
@@ -88,9 +93,11 @@ impl Client {
                             .map_err(|e| Error::new(ErrorKind::TransportFailed, e))?;
 
                         if response.status() == StatusCode::UNAUTHORIZED {
+                            debug!("Token was rejected by remote, assuming it is old.");
                             continue;
                         }
                         if response.status() != StatusCode::OK {
+                            debug!(status = ?response.status(), "Unexpected status in response to initiateConnection request.");
                             return Err(ErrorKind::ProtocolError.into());
                         }
 
@@ -107,10 +114,14 @@ impl Client {
                     return Err(ErrorKind::NotPaired.into());
                 };
 
+                trace!("Initiated connection attempt.");
+
                 pairing
                     .set_access_tokens(vec![current_token, initiate_response.access_token.clone()])
                     .await
                     .map_err(|e| Error::new(ErrorKind::Storage, Box::new(e) as Box<_>))?;
+
+                trace!("Stored new access token.");
 
                 let response = client
                     .post(base_url.join("confirmAccessToken").unwrap())
@@ -120,6 +131,7 @@ impl Client {
                     .map_err(|e| Error::new(ErrorKind::TransportFailed, e))?;
 
                 if response.status() != StatusCode::OK {
+                    debug!(status = ?response.status(), "Unexpected response to confirmAccessToken request.");
                     return Err(ErrorKind::ProtocolError.into());
                 }
 
@@ -127,6 +139,8 @@ impl Client {
                     .json::<CommunicationDetails>()
                     .await
                     .map_err(|e| Error::new(ErrorKind::TransportFailed, e))?;
+
+                trace!("Confirmed new access token to server.");
 
                 match communication_details {
                     CommunicationDetails::WebSocket(web_socket_communication_details) => {
