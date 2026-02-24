@@ -140,7 +140,7 @@ impl<'a> V1Session<'a> {
             }
         }
 
-        debug_assert!(request_pairing_response.server_hmac_challenge.0.len() < 32);
+        debug_assert!(request_pairing_response.server_hmac_challenge.0.len() >= 32);
         let server_hmac_challenge_response = match request_pairing_response.selected_hmac_hashing_algorithm {
             HmacHashingAlgorithm::Sha256 => request_pairing_response.server_hmac_challenge.sha256(&network, pairing_token),
         };
