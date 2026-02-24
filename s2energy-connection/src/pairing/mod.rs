@@ -186,7 +186,7 @@ mod server;
 mod transport;
 mod wire;
 
-use rand::Rng;
+use rand::CryptoRng;
 
 use wire::{HmacChallenge, HmacChallengeResponse};
 
@@ -331,8 +331,10 @@ pub struct Pairing {
 }
 
 impl HmacChallenge {
-    pub fn new(rng: &mut impl Rng, len: usize) -> Self {
-        Self(rng.random_iter().take(len).collect())
+    pub fn new(rng: &mut impl CryptoRng, len: usize) -> Self {
+        let mut bytes = vec![0u8; len];
+        rng.fill_bytes(&mut bytes);
+        Self(bytes)
     }
 
     pub fn sha256(&self, network: &Network, pairing_token: &[u8]) -> HmacChallengeResponse {
