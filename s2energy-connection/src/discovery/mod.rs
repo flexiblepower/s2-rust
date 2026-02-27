@@ -54,16 +54,8 @@ impl DiscoverableS2Endpoint {
 
     pub fn build_with_pairing(roles: Vec<S2Role>, pairing_url: String) -> Result<DiscoverableS2EndpointBuilder, BuilderError> {
         let parsed_url: Url = pairing_url.parse().map_err(|_| BuilderError::InvalidUrl)?;
-        let deployment = match parsed_url.host().ok_or(BuilderError::InvalidUrl)? {
-            Host::Domain(domain) => {
-                if domain.ends_with(".local") || domain.ends_with(".local.") {
-                    Deployment::Lan
-                } else {
-                    Deployment::Wan
-                }
-            }
-            Host::Ipv4(_) | Host::Ipv6(_) => return Err(BuilderError::InvalidUrl),
-        };
+        let host = parsed_url.host().ok_or(BuilderError::InvalidUrl)?;
+        let deployment = Deployment::try_from(host).map_err(|_| BuilderError::InvalidUrl)?;
 
         Ok(DiscoverableS2EndpointBuilder {
             endpoint_name: None,
@@ -77,16 +69,8 @@ impl DiscoverableS2Endpoint {
 
     pub fn build_with_longpolling(roles: Vec<S2Role>, longpolling_url: String) -> Result<DiscoverableS2EndpointBuilder, BuilderError> {
         let parsed_url: Url = longpolling_url.parse().map_err(|_| BuilderError::InvalidUrl)?;
-        let deployment = match parsed_url.host().ok_or(BuilderError::InvalidUrl)? {
-            Host::Domain(domain) => {
-                if domain.ends_with(".local") || domain.ends_with(".local.") {
-                    Deployment::Lan
-                } else {
-                    Deployment::Wan
-                }
-            }
-            Host::Ipv4(_) | Host::Ipv6(_) => return Err(BuilderError::InvalidUrl),
-        };
+        let host = parsed_url.host().ok_or(BuilderError::InvalidUrl)?;
+        let deployment = Deployment::try_from(host).map_err(|_| BuilderError::InvalidUrl)?;
 
         Ok(DiscoverableS2EndpointBuilder {
             endpoint_name: None,
@@ -129,10 +113,14 @@ impl DiscoverableS2Endpoint {
             roles,
         };
 
+        let host_matches_deployment = |url: url::Url| {
+            url.host_str().map(|v| v.ends_with(".local") || v.ends_with(".local.")) == Some(matches!(deployment, Deployment::Lan))
+        };
+
         if let Some(pairing_url) = txt.get("pairingUrl") {
             let url = pairing_url.parse::<Url>().ok()?;
 
-            if url.host_str().map(|v| v.ends_with(".local") || v.ends_with(".local.")) != Some(matches!(deployment, Deployment::Lan)) {
+            if !host_matches_deployment(url) {
                 return None;
             }
 
@@ -142,7 +130,7 @@ impl DiscoverableS2Endpoint {
         if let Some(longpolling_url) = txt.get("longpollingUrl") {
             let url = longpolling_url.parse::<Url>().ok()?;
 
-            if url.host_str().map(|v| v.ends_with(".local") || v.ends_with(".local.")) != Some(matches!(deployment, Deployment::Lan)) {
+            if !host_matches_deployment(url) {
                 return None;
             }
 

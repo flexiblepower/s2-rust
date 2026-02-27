@@ -218,3 +218,20 @@ pub enum Deployment {
     /// On the local network, only reachable near the place the device is located.
     Lan,
 }
+
+impl TryFrom<url::Host<&str>> for Deployment {
+    type Error = ();
+
+    fn try_from(value: url::Host<&str>) -> Result<Self, Self::Error> {
+        match value {
+            url::Host::Domain(domain) => {
+                if domain.ends_with(".local") || domain.ends_with(".local.") {
+                    Ok(Deployment::Lan)
+                } else {
+                    Ok(Deployment::Wan)
+                }
+            }
+            url::Host::Ipv4(_) | url::Host::Ipv6(_) => Err(()),
+        }
+    }
+}
