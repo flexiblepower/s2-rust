@@ -46,7 +46,7 @@
 //! server. For this, you will also need to know the id of the node, and the URL on which its pairing server is reachable.
 //! ```rust
 //! # use std::sync::Arc;
-//! # use s2energy_connection::pairing::{Client, ClientConfig, NodeConfig, PairingRemote};
+//! # use s2energy_connection::pairing::{Client, ClientConfig, NodeConfig, PairingRemote, PairingS2NodeId};
 //! # use s2energy_connection::{Deployment, MessageVersion, S2NodeDescription, S2NodeId, S2Role};
 //! # let config = NodeConfig::builder(S2NodeDescription {
 //! #     id: S2NodeId::new(),
@@ -68,7 +68,7 @@
 //!
 //! let pairing_result = client.pair(PairingRemote {
 //!     url: "https://remote.example.com".into(),
-//!     id: S2NodeId::try_from("67e55044-10b1-426f-9247-bb680e5fe0c8").unwrap(),
+//!     id: PairingS2NodeId::from_bytes(b"test_pairing_id"),
 //! }, b"ABCDEF0123456");
 //! ```
 //!
@@ -105,7 +105,7 @@
 //! ```no_run
 //! # use std::{path::PathBuf, net::SocketAddr, sync::Arc};
 //! # use axum_server::tls_rustls::RustlsConfig;
-//! # use s2energy_connection::pairing::{NodeConfig, PairingToken, Server, ServerConfig};
+//! # use s2energy_connection::pairing::{NodeConfig, PairingToken, Server, ServerConfig, PairingS2NodeId};
 //! # use s2energy_connection::{MessageVersion, S2NodeDescription, S2NodeId, S2Role};
 //! # #[tokio::main(flavor = "current_thread")]
 //! # async fn main() {
@@ -133,7 +133,7 @@
 //! # .with_connection_initiate_url("https://example.com/".into())
 //! # .build()
 //! # .unwrap());
-//! let pairing_result = server.pair_once(config, PairingToken(b"ABCDEF0123456".as_slice().into())).unwrap().result().await;
+//! let pairing_result = server.pair_once(config, PairingS2NodeId::from_bytes(b"XYZ"), PairingToken(b"ABCDEF0123456".as_slice().into())).unwrap().result().await;
 //! # }
 //! ```
 //!
@@ -141,7 +141,7 @@
 //! ```no_run
 //! # use std::{path::PathBuf, net::SocketAddr, sync::Arc};
 //! # use axum_server::tls_rustls::RustlsConfig;
-//! # use s2energy_connection::pairing::{NodeConfig, PairingToken, Server, ServerConfig};
+//! # use s2energy_connection::pairing::{NodeConfig, PairingToken, Server, ServerConfig, PairingS2NodeId};
 //! # use s2energy_connection::{MessageVersion, S2NodeDescription, S2NodeId, S2Role};
 //! # #[tokio::main(flavor = "current_thread")]
 //! # async fn main() {
@@ -169,7 +169,7 @@
 //! # .with_connection_initiate_url("https://example.com/".into())
 //! # .build()
 //! # .unwrap());
-//! let mut pairing_results = server.pair_repeated(config, PairingToken(b"ABCDEF0123456".as_slice().into())).unwrap();
+//! let mut pairing_results = server.pair_repeated(config, PairingS2NodeId::from_bytes(b"XYZ"), PairingToken(b"ABCDEF0123456".as_slice().into())).unwrap();
 //! while let Some(pairing_result) = pairing_results.next().await {
 //!     /* do something with the pairing result */
 //! }
@@ -194,6 +194,7 @@ use wire::{HmacChallenge, HmacChallengeResponse};
 pub use client::{Client, ClientConfig, PairingRemote};
 pub use error::{ConfigError, Error, ErrorKind};
 pub use server::{PairingToken, PendingPairing, RepeatedPairing, Server, ServerConfig};
+pub use wire::PairingS2NodeId;
 
 use crate::{
     CommunicationProtocol, Deployment, MessageVersion, S2EndpointDescription, S2NodeDescription, S2Role, common::wire::AccessToken,

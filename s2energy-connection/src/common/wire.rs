@@ -267,10 +267,14 @@ impl TryFrom<url::Host<&str>> for Deployment {
 pub(crate) mod test {
     use uuid::{Uuid, uuid};
 
-    use crate::{S2NodeDescription, S2Role};
+    use crate::{S2NodeDescription, S2Role, pairing::PairingS2NodeId};
 
     pub(crate) const UUID_A: Uuid = uuid!("67e55044-10b1-426f-9247-bb680e5fe0c8");
     pub(crate) const UUID_B: Uuid = uuid!("67e55044-10b1-426f-9247-bb680e5fe0c7");
+
+    pub(crate) fn pairing_s2_node_id() -> PairingS2NodeId {
+        PairingS2NodeId::from_bytes(b"test_pairing_id")
+    }
 
     pub(crate) fn basic_node_description(uuid: Uuid, role: S2Role) -> S2NodeDescription {
         S2NodeDescription {

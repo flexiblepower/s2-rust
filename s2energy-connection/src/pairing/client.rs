@@ -5,7 +5,7 @@ use rustls::pki_types::CertificateDer;
 use tracing::{debug, trace};
 
 use crate::common::negotiate_version;
-use crate::common::wire::{AccessToken, Deployment, PairingVersion, S2NodeId, S2Role};
+use crate::common::wire::{AccessToken, Deployment, PairingVersion, S2Role};
 use crate::pairing::transport::{HashProvider, hash_providing_https_client};
 use crate::pairing::{Error, Pairing, PairingRole};
 
@@ -19,7 +19,7 @@ pub struct PairingRemote {
     /// URL at which the remote node can be reached
     pub url: String,
     /// S2 node id of the remote node.
-    pub id: S2NodeId,
+    pub id: PairingS2NodeId,
 }
 
 /// Configuration for pairing clients.
@@ -107,7 +107,7 @@ impl<'a> V1Session<'a> {
         self,
         certhash: Option<HashProvider>,
         local_deployment: Deployment,
-        id: S2NodeId,
+        id: PairingS2NodeId,
         pairing_token: &[u8],
     ) -> PairingResult<Pairing> {
         let our_deployment = self.config.endpoint_description.deployment.unwrap_or(local_deployment);
@@ -287,11 +287,11 @@ impl<'a> V1Session<'a> {
         Ok(())
     }
 
-    async fn request_pairing(&self, id: S2NodeId, client_hmac_challenge: &HmacChallenge) -> PairingResult<RequestPairingResponse> {
+    async fn request_pairing(&self, id: PairingS2NodeId, client_hmac_challenge: &HmacChallenge) -> PairingResult<RequestPairingResponse> {
         let request = RequestPairing {
             node_description: self.config.node_description.clone(),
             endpoint_description: self.config.endpoint_description.clone(),
-            id,
+            id: Some(id),
             supported_protocols: self.config.supported_communication_protocols.clone(),
             supported_versions: self.config.supported_message_versions.clone(),
             supported_hashing_algorithms: vec![HmacHashingAlgorithm::Sha256],
@@ -366,7 +366,7 @@ mod tests {
 
     use crate::{
         Deployment, MessageVersion, S2EndpointDescription, S2Role,
-        common::wire::test::{UUID_A, UUID_B, basic_node_description},
+        common::wire::test::{UUID_A, UUID_B, basic_node_description, pairing_s2_node_id},
         pairing::{
             Client, ClientConfig, ErrorKind, Network, NodeConfig, Pairing, PairingRemote, PairingRole, PairingToken, Server, ServerConfig,
             wire::{
@@ -401,7 +401,7 @@ mod tests {
         });
         let server_pair_handle = tokio::spawn(async move {
             server
-                .pair_once(Arc::new(config), PairingToken(b"testtoken".as_slice().into()))
+                .pair_once(Arc::new(config), pairing_s2_node_id(), PairingToken(b"testtoken".as_slice().into()))
                 .unwrap()
                 .result()
                 .await
@@ -428,7 +428,7 @@ mod tests {
         let addr = server_handle.listening().await.unwrap();
         let remote = PairingRemote {
             url: format!("https://localhost:{}/", addr.port()),
-            id: UUID_A.into(),
+            id: pairing_s2_node_id(),
         };
 
         let client = Client::new(
@@ -466,7 +466,7 @@ mod tests {
         let addr = server_handle.listening().await.unwrap();
         let remote = PairingRemote {
             url: format!("https://localhost:{}/", addr.port()),
-            id: UUID_A.into(),
+            id: pairing_s2_node_id(),
         };
 
         let client = Client::new(
@@ -530,7 +530,7 @@ mod tests {
         let addr = server_handle.listening().await.unwrap();
         let remote = PairingRemote {
             url: format!("https://localhost:{}/", addr.port()),
-            id: UUID_A.into(),
+            id: pairing_s2_node_id(),
         };
 
         let client = Client::new(
@@ -592,7 +592,7 @@ mod tests {
         let addr = server_handle.listening().await.unwrap();
         let remote = PairingRemote {
             url: format!("https://localhost:{}/", addr.port()),
-            id: UUID_A.into(),
+            id: pairing_s2_node_id(),
         };
 
         let client = Client::new(
@@ -650,7 +650,7 @@ mod tests {
         let addr = server_handle.listening().await.unwrap();
         let remote = PairingRemote {
             url: format!("https://localhost:{}/", addr.port()),
-            id: UUID_A.into(),
+            id: pairing_s2_node_id(),
         };
 
         let client = Client::new(
@@ -699,7 +699,7 @@ mod tests {
         let addr = server_handle.listening().await.unwrap();
         let remote = PairingRemote {
             url: format!("https://localhost:{}/", addr.port()),
-            id: UUID_A.into(),
+            id: pairing_s2_node_id(),
         };
 
         let client = Client::new(
@@ -748,7 +748,7 @@ mod tests {
         let addr = server_handle.listening().await.unwrap();
         let remote = PairingRemote {
             url: format!("https://localhost:{}/", addr.port()),
-            id: UUID_A.into(),
+            id: pairing_s2_node_id(),
         };
 
         let client = Client::new(

@@ -4,7 +4,7 @@ use uuid::uuid;
 
 use s2energy_connection::{
     Deployment, MessageVersion, S2NodeDescription, S2Role,
-    pairing::{Client, ClientConfig, NodeConfig, PairingRemote},
+    pairing::{Client, ClientConfig, NodeConfig, PairingRemote, PairingS2NodeId},
 };
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
@@ -48,7 +48,7 @@ async fn main() {
         .pair(
             PairingRemote {
                 url: "https://localhost:8005".into(),
-                id: uuid!("67e55044-10b1-426f-9247-bb680e5fe0c8").into(),
+                id: PairingS2NodeId::from_bytes(b"ninechars"),
             },
             PAIRING_TOKEN,
         )
