@@ -298,6 +298,10 @@ async fn v1_request_pairing(
     async move {
         trace!("Found open pairing session.");
 
+        if open_pairing.config.node_description.role == request_pairing.node_description.role {
+            return Err(PairingResponseErrorMessage::InvalidCombinationOfRoles);
+        }
+
         if !request_pairing.force_pairing {
             let mut communication_overlap = false;
             for communication_protocol in &open_pairing.config.supported_communication_protocols {
@@ -813,6 +817,51 @@ mod tests {
         let body = response.into_body().collect().await.unwrap().to_bytes();
         let error: PairingResponseErrorMessage = serde_json::from_slice(&body).unwrap();
         assert_eq!(error, PairingResponseErrorMessage::S2NodeNotFound);
+    }
+
+    #[tokio::test]
+    async fn pair_attempt_same_role() {
+        let server = Server::new(ServerConfig { root_certificate: None });
+        let pairing_waiter = server
+            .pair_once(
+                Arc::new(
+                    NodeConfig::builder(basic_node_description(UUID_A, S2Role::Rm), vec![MessageVersion("v1".into())])
+                        .with_connection_initiate_url("https://example.com/".into())
+                        .build()
+                        .unwrap(),
+                ),
+                PairingToken(b"testtoken".as_slice().into()),
+            )
+            .unwrap();
+
+        let challenge = HmacChallenge::new(&mut rand::rng(), 64);
+        let response = server
+            .get_router()
+            .oneshot(
+                http::Request::post("/v1/requestPairing")
+                    .header(http::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&RequestPairing {
+                            node_description: basic_node_description(UUID_B, S2Role::Rm),
+                            endpoint_description: S2EndpointDescription::default(),
+                            id: UUID_A.into(),
+                            supported_protocols: vec![CommunicationProtocol("WebSocket".into())],
+                            supported_versions: vec![MessageVersion("v1".into())],
+                            supported_hashing_algorithms: vec![HmacHashingAlgorithm::Sha256],
+                            client_hmac_challenge: challenge.clone(),
+                            force_pairing: false,
+                        })
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = dbg!(response.into_body().collect().await.unwrap().to_bytes());
+        let error: PairingResponseErrorMessage = serde_json::from_slice(&body).unwrap();
+        assert_eq!(error, PairingResponseErrorMessage::InvalidCombinationOfRoles);
     }
 
     #[tokio::test]
