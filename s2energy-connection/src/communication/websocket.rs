@@ -1,5 +1,5 @@
 use futures_util::{SinkExt, StreamExt};
-use s2energy_common::S2Transport;
+use s2energy_common::{S2ErrorExt, S2Transport};
 use tokio::net::TcpStream;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, tungstenite::Message};
 
@@ -70,6 +70,15 @@ impl std::fmt::Display for WebSocketError {
 impl std::error::Error for WebSocketError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         self.wrapped_error.contents()
+    }
+}
+
+impl S2ErrorExt for WebSocketError {
+    fn is_serialization_error(&self) -> bool {
+        match self.kind {
+            WebSocketErrorKind::Encoding => true,
+            WebSocketErrorKind::Transport | WebSocketErrorKind::Closed => false,
+        }
     }
 }
 

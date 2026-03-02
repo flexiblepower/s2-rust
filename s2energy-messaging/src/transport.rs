@@ -10,12 +10,6 @@
 //! WebSockets according to [the official JSON schema](https://github.com/flexiblepower/s2-ws-json).
 //! This is currently the most common and well-supported way to use S2.
 
-#[doc(hidden)]
-#[cfg(feature = "dbus")]
-pub mod dbus;
-#[cfg(feature = "websockets-json")]
-pub mod websockets_json;
-
 // TODO: for some reason, this module is not visible to doctests when annotated with #[cfg(any(test, doctest))]
 // So for now it's just unconditionally public (and it might be useful for other people doing tests, so maybe that's fine?).
 #[doc(hidden)]

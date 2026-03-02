@@ -5,10 +5,12 @@
 //! [`websockets_json::connect_as_client`](crate::transport::websockets_json::connect_as_client).
 
 use crate::common::{
-    ControlType, EnergyManagementRole, Handshake, Message, ReceptionStatus, ReceptionStatusValues, ResourceManagerDetails,
+    ControlType, EnergyManagementRole, Handshake, Id, Message as S2Message, Message, ReceptionStatus, ReceptionStatusValues,
+    ResourceManagerDetails,
 };
-use s2energy_common::S2Transport;
+use s2energy_common::{S2ErrorExt, S2Transport};
 use semver::VersionReq;
+use std::str::FromStr;
 use thiserror::Error;
 
 /// An error from the S2 connection.
@@ -160,7 +162,21 @@ impl<T: S2Transport> S2Connection<T> {
     pub async fn receive_message<'connection>(
         &'connection mut self,
     ) -> Result<UnconfirmedMessage<'connection, T>, ConnectionError<T::TransportError>> {
-        let message = self.transport.receive().await.map_err(ConnectionError::TransportError)?;
+        let message = match self.transport.receive().await {
+            Ok(message) => message,
+            Err(e) => {
+                if e.is_serialization_error() {
+                    self.send_message(S2Message::from(ReceptionStatus {
+                        diagnostic_label: Some(e.to_string()),
+                        status: ReceptionStatusValues::InvalidData,
+                        subject_message_id: Id::from_str("00000000-0000-0000-0000-000000000000").unwrap(),
+                    }))
+                    .await
+                    .ok();
+                }
+                return Err(ConnectionError::TransportError(e));
+            }
+        };
         tracing::trace!("Received S2 message: {message:?}");
         Ok(UnconfirmedMessage::new(message, self))
     }

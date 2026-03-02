@@ -1,14 +1,7 @@
-//! Abstractions over transport protocols, and their implementations.
+//! Shared types for S2 protocols.
 //!
-//! The S2 specification does not mandate a specific transport protocol. This module provides the primary way
-//! transport protocols are abstracted in this crate: [`S2Transport`]. Implementing this trait for your
-//! desired transport protocol allows you to use all of the connection types in this library (like [`S2Connection`](crate::connection::S2Connection))
-//! with that transport protocol.
-//!
-//! In addition, this module provides specific transport protocol implementations in its submodules.
-//! The most relevant of these is [`websockets_json`], which provides an implementation for JSON over
-//! WebSockets according to [the official JSON schema](https://github.com/flexiblepower/s2-ws-json).
-//! This is currently the most common and well-supported way to use S2.
+//! This crate contains types shared between the communication and message layers of [the s2-ws-json protocol](https://github.com/flexiblepower/s2-ws-json).
+#![warn(missing_docs)]
 
 use std::error::Error;
 
@@ -20,7 +13,7 @@ use serde::{Serialize, de::DeserializeOwned};
 /// transport protocols that can be used to talk S2 over.
 pub trait S2Transport {
     /// Error type for errors occurring at a transport level.
-    type TransportError: Error;
+    type TransportError: Error + S2ErrorExt;
 
     /// Send an S2 message.
     fn send(&mut self, message: impl Serialize + Send) -> impl Future<Output = Result<(), Self::TransportError>> + Send;
@@ -33,4 +26,18 @@ pub trait S2Transport {
     /// This should do whatever is appropriate for the implemented transport protocol. This may include sending
     /// e.g. a close frame. When the future resolves, the connection should be fully terminated.
     fn disconnect(self) -> impl Future<Output = ()> + Send;
+}
+
+/// Extension to the Error trait to allow transport layers to indicate that a specific
+/// error was the result from serialization failures. This allows the messaging layer to
+/// then generate the appropriate error message for to send in response.
+pub trait S2ErrorExt {
+    /// Was the error because of (de)serialization.
+    fn is_serialization_error(&self) -> bool;
+}
+
+impl S2ErrorExt for std::convert::Infallible {
+    fn is_serialization_error(&self) -> bool {
+        false
+    }
 }
