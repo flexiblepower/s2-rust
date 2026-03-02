@@ -9,16 +9,16 @@ use crate::common::wire::{AccessToken, Deployment, PairingVersion, S2NodeId, S2R
 use crate::pairing::transport::{HashProvider, hash_providing_https_client};
 use crate::pairing::{Error, Pairing, PairingRole};
 
-use super::EndpointConfig;
+use super::NodeConfig;
 use super::wire::*;
 use super::{ErrorKind, Network, PairingResult};
 
-/// Remote endpoint to pair with
+/// Remote node to pair with
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PairingRemote {
-    /// URL at which the remote endpoint can be reached
+    /// URL at which the remote node can be reached
     pub url: String,
-    /// S2 node id of the remote endpoint.
+    /// S2 node id of the remote node.
     pub id: S2NodeId,
 }
 
@@ -36,14 +36,14 @@ pub struct ClientConfig {
 ///
 /// Used as the client end of a pairing interaction.
 pub struct Client {
-    config: Arc<EndpointConfig>,
+    config: Arc<NodeConfig>,
     additional_certificates: Vec<CertificateDer<'static>>,
     pairing_deployment: Deployment,
 }
 
 impl Client {
-    /// Create a new client for pairing on an endpoint with the given configuration.
-    pub fn new(config: Arc<EndpointConfig>, client_config: ClientConfig) -> PairingResult<Self> {
+    /// Create a new client for pairing on an node with the given configuration.
+    pub fn new(config: Arc<NodeConfig>, client_config: ClientConfig) -> PairingResult<Self> {
         Ok(Self {
             config,
             additional_certificates: client_config.additional_certificates,
@@ -91,11 +91,11 @@ impl Client {
 struct V1Session<'a> {
     client: reqwest::Client,
     base_url: Url,
-    config: &'a EndpointConfig,
+    config: &'a NodeConfig,
 }
 
 impl<'a> V1Session<'a> {
-    fn new(client: reqwest::Client, url: Url, config: &'a EndpointConfig) -> Self {
+    fn new(client: reqwest::Client, url: Url, config: &'a NodeConfig) -> Self {
         V1Session {
             client,
             base_url: url.join("v1/").unwrap(),

@@ -25,7 +25,7 @@ use crate::{
     pairing::PairingRole,
 };
 
-use super::{EndpointConfig, ErrorKind, Network, Pairing, PairingResult, wire::*};
+use super::{ErrorKind, Network, NodeConfig, Pairing, PairingResult, wire::*};
 
 const PERMANENT_PAIRING_BUFFER_SIZE: usize = 1;
 
@@ -104,8 +104,8 @@ impl Server {
             .with_state(self.state.clone())
     }
 
-    /// Start a one-time pairing session for the given endpoint using the given token.
-    pub fn pair_once(&self, config: Arc<EndpointConfig>, pairing_token: PairingToken) -> Result<PendingPairing, ErrorKind> {
+    /// Start a one-time pairing session for the given node using the given token.
+    pub fn pair_once(&self, config: Arc<NodeConfig>, pairing_token: PairingToken) -> Result<PendingPairing, ErrorKind> {
         if config.connection_initiate_url.is_none() {
             return Err(ErrorKind::InvalidConfig(super::ConfigError::MissingInitiateUrl));
         }
@@ -129,7 +129,7 @@ impl Server {
     }
 
     /// Allow repeated pairing sessions for the given endpoing using the given token.
-    pub fn pair_repeated(&self, config: Arc<EndpointConfig>, pairing_token: PairingToken) -> Result<RepeatedPairing, ErrorKind> {
+    pub fn pair_repeated(&self, config: Arc<NodeConfig>, pairing_token: PairingToken) -> Result<RepeatedPairing, ErrorKind> {
         if config.connection_initiate_url.is_none() {
             return Err(ErrorKind::InvalidConfig(super::ConfigError::MissingInitiateUrl));
         }
@@ -172,20 +172,20 @@ impl ResultSender {
 }
 
 struct PermanentPairingRequest {
-    config: Arc<EndpointConfig>,
+    config: Arc<NodeConfig>,
     sender: tokio::sync::mpsc::Sender<PairingResult<Pairing>>,
     token: PairingToken,
 }
 
 struct PairingRequest {
-    config: Arc<EndpointConfig>,
+    config: Arc<NodeConfig>,
     sender: ResultSender,
     token: PairingToken,
 }
 
 struct InitialPairingState {
     session_span: tracing::Span,
-    config: Arc<EndpointConfig>,
+    config: Arc<NodeConfig>,
     sender: ResultSender,
     challenge: HmacChallenge,
     token: PairingToken,

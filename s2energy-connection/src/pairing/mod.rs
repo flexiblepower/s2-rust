@@ -2,14 +2,14 @@
 //!
 //! This module provides client and server implementations of the [S2 pairing protocol](https://docs.s2standard.org/docs/communication-layer/discovery-pairing-authentication/#the-pairing-process)
 //!
-//! # Endpoint configuration
+//! # Node configuration
 //!
-//! The main configuration struct [`EndpointConfig`] describes an S2 endpoint. It is constructed through
+//! The main configuration struct [`NodeConfig`] describes an S2 node. It is constructed through
 //! a builder pattern. For simple configuration, the builder can immediately be build:
 //! ```rust
-//! # use s2energy_connection::pairing::EndpointConfig;
+//! # use s2energy_connection::pairing::NodeConfig;
 //! # use s2energy_connection::{MessageVersion, S2NodeDescription, S2NodeId, S2Role};
-//! let _config = EndpointConfig::builder(S2NodeDescription {
+//! let _config = NodeConfig::builder(S2NodeDescription {
 //!     id: S2NodeId::try_from("67e55044-10b1-426f-9247-bb680e5fe0c8").unwrap(),
 //!     brand: String::from("super-reliable-corp"),
 //!     logo_uri: None,
@@ -24,9 +24,9 @@
 //!
 //! Additional information can be added through methods on the builder. For example, we can add a connection initiate url through:
 //! ```rust
-//! # use s2energy_connection::pairing::EndpointConfig;
+//! # use s2energy_connection::pairing::NodeConfig;
 //! # use s2energy_connection::{MessageVersion, S2NodeDescription, S2NodeId, S2Role};
-//! let _config = EndpointConfig::builder(S2NodeDescription {
+//! let _config = NodeConfig::builder(S2NodeDescription {
 //!     id: S2NodeId::try_from("67e55044-10b1-426f-9247-bb680e5fe0c8").unwrap(),
 //!     brand: String::from("super-reliable-corp"),
 //!     logo_uri: None,
@@ -42,13 +42,13 @@
 //!
 //! # Client usage
 //!
-//! Given an endpoint configuration, a [`Client`] can be constructed which can be used to pair with a remote S2 node running a pairing
+//! Given a node configuration, a [`Client`] can be constructed which can be used to pair with a remote S2 node running a pairing
 //! server. For this, you will also need to know the id of the node, and the URL on which its pairing server is reachable.
 //! ```rust
 //! # use std::sync::Arc;
-//! # use s2energy_connection::pairing::{Client, ClientConfig, EndpointConfig, PairingRemote};
+//! # use s2energy_connection::pairing::{Client, ClientConfig, NodeConfig, PairingRemote};
 //! # use s2energy_connection::{Deployment, MessageVersion, S2NodeDescription, S2NodeId, S2Role};
-//! # let config = EndpointConfig::builder(S2NodeDescription {
+//! # let config = NodeConfig::builder(S2NodeDescription {
 //! #     id: S2NodeId::new(),
 //! #     brand: String::from("super-reliable-corp"),
 //! #     logo_uri: None,
@@ -105,7 +105,7 @@
 //! ```no_run
 //! # use std::{path::PathBuf, net::SocketAddr, sync::Arc};
 //! # use axum_server::tls_rustls::RustlsConfig;
-//! # use s2energy_connection::pairing::{EndpointConfig, PairingToken, Server, ServerConfig};
+//! # use s2energy_connection::pairing::{NodeConfig, PairingToken, Server, ServerConfig};
 //! # use s2energy_connection::{MessageVersion, S2NodeDescription, S2NodeId, S2Role};
 //! # #[tokio::main(flavor = "current_thread")]
 //! # async fn main() {
@@ -121,7 +121,7 @@
 //! # let server = Server::new(ServerConfig {
 //! #     root_certificate: None,
 //! # });
-//! # let config = Arc::new(EndpointConfig::builder(S2NodeDescription {
+//! # let config = Arc::new(NodeConfig::builder(S2NodeDescription {
 //! #     id: S2NodeId::new(),
 //! #     brand: String::from("super-reliable-corp"),
 //! #     logo_uri: None,
@@ -141,7 +141,7 @@
 //! ```no_run
 //! # use std::{path::PathBuf, net::SocketAddr, sync::Arc};
 //! # use axum_server::tls_rustls::RustlsConfig;
-//! # use s2energy_connection::pairing::{EndpointConfig, PairingToken, Server, ServerConfig};
+//! # use s2energy_connection::pairing::{NodeConfig, PairingToken, Server, ServerConfig};
 //! # use s2energy_connection::{MessageVersion, S2NodeDescription, S2NodeId, S2Role};
 //! # #[tokio::main(flavor = "current_thread")]
 //! # async fn main() {
@@ -157,7 +157,7 @@
 //! # let server = Server::new(ServerConfig {
 //! #     root_certificate: None,
 //! # });
-//! # let config = Arc::new(EndpointConfig::builder(S2NodeDescription {
+//! # let config = Arc::new(NodeConfig::builder(S2NodeDescription {
 //! #     id: S2NodeId::new(),
 //! #     brand: String::from("super-reliable-corp"),
 //! #     logo_uri: None,
@@ -199,9 +199,9 @@ use crate::{
     CommunicationProtocol, Deployment, MessageVersion, S2EndpointDescription, S2NodeDescription, S2Role, common::wire::AccessToken,
 };
 
-/// Full description of an S2 endpoint
+/// Full description of an S2 nodew
 #[derive(Debug, Clone)]
-pub struct EndpointConfig {
+pub struct NodeConfig {
     node_description: S2NodeDescription,
     endpoint_description: S2EndpointDescription,
     supported_message_versions: Vec<MessageVersion>,
@@ -209,35 +209,35 @@ pub struct EndpointConfig {
     connection_initiate_url: Option<String>,
 }
 
-impl EndpointConfig {
+impl NodeConfig {
     /// Description of the S2 node.
     pub fn node_description(&self) -> &S2NodeDescription {
         &self.node_description
     }
 
-    /// Description of the actual endpoint of the node.
+    /// Description of the endpoint hosting the node.
     pub fn endpoint_description(&self) -> &S2EndpointDescription {
         &self.endpoint_description
     }
 
-    /// Message versions supported by this endpoint.
+    /// Message versions supported by this node.
     pub fn supported_message_versions(&self) -> &[MessageVersion] {
         &self.supported_message_versions
     }
 
-    /// Communication protocols supported by this endpoint
+    /// Communication protocols supported by this node
     pub fn supported_communication_protocols(&self) -> &[CommunicationProtocol] {
         &self.supported_communication_protocols
     }
 
-    /// Connection initiate url used for this endpoint, if configured.
+    /// Connection initiate url used for this node, if configured.
     pub fn connection_initiate_url(&self) -> Option<&str> {
         self.connection_initiate_url.as_deref()
     }
 
-    /// Create a builder for a new [`EndpointConfig`]
+    /// Create a builder for a new [`NodeConfig`]
     ///
-    /// All endpoint configurations must at least contain description of the node and supported message versions. Additional
+    /// All node configurations must at least contain description of the node and supported message versions. Additional
     /// properties can be configured through the builder.
     pub fn builder(node_description: S2NodeDescription, supported_message_versions: Vec<MessageVersion>) -> ConfigBuilder {
         ConfigBuilder {
@@ -250,7 +250,7 @@ impl EndpointConfig {
     }
 }
 
-/// Builder for an [`EndpointConfig`]
+/// Builder for an [`NodeConfig`]
 pub struct ConfigBuilder {
     node_description: S2NodeDescription,
     endpoint_description: S2EndpointDescription,
@@ -262,7 +262,7 @@ pub struct ConfigBuilder {
 impl ConfigBuilder {
     /// Set a url for initiating new connections.
     ///
-    /// By default, this URL is not present. It is however required for CEM endpoints, or RM endpoints with a WAN deployment.
+    /// By default, this URL is not present. It is however required for CEM nodes, or RM nodes with a WAN deployment.
     pub fn with_connection_initiate_url(mut self, connection_initiate_url: String) -> Self {
         self.connection_initiate_url = Some(connection_initiate_url);
         self
@@ -282,14 +282,14 @@ impl ConfigBuilder {
         self
     }
 
-    /// Create the actual [`EndpointConfig`], validating that it is reasonable.
-    pub fn build(self) -> Result<EndpointConfig, ConfigError> {
+    /// Create the actual [`NodeConfig`], validating that it is reasonable.
+    pub fn build(self) -> Result<NodeConfig, ConfigError> {
         if (self.node_description.role == S2Role::Cem || self.endpoint_description.deployment == Some(Deployment::Wan))
             && self.connection_initiate_url.is_none()
         {
             return Err(ConfigError::MissingInitiateUrl);
         }
-        Ok(EndpointConfig {
+        Ok(NodeConfig {
             node_description: self.node_description,
             endpoint_description: self.endpoint_description,
             supported_message_versions: self.supported_message_versions,
@@ -312,11 +312,11 @@ pub enum PairingRole {
 
 /// The result of a pairing operation
 ///
-/// Describes the remote endpoint, and how communication between the nodes will happen.
+/// Describes the remote node, and how communication between the nodes will happen.
 pub struct Pairing {
     /// Description of the remote S2 Node.
     pub remote_node_description: S2NodeDescription,
-    /// Description of the remote S2 Endpoint.
+    /// Description of the remote S2 Endpoint hosting the node.
     pub remote_endpoint_description: S2EndpointDescription,
     /// Token used during communication setup.
     pub token: AccessToken,
