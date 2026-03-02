@@ -2,6 +2,7 @@ use axum::extract::FromRequestParts;
 use axum_extra::{TypedHeader, headers};
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
+use subtle::ConstantTimeEq;
 use thiserror::Error;
 use tracing::info;
 
@@ -65,8 +66,20 @@ pub(crate) struct InitiateConnectionResponse {
 /// One-time access token for secure access to the S2 message communication channel. It must be renewed every time a client wants to access
 /// the S2 message communication channel by calling the requestToken endpoint. This token is valid for one time login, with a maximum 5
 /// years, and should have a minimum length of 32 bytes.
-#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
+#[derive(Serialize, Deserialize, Clone, Eq)]
 pub struct CommunicationToken(pub String);
+
+impl PartialEq for CommunicationToken {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.as_bytes().ct_eq(other.0.as_bytes()).into()
+    }
+}
+
+impl std::hash::Hash for CommunicationToken {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.0.hash(state);
+    }
+}
 
 impl CommunicationToken {
     pub fn new(rng: &mut impl rand::CryptoRng) -> Self {
