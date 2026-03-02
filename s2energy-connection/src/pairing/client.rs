@@ -305,6 +305,29 @@ impl<'a> V1Session<'a> {
             .send()
             .await
             .map_err(|e| Error::new(ErrorKind::TransportFailed, e))?;
+        if response.status() == StatusCode::BAD_REQUEST {
+            let error_response = response
+                .json::<PairingResponseErrorMessage>()
+                .await
+                .map_err(|e| Error::new(ErrorKind::ProtocolError, e))?;
+            match error_response {
+                PairingResponseErrorMessage::InvalidCombinationOfRoles => {
+                    return Err(Error::new(ErrorKind::RemoteOfSameType, error_response));
+                }
+                PairingResponseErrorMessage::IncompatibleS2MessageVersions
+                | PairingResponseErrorMessage::IncompatibleHMACHashingAlgorithms
+                | PairingResponseErrorMessage::IncompatibleCommunicationProtocols => {
+                    return Err(Error::new(ErrorKind::NoSupportedVersion, error_response));
+                }
+                PairingResponseErrorMessage::S2NodeNotFound | PairingResponseErrorMessage::S2NodeNotProvided => {
+                    return Err(Error::new(ErrorKind::UnknownNode, error_response));
+                }
+                PairingResponseErrorMessage::InvalidPairingToken => return Err(Error::new(ErrorKind::InvalidToken, error_response)),
+                PairingResponseErrorMessage::ParsingError | PairingResponseErrorMessage::Other => {
+                    return Err(Error::new(ErrorKind::ProtocolError, error_response));
+                }
+            }
+        }
         if response.status() != StatusCode::OK {
             debug!(status = ?response.status(), "Unexpected status code in response to requestPairing.");
             return Err(ErrorKind::ProtocolError.into());
@@ -346,7 +369,9 @@ mod tests {
         common::wire::test::{UUID_A, UUID_B, basic_node_description},
         pairing::{
             Client, ClientConfig, ErrorKind, Network, NodeConfig, Pairing, PairingRemote, PairingRole, PairingToken, Server, ServerConfig,
-            wire::{HmacChallenge, HmacChallengeResponse, PairingAttemptId, RequestPairing, RequestPairingResponse},
+            wire::{
+                HmacChallenge, HmacChallengeResponse, PairingAttemptId, PairingResponseErrorMessage, RequestPairing, RequestPairingResponse,
+            },
         },
     };
 
@@ -582,6 +607,64 @@ mod tests {
         let client_pairing = client.pair(remote, b"testtoken").await.unwrap_err();
         assert_eq!(client_pairing.kind(), ErrorKind::RemoteOfSameType);
         assert_eq!(*finalize_result.lock().unwrap(), Some(false));
+
+        server_handle.shutdown();
+    }
+
+    #[tokio::test]
+    async fn pairing_rejects_same_role_reported_by_server() {
+        let server_config = NodeConfig::builder(basic_node_description(UUID_A, S2Role::Rm), vec![MessageVersion("v1".into())])
+            .with_connection_initiate_url("test.example.com".into())
+            .build()
+            .unwrap();
+
+        let client_config = NodeConfig::builder(basic_node_description(UUID_B, S2Role::Rm), vec![MessageVersion("v1".into())])
+            .with_connection_initiate_url("client.example.com".into())
+            .build()
+            .unwrap();
+
+        let finalize_result = Arc::new(Mutex::new(None));
+        let finalize_result_clone = finalize_result.clone();
+        let (server_handle, _) = setup_server(
+            server_config,
+            Router::new()
+                .route(
+                    "/v1/requestPairing",
+                    post(|| async {
+                        (
+                            StatusCode::BAD_REQUEST,
+                            Json(PairingResponseErrorMessage::InvalidCombinationOfRoles),
+                        )
+                    }),
+                )
+                .route(
+                    "/v1/finalizePairing",
+                    post(|attempt_id: PairingAttemptId, Json(success): Json<bool>| async move {
+                        assert_eq!(attempt_id.0, "testid");
+                        *finalize_result_clone.lock().unwrap() = Some(success);
+                    }),
+                ),
+        )
+        .await;
+
+        let addr = server_handle.listening().await.unwrap();
+        let remote = PairingRemote {
+            url: format!("https://localhost:{}/", addr.port()),
+            id: UUID_A.into(),
+        };
+
+        let client = Client::new(
+            Arc::new(client_config),
+            ClientConfig {
+                additional_certificates: vec![CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()],
+                pairing_deployment: Deployment::Wan,
+            },
+        )
+        .unwrap();
+
+        let client_pairing = client.pair(remote, b"testtoken").await.unwrap_err();
+        assert_eq!(client_pairing.kind(), ErrorKind::RemoteOfSameType);
+        assert_eq!(*finalize_result.lock().unwrap(), None);
 
         server_handle.shutdown();
     }
