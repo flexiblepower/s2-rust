@@ -134,7 +134,7 @@ impl std::fmt::Display for WebSocketErrorKind {
     }
 }
 
-/// An [`S2Transport`] using [json over websocket](https://github.com/flexiblepower/s2-ws-json)
+/// An [`S2Transport`] using [json over websocket](https://github.com/flexiblepower/s2-ws-json).
 pub struct WebSocketTransport {
     inner: WebSocketImplementation,
 }

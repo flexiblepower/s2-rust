@@ -31,7 +31,7 @@
 //!
 //! # Pairing descriptions
 //!
-//! The communication protocol needs to update the access tokens for a pairing durign the
+//! The communication protocol needs to update the access tokens for a pairing during the
 //! main interaction between client and server. To facilitate this without forcing a
 //! specific implementation for the storage of access tokens, this crate uses traits to
 //! describe the pairings used by client and server.
@@ -39,7 +39,7 @@
 //! # Client usage
 //!
 //! The [`Client`] can be used to establish a communication sessions for which the local
-//! software is the communication initiator. Using it is relatively straightforward:
+//! software is the communication initiator:
 //! ```rust
 //! # use std::sync::Arc;
 //! # use std::convert::Infallible;
@@ -87,7 +87,7 @@
 //! });
 //! ```
 //!
-//! The resulting connectionInfo provides the negotiated connection. It also contains the
+//! The resulting [`ConnectionInfo`] provides the negotiated connection. It also contains the
 //! negotiated protocol version, as well as any updates to node and endpoint descriptions
 //! received during the session.
 //!
@@ -146,7 +146,7 @@
 //! # }
 //! ```
 //!
-//! Once the server is setup, the connections it established can be gotten through calls to
+//! Once the server is setup, the connections it established can be accessed through calls to
 //! [`Server::next_connection`]:
 //! ```no_run
 //! # use std::{path::PathBuf, net::SocketAddr, convert::Infallible};
@@ -192,7 +192,7 @@
 //! let (pairing, connection) = server.next_connection().await;
 //! # }
 //! ```
-//! This yields the node identifiers of the pairing the connection is for, as well as the same connection
+//! The call to [`Server::next_connection`] returns the node identifiers of the pairing the connection is for, as well as the same connection
 //! information as provided by the client.
 //!
 //! # Example applications
