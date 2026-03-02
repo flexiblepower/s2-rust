@@ -241,7 +241,7 @@ impl<'a> V1Session<'a> {
         let response = self
             .client
             .post(self.base_url.join("requestConnectionDetails").unwrap())
-            .header(PairingAttemptId::HEADER_NAME, attempt_id.header_value())
+            .bearer_auth(&attempt_id.0)
             .json(&request)
             .send()
             .await
@@ -274,7 +274,7 @@ impl<'a> V1Session<'a> {
         let response = self
             .client
             .post(self.base_url.join("postConnectionDetails").unwrap())
-            .header(PairingAttemptId::HEADER_NAME, attempt_id.header_value())
+            .bearer_auth(&attempt_id.0)
             .json(&request)
             .send()
             .await
@@ -320,7 +320,7 @@ impl<'a> V1Session<'a> {
         let response = self
             .client
             .post(self.base_url.join("finalizePairing").unwrap())
-            .header(PairingAttemptId::HEADER_NAME, attempt_id.header_value())
+            .bearer_auth(&attempt_id.0)
             .json(&success)
             .send()
             .await
