@@ -8,7 +8,7 @@ use tracing::info;
 
 use crate::common::wire::{AccessToken, CommunicationProtocol, MessageVersion, S2EndpointDescription, S2NodeDescription, S2NodeId};
 
-#[derive(Error, Debug, Serialize, Deserialize)]
+#[derive(Error, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub(crate) enum PairingResponseErrorMessage {
     #[error("Invalid combination of roles")]
     InvalidCombinationOfRoles,
