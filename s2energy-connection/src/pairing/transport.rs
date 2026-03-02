@@ -173,3 +173,135 @@ pub(crate) fn hash_providing_https_client() -> PairingResult<(reqwest::Client, H
 
     Ok((client, HashProvider { state }))
 }
+
+#[cfg(test)]
+mod tests {
+    use std::net::{Ipv4Addr, SocketAddr};
+
+    use axum::{Router, routing::get};
+    use axum_server::tls_rustls::RustlsConfig;
+
+    use crate::pairing::transport::hash_providing_https_client;
+
+    #[tokio::test]
+    async fn matching_certificates() {
+        let rustls_config = RustlsConfig::from_pem(
+            include_bytes!("../../testdata/localhost.chain.pem").into(),
+            include_bytes!("../../testdata/localhost.key").into(),
+        )
+        .await
+        .unwrap();
+        let router = Router::new().route("/", get(|| async { "Hello world" }));
+        let https_server_handle = axum_server::Handle::new();
+        let https_server_handle_clone = https_server_handle.clone();
+        tokio::spawn(async move {
+            axum_server::bind_rustls(SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 0), rustls_config)
+                .handle(https_server_handle_clone)
+                .serve(router.into_make_service())
+                .await
+                .unwrap();
+        });
+        let addr = https_server_handle.listening().await.unwrap();
+
+        let (client, hash_provider) = hash_providing_https_client().unwrap();
+        assert!(client.get(format!("https://localhost:{}/", addr.port())).send().await.is_ok());
+        assert!(hash_provider.hash().is_some());
+        assert!(client.get(format!("https://localhost:{}/", addr.port())).send().await.is_ok());
+
+        https_server_handle.shutdown();
+    }
+
+    #[tokio::test]
+    async fn matching_root_certificates() {
+        let rustls_config = RustlsConfig::from_pem(
+            include_bytes!("../../testdata/localhost.chain.pem").into(),
+            include_bytes!("../../testdata/localhost.key").into(),
+        )
+        .await
+        .unwrap();
+        let router = Router::new().route("/", get(|| async { "Hello world" }));
+        let https_server_handle = axum_server::Handle::new();
+        let https_server_handle_clone = https_server_handle.clone();
+        tokio::spawn(async move {
+            axum_server::bind_rustls(SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 0), rustls_config)
+                .handle(https_server_handle_clone)
+                .serve(router.into_make_service())
+                .await
+                .unwrap();
+        });
+        let addr = https_server_handle.listening().await.unwrap();
+
+        let (client, hash_provider) = hash_providing_https_client().unwrap();
+        assert!(client.get(format!("https://localhost:{}/", addr.port())).send().await.is_ok());
+        assert!(hash_provider.hash().is_some());
+
+        https_server_handle.shutdown();
+
+        let rustls_config = RustlsConfig::from_pem(
+            include_bytes!("../../testdata/localhost-alt.chain.pem").into(),
+            include_bytes!("../../testdata/localhost-alt.key").into(),
+        )
+        .await
+        .unwrap();
+        let router = Router::new().route("/", get(|| async { "Hello world" }));
+        let https_server_handle = axum_server::Handle::new();
+        let https_server_handle_clone = https_server_handle.clone();
+        tokio::spawn(async move {
+            axum_server::bind_rustls(SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 0), rustls_config)
+                .handle(https_server_handle_clone)
+                .serve(router.into_make_service())
+                .await
+                .unwrap();
+        });
+        let addr = https_server_handle.listening().await.unwrap();
+
+        assert!(client.get(format!("https://localhost:{}/", addr.port())).send().await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn detects_mismatched_roots() {
+        let rustls_config = RustlsConfig::from_pem(
+            include_bytes!("../../testdata/localhost.chain.pem").into(),
+            include_bytes!("../../testdata/localhost.key").into(),
+        )
+        .await
+        .unwrap();
+        let router = Router::new().route("/", get(|| async { "Hello world" }));
+        let https_server_handle = axum_server::Handle::new();
+        let https_server_handle_clone = https_server_handle.clone();
+        tokio::spawn(async move {
+            axum_server::bind_rustls(SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 0), rustls_config)
+                .handle(https_server_handle_clone)
+                .serve(router.into_make_service())
+                .await
+                .unwrap();
+        });
+        let addr = https_server_handle.listening().await.unwrap();
+
+        let (client, hash_provider) = hash_providing_https_client().unwrap();
+        assert!(client.get(format!("https://localhost:{}/", addr.port())).send().await.is_ok());
+        assert!(hash_provider.hash().is_some());
+
+        https_server_handle.shutdown();
+
+        let rustls_config = RustlsConfig::from_pem(
+            include_bytes!("../../testdata/localhost-altroot.chain.pem").into(),
+            include_bytes!("../../testdata/localhost-altroot.key").into(),
+        )
+        .await
+        .unwrap();
+        let router = Router::new().route("/", get(|| async { "Hello world" }));
+        let https_server_handle = axum_server::Handle::new();
+        let https_server_handle_clone = https_server_handle.clone();
+        tokio::spawn(async move {
+            axum_server::bind_rustls(SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 0), rustls_config)
+                .handle(https_server_handle_clone)
+                .serve(router.into_make_service())
+                .await
+                .unwrap();
+        });
+        let addr = https_server_handle.listening().await.unwrap();
+
+        assert!(client.get(format!("https://localhost:{}/", addr.port())).send().await.is_err());
+    }
+}
