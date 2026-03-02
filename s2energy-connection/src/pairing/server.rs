@@ -373,14 +373,10 @@ async fn v1_request_pairing(
 #[tracing::instrument(skip_all, level = tracing::Level::INFO)]
 async fn v1_request_connection_details(
     State(app_state): State<AppState>,
-    headers: HeaderMap,
+    pairing_attempt_id: PairingAttemptId,
     Json(req): Json<RequestConnectionDetailsRequest>,
 ) -> Result<Json<ConnectionDetails>, StatusCode> {
     trace!("Received request for connection details.");
-    let Some(pairing_attempt_id) = PairingAttemptId::from_headers(&headers) else {
-        info!("Missing pairing attempt id.");
-        return Err(StatusCode::UNAUTHORIZED);
-    };
 
     // We do this with a closure to drop attempts before we run the future for sending results to the caller, if it is present.
     let (result, future) = (|| {
@@ -448,14 +444,10 @@ async fn v1_request_connection_details(
 #[tracing::instrument(skip_all, level = tracing::Level::INFO)]
 async fn v1_post_connection_details(
     State(app_state): State<AppState>,
-    headers: HeaderMap,
+    pairing_attempt_id: PairingAttemptId,
     Json(req): Json<PostConnectionDetailsRequest>,
 ) -> StatusCode {
     trace!("Received post of connection details");
-    let Some(pairing_attempt_id) = PairingAttemptId::from_headers(&headers) else {
-        info!("Missing pairing attempt id.");
-        return StatusCode::UNAUTHORIZED;
-    };
 
     // We do this with a closure to drop attempts before we run the future for sending results to the caller, if it is present.
     let (result, future) = (|| {
@@ -512,12 +504,8 @@ async fn v1_post_connection_details(
 }
 
 #[tracing::instrument(skip_all, level = tracing::Level::INFO)]
-async fn v1_finalize_pairing(State(state): State<AppState>, headers: HeaderMap, Json(success): Json<bool>) -> StatusCode {
+async fn v1_finalize_pairing(State(state): State<AppState>, pairing_attempt_id: PairingAttemptId, Json(success): Json<bool>) -> StatusCode {
     trace!("Received request to finalize pairing session.");
-    let Some(pairing_attempt_id) = PairingAttemptId::from_headers(&headers) else {
-        info!("Missing pairing attempt id.");
-        return StatusCode::UNAUTHORIZED;
-    };
 
     let Some(state) = ({
         let mut attempts = state.attempts.lock().unwrap();
