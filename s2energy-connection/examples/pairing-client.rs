@@ -4,7 +4,7 @@ use uuid::uuid;
 
 use s2energy_connection::{
     Deployment, MessageVersion, S2NodeDescription, S2Role,
-    pairing::{Client, ClientConfig, EndpointConfig, PairingRemote},
+    pairing::{Client, ClientConfig, NodeConfig, PairingRemote},
 };
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
@@ -17,7 +17,7 @@ async fn main() {
         .with(EnvFilter::from_default_env())
         .init();
 
-    let config = EndpointConfig::builder(
+    let config = NodeConfig::builder(
         S2NodeDescription {
             id: uuid!("67e55044-10b1-426f-9247-bb680e5fe0c7").into(),
             brand: String::from("super-reliable-corp"),

@@ -163,10 +163,10 @@ impl From<ConfigError> for ErrorKind {
     }
 }
 
-/// Error for problems with inconsistent [`EndpointConfig`]
+/// Error for problems with inconsistent [`NodeConfig`]
 #[derive(Error, Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum ConfigError {
-    /// The [`EndpointConfig`] doesn't have an `connection_initiate_url` even though it is needed for the configuration to make sense.
+    /// The [`NodeConfig`] doesn't have an `connection_initiate_url` even though it is needed for the configuration to make sense.
     #[error("Missing connection_initiate_url, even though it is required for CEM and WAN endpoints")]
     MissingInitiateUrl,
 }

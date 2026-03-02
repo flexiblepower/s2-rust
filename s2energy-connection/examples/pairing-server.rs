@@ -5,7 +5,7 @@ use uuid::uuid;
 
 use s2energy_connection::{
     MessageVersion, S2NodeDescription, S2Role,
-    pairing::{EndpointConfig, PairingToken, Server, ServerConfig},
+    pairing::{NodeConfig, PairingToken, Server, ServerConfig},
 };
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
@@ -24,7 +24,7 @@ async fn main() {
             CertificateDer::from_pem_file(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("testdata").join("root.pem")).unwrap(),
         ),
     });
-    let config = EndpointConfig::builder(
+    let config = NodeConfig::builder(
         S2NodeDescription {
             id: uuid!("67e55044-10b1-426f-9247-bb680e5fe0c8").into(),
             brand: String::from("super-reliable-corp"),
