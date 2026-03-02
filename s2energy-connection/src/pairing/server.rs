@@ -561,3 +561,602 @@ async fn v1_finalize_pairing(State(state): State<AppState>, pairing_attempt_id: 
         StatusCode::UNAUTHORIZED
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use axum::body::Body;
+    use http::StatusCode;
+    use http_body_util::BodyExt;
+    use tokio::time::Instant;
+    use tower::ServiceExt;
+    use tracing::{Level, span};
+
+    use crate::{
+        AccessToken, CommunicationProtocol, MessageVersion, S2EndpointDescription, S2NodeDescription, S2Role,
+        common::wire::test::{UUID_A, UUID_B, basic_node_description},
+        pairing::{
+            ErrorKind, Network, NodeConfig, PairingRole, PairingToken, Server, ServerConfig,
+            server::{CompletePairingState, ExpiringPairingState, InitialPairingState, PairingRequest, PairingState, ResultSender},
+            wire::{
+                ConnectionDetails, HmacChallenge, HmacHashingAlgorithm, PairingAttemptId, PairingResponseErrorMessage,
+                PostConnectionDetailsRequest, RequestConnectionDetailsRequest, RequestPairing, RequestPairingResponse,
+            },
+        },
+    };
+
+    #[tokio::test]
+    async fn version_negotiation() {
+        let server = Server::new(ServerConfig { root_certificate: None });
+
+        let response = server
+            .get_router()
+            .oneshot(http::Request::get("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(body, b"[\"v1\"]".as_slice());
+    }
+
+    #[tokio::test]
+    async fn pair_attempt() {
+        let server = Server::new(ServerConfig { root_certificate: None });
+        let pairing_waiter = server
+            .pair_once(
+                Arc::new(
+                    NodeConfig::builder(basic_node_description(UUID_A, S2Role::Rm), vec![MessageVersion("v1".into())])
+                        .with_connection_initiate_url("https://example.com/".into())
+                        .build()
+                        .unwrap(),
+                ),
+                PairingToken(b"testtoken".as_slice().into()),
+            )
+            .unwrap();
+
+        let challenge = HmacChallenge::new(&mut rand::rng(), 64);
+        let response = server
+            .get_router()
+            .oneshot(
+                http::Request::post("/v1/requestPairing")
+                    .header(http::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&RequestPairing {
+                            node_description: basic_node_description(UUID_B, S2Role::Cem),
+                            endpoint_description: S2EndpointDescription::default(),
+                            id: UUID_A.into(),
+                            supported_protocols: vec![CommunicationProtocol("WebSocket".into())],
+                            supported_versions: vec![MessageVersion("v1".into())],
+                            supported_hashing_algorithms: vec![HmacHashingAlgorithm::Sha256],
+                            client_hmac_challenge: challenge.clone(),
+                            force_pairing: false,
+                        })
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let response_data: RequestPairingResponse = serde_json::from_slice(&body).unwrap();
+        let expected_response = challenge.sha256(&Network::Wan, b"testtoken");
+        assert_eq!(expected_response, response_data.client_hmac_challenge_response);
+    }
+
+    #[tokio::test]
+    async fn pair_attempt_forced() {
+        let server = Server::new(ServerConfig { root_certificate: None });
+        let pairing_waiter = server
+            .pair_once(
+                Arc::new(
+                    NodeConfig::builder(basic_node_description(UUID_A, S2Role::Rm), vec![MessageVersion("v1".into())])
+                        .with_connection_initiate_url("https://example.com/".into())
+                        .build()
+                        .unwrap(),
+                ),
+                PairingToken(b"testtoken".as_slice().into()),
+            )
+            .unwrap();
+
+        let challenge = HmacChallenge::new(&mut rand::rng(), 64);
+        let response = server
+            .get_router()
+            .oneshot(
+                http::Request::post("/v1/requestPairing")
+                    .header(http::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&RequestPairing {
+                            node_description: basic_node_description(UUID_B, S2Role::Cem),
+                            endpoint_description: S2EndpointDescription::default(),
+                            id: UUID_A.into(),
+                            supported_protocols: vec![CommunicationProtocol("HTTP/3".into())],
+                            supported_versions: vec![MessageVersion("v0".into())],
+                            supported_hashing_algorithms: vec![HmacHashingAlgorithm::Sha256],
+                            client_hmac_challenge: challenge.clone(),
+                            force_pairing: true,
+                        })
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let response_data: RequestPairingResponse = serde_json::from_slice(&body).unwrap();
+        let expected_response = challenge.sha256(&Network::Wan, b"testtoken");
+        assert_eq!(expected_response, response_data.client_hmac_challenge_response);
+    }
+
+    #[tokio::test]
+    async fn request_connection_details() {
+        let server = Server::new(ServerConfig { root_certificate: None });
+        let mut attempts = server.state.attempts.lock().unwrap();
+        let (sender, _receiver) = tokio::sync::oneshot::channel();
+        let challenge = HmacChallenge::new(&mut rand::rng(), 64);
+        attempts.insert(
+            PairingAttemptId("testid".into()),
+            ExpiringPairingState {
+                start_time: Instant::now(),
+                state: PairingState::Initial(InitialPairingState {
+                    session_span: span!(Level::TRACE, "testspan"),
+                    config: Arc::new(
+                        NodeConfig::builder(basic_node_description(UUID_A, S2Role::Rm), vec![MessageVersion("v1".into())])
+                            .with_connection_initiate_url("https://example.com/".into())
+                            .build()
+                            .unwrap(),
+                    ),
+                    sender: ResultSender::Oneshot(sender),
+                    challenge: challenge.clone(),
+                    token: PairingToken(b"testtoken".as_slice().into()),
+                    remote_node_description: basic_node_description(UUID_B, S2Role::Cem),
+                    remote_endpoint_description: S2EndpointDescription::default(),
+                }),
+            },
+        );
+        drop(attempts);
+
+        let response = server
+            .get_router()
+            .oneshot(
+                http::Request::post("/v1/requestConnectionDetails")
+                    .header(http::header::AUTHORIZATION, "Bearer testid")
+                    .header(http::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&RequestConnectionDetailsRequest {
+                            server_hmac_challenge_response: challenge.sha256(&Network::Wan, b"testtoken"),
+                        })
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let response_data: ConnectionDetails = serde_json::from_slice(&body).unwrap();
+        assert_eq!(response_data.initiate_connection_url, "https://example.com/")
+    }
+
+    #[tokio::test]
+    async fn request_connection_details_invalid_response() {
+        let server = Server::new(ServerConfig { root_certificate: None });
+        let mut attempts = server.state.attempts.lock().unwrap();
+        let (sender, _receiver) = tokio::sync::oneshot::channel();
+        let challenge = HmacChallenge::new(&mut rand::rng(), 64);
+        attempts.insert(
+            PairingAttemptId("testid".into()),
+            ExpiringPairingState {
+                start_time: Instant::now(),
+                state: PairingState::Initial(InitialPairingState {
+                    session_span: span!(Level::TRACE, "testspan"),
+                    config: Arc::new(
+                        NodeConfig::builder(basic_node_description(UUID_A, S2Role::Rm), vec![MessageVersion("v1".into())])
+                            .with_connection_initiate_url("https://example.com/".into())
+                            .build()
+                            .unwrap(),
+                    ),
+                    sender: ResultSender::Oneshot(sender),
+                    challenge: challenge.clone(),
+                    token: PairingToken(b"testtoken".as_slice().into()),
+                    remote_node_description: basic_node_description(UUID_B, S2Role::Cem),
+                    remote_endpoint_description: S2EndpointDescription::default(),
+                }),
+            },
+        );
+        drop(attempts);
+
+        let response = server
+            .get_router()
+            .oneshot(
+                http::Request::post("/v1/requestConnectionDetails")
+                    .header(http::header::AUTHORIZATION, "Bearer testid")
+                    .header(http::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&RequestConnectionDetailsRequest {
+                            server_hmac_challenge_response: challenge.sha256(&Network::Wan, b"testtoken2"),
+                        })
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn request_connection_details_too_late() {
+        let server = Server::new(ServerConfig { root_certificate: None });
+        let mut attempts = server.state.attempts.lock().unwrap();
+        let (sender, _receiver) = tokio::sync::oneshot::channel();
+        let challenge = HmacChallenge::new(&mut rand::rng(), 64);
+        attempts.insert(
+            PairingAttemptId("testid".into()),
+            ExpiringPairingState {
+                start_time: Instant::now(),
+                state: PairingState::Initial(InitialPairingState {
+                    session_span: span!(Level::TRACE, "testspan"),
+                    config: Arc::new(
+                        NodeConfig::builder(basic_node_description(UUID_A, S2Role::Rm), vec![MessageVersion("v1".into())])
+                            .with_connection_initiate_url("https://example.com/".into())
+                            .build()
+                            .unwrap(),
+                    ),
+                    sender: ResultSender::Oneshot(sender),
+                    challenge: challenge.clone(),
+                    token: PairingToken(b"testtoken".as_slice().into()),
+                    remote_node_description: basic_node_description(UUID_B, S2Role::Cem),
+                    remote_endpoint_description: S2EndpointDescription::default(),
+                }),
+            },
+        );
+        drop(attempts);
+
+        tokio::time::sleep(std::time::Duration::from_secs(16)).await;
+
+        let response = server
+            .get_router()
+            .oneshot(
+                http::Request::post("/v1/requestConnectionDetails")
+                    .header(http::header::AUTHORIZATION, "Bearer testid")
+                    .header(http::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&RequestConnectionDetailsRequest {
+                            server_hmac_challenge_response: challenge.sha256(&Network::Wan, b"testtoken"),
+                        })
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn post_connection_details() {
+        let server = Server::new(ServerConfig { root_certificate: None });
+        let mut attempts = server.state.attempts.lock().unwrap();
+        let (sender, _receiver) = tokio::sync::oneshot::channel();
+        let challenge = HmacChallenge::new(&mut rand::rng(), 64);
+        attempts.insert(
+            PairingAttemptId("testid".into()),
+            ExpiringPairingState {
+                start_time: Instant::now(),
+                state: PairingState::Initial(InitialPairingState {
+                    session_span: span!(Level::TRACE, "testspan"),
+                    config: Arc::new(
+                        NodeConfig::builder(basic_node_description(UUID_A, S2Role::Rm), vec![MessageVersion("v1".into())])
+                            .with_connection_initiate_url("https://example.com/".into())
+                            .build()
+                            .unwrap(),
+                    ),
+                    sender: ResultSender::Oneshot(sender),
+                    challenge: challenge.clone(),
+                    token: PairingToken(b"testtoken".as_slice().into()),
+                    remote_node_description: basic_node_description(UUID_B, S2Role::Cem),
+                    remote_endpoint_description: S2EndpointDescription::default(),
+                }),
+            },
+        );
+        drop(attempts);
+
+        let response = server
+            .get_router()
+            .oneshot(
+                http::Request::post("/v1/postConnectionDetails")
+                    .header(http::header::AUTHORIZATION, "Bearer testid")
+                    .header(http::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&PostConnectionDetailsRequest {
+                            server_hmac_challenge_response: challenge.sha256(&Network::Wan, b"testtoken"),
+                            connection_details: ConnectionDetails {
+                                initiate_connection_url: "https://example.com/".into(),
+                                access_token: AccessToken::new(&mut rand::rng()),
+                            },
+                        })
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    }
+
+    #[tokio::test]
+    async fn post_connection_details_invalid_response() {
+        let server = Server::new(ServerConfig { root_certificate: None });
+        let mut attempts = server.state.attempts.lock().unwrap();
+        let (sender, _receiver) = tokio::sync::oneshot::channel();
+        let challenge = HmacChallenge::new(&mut rand::rng(), 64);
+        attempts.insert(
+            PairingAttemptId("testid".into()),
+            ExpiringPairingState {
+                start_time: Instant::now(),
+                state: PairingState::Initial(InitialPairingState {
+                    session_span: span!(Level::TRACE, "testspan"),
+                    config: Arc::new(
+                        NodeConfig::builder(basic_node_description(UUID_A, S2Role::Rm), vec![MessageVersion("v1".into())])
+                            .with_connection_initiate_url("https://example.com/".into())
+                            .build()
+                            .unwrap(),
+                    ),
+                    sender: ResultSender::Oneshot(sender),
+                    challenge: challenge.clone(),
+                    token: PairingToken(b"testtoken".as_slice().into()),
+                    remote_node_description: basic_node_description(UUID_B, S2Role::Cem),
+                    remote_endpoint_description: S2EndpointDescription::default(),
+                }),
+            },
+        );
+        drop(attempts);
+
+        let response = server
+            .get_router()
+            .oneshot(
+                http::Request::post("/v1/postConnectionDetails")
+                    .header(http::header::AUTHORIZATION, "Bearer testid")
+                    .header(http::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&PostConnectionDetailsRequest {
+                            server_hmac_challenge_response: challenge.sha256(&Network::Wan, b"testtoken2"),
+                            connection_details: ConnectionDetails {
+                                initiate_connection_url: "https://example.com/".into(),
+                                access_token: AccessToken::new(&mut rand::rng()),
+                            },
+                        })
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn post_connection_details_too_late() {
+        let server = Server::new(ServerConfig { root_certificate: None });
+        let mut attempts = server.state.attempts.lock().unwrap();
+        let (sender, _receiver) = tokio::sync::oneshot::channel();
+        let challenge = HmacChallenge::new(&mut rand::rng(), 64);
+        attempts.insert(
+            PairingAttemptId("testid".into()),
+            ExpiringPairingState {
+                start_time: Instant::now(),
+                state: PairingState::Initial(InitialPairingState {
+                    session_span: span!(Level::TRACE, "testspan"),
+                    config: Arc::new(
+                        NodeConfig::builder(basic_node_description(UUID_A, S2Role::Rm), vec![MessageVersion("v1".into())])
+                            .with_connection_initiate_url("https://example.com/".into())
+                            .build()
+                            .unwrap(),
+                    ),
+                    sender: ResultSender::Oneshot(sender),
+                    challenge: challenge.clone(),
+                    token: PairingToken(b"testtoken".as_slice().into()),
+                    remote_node_description: basic_node_description(UUID_B, S2Role::Cem),
+                    remote_endpoint_description: S2EndpointDescription::default(),
+                }),
+            },
+        );
+        drop(attempts);
+
+        tokio::time::sleep(std::time::Duration::from_secs(16)).await;
+
+        let response = server
+            .get_router()
+            .oneshot(
+                http::Request::post("/v1/postConnectionDetails")
+                    .header(http::header::AUTHORIZATION, "Bearer testid")
+                    .header(http::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&PostConnectionDetailsRequest {
+                            server_hmac_challenge_response: challenge.sha256(&Network::Wan, b"testtoken"),
+                            connection_details: ConnectionDetails {
+                                initiate_connection_url: "https://example.com/".into(),
+                                access_token: AccessToken::new(&mut rand::rng()),
+                            },
+                        })
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn finalize() {
+        let server = Server::new(ServerConfig { root_certificate: None });
+        let mut attempts = server.state.attempts.lock().unwrap();
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        let challenge = HmacChallenge::new(&mut rand::rng(), 64);
+        attempts.insert(
+            PairingAttemptId("testid".into()),
+            ExpiringPairingState {
+                start_time: Instant::now(),
+                state: PairingState::Complete(CompletePairingState {
+                    session_span: span!(Level::TRACE, "testspan"),
+                    sender: ResultSender::Oneshot(sender),
+                    remote_node_description: basic_node_description(UUID_B, S2Role::Cem),
+                    remote_endpoint_description: S2EndpointDescription::default(),
+                    access_token: AccessToken::new(&mut rand::rng()),
+                    role: PairingRole::CommunicationServer,
+                }),
+            },
+        );
+        drop(attempts);
+
+        let response = server
+            .get_router()
+            .oneshot(
+                http::Request::post("/v1/finalizePairing")
+                    .header(http::header::AUTHORIZATION, "Bearer testid")
+                    .header(http::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(serde_json::to_vec(&true).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        let outcome = receiver.await.unwrap().unwrap();
+        assert_eq!(outcome.role, PairingRole::CommunicationServer);
+    }
+
+    #[tokio::test]
+    async fn finalize_cancel() {
+        let server = Server::new(ServerConfig { root_certificate: None });
+        let mut attempts = server.state.attempts.lock().unwrap();
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        let challenge = HmacChallenge::new(&mut rand::rng(), 64);
+        attempts.insert(
+            PairingAttemptId("testid".into()),
+            ExpiringPairingState {
+                start_time: Instant::now(),
+                state: PairingState::Complete(CompletePairingState {
+                    session_span: span!(Level::TRACE, "testspan"),
+                    sender: ResultSender::Oneshot(sender),
+                    remote_node_description: basic_node_description(UUID_B, S2Role::Cem),
+                    remote_endpoint_description: S2EndpointDescription::default(),
+                    access_token: AccessToken::new(&mut rand::rng()),
+                    role: PairingRole::CommunicationServer,
+                }),
+            },
+        );
+        drop(attempts);
+
+        let response = server
+            .get_router()
+            .oneshot(
+                http::Request::post("/v1/finalizePairing")
+                    .header(http::header::AUTHORIZATION, "Bearer testid")
+                    .header(http::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(serde_json::to_vec(&false).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        let outcome = receiver.await.unwrap().unwrap_err();
+        assert_eq!(outcome.kind(), ErrorKind::Cancelled);
+    }
+
+    #[tokio::test]
+    async fn finalize_cancel_at_intermediate() {
+        let server = Server::new(ServerConfig { root_certificate: None });
+        let mut attempts = server.state.attempts.lock().unwrap();
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        let challenge = HmacChallenge::new(&mut rand::rng(), 64);
+        attempts.insert(
+            PairingAttemptId("testid".into()),
+            ExpiringPairingState {
+                start_time: Instant::now(),
+                state: PairingState::Initial(InitialPairingState {
+                    session_span: span!(Level::TRACE, "testspan"),
+                    config: Arc::new(
+                        NodeConfig::builder(basic_node_description(UUID_A, S2Role::Rm), vec![MessageVersion("v1".into())])
+                            .with_connection_initiate_url("https://example.com/".into())
+                            .build()
+                            .unwrap(),
+                    ),
+                    sender: ResultSender::Oneshot(sender),
+                    challenge: challenge.clone(),
+                    token: PairingToken(b"testtoken".as_slice().into()),
+                    remote_node_description: basic_node_description(UUID_B, S2Role::Cem),
+                    remote_endpoint_description: S2EndpointDescription::default(),
+                }),
+            },
+        );
+        drop(attempts);
+
+        let response = server
+            .get_router()
+            .oneshot(
+                http::Request::post("/v1/finalizePairing")
+                    .header(http::header::AUTHORIZATION, "Bearer testid")
+                    .header(http::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(serde_json::to_vec(&false).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        let outcome = receiver.await.unwrap().unwrap_err();
+        assert_eq!(outcome.kind(), ErrorKind::Cancelled);
+    }
+
+    #[tokio::test]
+    async fn finalize_unknown_session() {
+        let server = Server::new(ServerConfig { root_certificate: None });
+
+        let response = server
+            .get_router()
+            .oneshot(
+                http::Request::post("/v1/finalizePairing")
+                    .header(http::header::AUTHORIZATION, "Bearer testid")
+                    .header(http::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(serde_json::to_vec(&true).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn finalize_cancel_unknown_session() {
+        let server = Server::new(ServerConfig { root_certificate: None });
+
+        let response = server
+            .get_router()
+            .oneshot(
+                http::Request::post("/v1/finalizePairing")
+                    .header(http::header::AUTHORIZATION, "Bearer testid")
+                    .header(http::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(serde_json::to_vec(&false).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+}
