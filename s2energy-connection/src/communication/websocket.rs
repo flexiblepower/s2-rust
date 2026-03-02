@@ -34,6 +34,7 @@ impl WebSocketImplementation {
     }
 }
 
+/// Error during Websocket Communication.
 #[derive(Debug)]
 pub struct WebSocketError {
     kind: WebSocketErrorKind,
@@ -52,6 +53,7 @@ impl WebSocketError {
         }
     }
 
+    /// Get a general description of what went wrong.
     pub fn kind(&self) -> WebSocketErrorKind {
         self.kind
     }
@@ -111,10 +113,14 @@ impl From<tokio_tungstenite::tungstenite::Error> for WrappedError {
     }
 }
 
+/// Description of the type of error that occured during websocket communication.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum WebSocketErrorKind {
+    /// Something at the transport level failed.
     Transport,
+    /// A message could not be encoded or decoded.
     Encoding,
+    /// The connection was closed.
     Closed,
 }
 
@@ -128,6 +134,7 @@ impl std::fmt::Display for WebSocketErrorKind {
     }
 }
 
+/// An [`S2Transport`] using [json over websocket](https://github.com/flexiblepower/s2-ws-json)
 pub struct WebSocketTransport {
     inner: WebSocketImplementation,
 }
