@@ -32,5 +32,5 @@ zeroconf-tokio.workspace = true
 
 [dev-dependencies]
 axum-server.workspace = true
-tokio = { workspace = true, features = ["signal"] }
+tokio = { workspace = true, features = ["signal", "macros", "rt", "test-util"] }
 tracing-subscriber.workspace = true

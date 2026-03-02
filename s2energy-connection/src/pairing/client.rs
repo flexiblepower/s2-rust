@@ -333,3 +333,354 @@ impl<'a> V1Session<'a> {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        net::{Ipv4Addr, SocketAddr},
+        sync::{Arc, Mutex},
+    };
+
+    use crate::{
+        Deployment, MessageVersion, S2EndpointDescription, S2Role,
+        common::wire::test::{UUID_A, UUID_B, basic_node_description},
+        pairing::{
+            Client, ClientConfig, ErrorKind, Network, NodeConfig, Pairing, PairingRemote, PairingRole, PairingToken, Server, ServerConfig,
+            wire::{HmacChallenge, HmacChallengeResponse, PairingAttemptId, RequestPairing, RequestPairingResponse},
+        },
+    };
+
+    use axum::{Json, Router, routing::post};
+    use axum_server::{Handle, tls_rustls::RustlsConfig};
+    use http::StatusCode;
+    use rustls::pki_types::{CertificateDer, pem::PemObject};
+    use tokio::task::JoinHandle;
+
+    async fn setup_server(config: NodeConfig, overrides: Router<()>) -> (Handle<SocketAddr>, JoinHandle<Pairing>) {
+        let server = Server::new(ServerConfig { root_certificate: None });
+        let rustls_config = RustlsConfig::from_pem(
+            include_bytes!("../../testdata/localhost.chain.pem").into(),
+            include_bytes!("../../testdata/localhost.key").into(),
+        )
+        .await
+        .unwrap();
+        let app = server.get_router();
+        let https_server_handle = Handle::new();
+        let https_server_handle_clone = https_server_handle.clone();
+        tokio::spawn(async move {
+            axum_server::bind_rustls(SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 0), rustls_config)
+                .handle(https_server_handle_clone)
+                .serve(overrides.fallback_service(app).into_make_service())
+                .await
+                .unwrap();
+        });
+        let server_pair_handle = tokio::spawn(async move {
+            server
+                .pair_once(Arc::new(config), PairingToken(b"testtoken".as_slice().into()))
+                .unwrap()
+                .result()
+                .await
+                .unwrap()
+        });
+
+        (https_server_handle, server_pair_handle)
+    }
+
+    #[tokio::test]
+    async fn pairing_ok_rm_initiates() {
+        let server_config = NodeConfig::builder(basic_node_description(UUID_A, S2Role::Cem), vec![MessageVersion("v1".into())])
+            .with_connection_initiate_url("test.example.com".into())
+            .build()
+            .unwrap();
+
+        let client_config = NodeConfig::builder(basic_node_description(UUID_B, S2Role::Rm), vec![MessageVersion("v1".into())])
+            .with_connection_initiate_url("client.example.com".into())
+            .build()
+            .unwrap();
+
+        let (server_handle, server_pairing) = setup_server(server_config, Router::new()).await;
+
+        let addr = server_handle.listening().await.unwrap();
+        let remote = PairingRemote {
+            url: format!("https://localhost:{}/", addr.port()),
+            id: UUID_A.into(),
+        };
+
+        let client = Client::new(
+            Arc::new(client_config),
+            ClientConfig {
+                additional_certificates: vec![CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()],
+                pairing_deployment: Deployment::Wan,
+            },
+        )
+        .unwrap();
+
+        let client_pairing = client.pair(remote, b"testtoken").await.unwrap();
+        let server_pairing = server_pairing.await.unwrap();
+        assert_eq!(client_pairing.token, server_pairing.token);
+        assert_ne!(client_pairing.role, server_pairing.role);
+        assert!(matches!(client_pairing.role, PairingRole::CommunicationClient { .. }));
+
+        server_handle.shutdown();
+    }
+
+    #[tokio::test]
+    async fn pairing_ok_cem_initiates() {
+        let server_config = NodeConfig::builder(basic_node_description(UUID_A, S2Role::Rm), vec![MessageVersion("v1".into())])
+            .with_connection_initiate_url("test.example.com".into())
+            .build()
+            .unwrap();
+
+        let client_config = NodeConfig::builder(basic_node_description(UUID_B, S2Role::Cem), vec![MessageVersion("v1".into())])
+            .with_connection_initiate_url("client.example.com".into())
+            .build()
+            .unwrap();
+
+        let (server_handle, server_pairing) = setup_server(server_config, Router::new()).await;
+
+        let addr = server_handle.listening().await.unwrap();
+        let remote = PairingRemote {
+            url: format!("https://localhost:{}/", addr.port()),
+            id: UUID_A.into(),
+        };
+
+        let client = Client::new(
+            Arc::new(client_config),
+            ClientConfig {
+                additional_certificates: vec![CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()],
+                pairing_deployment: Deployment::Wan,
+            },
+        )
+        .unwrap();
+
+        let client_pairing = client.pair(remote, b"testtoken").await.unwrap();
+        let server_pairing = server_pairing.await.unwrap();
+        assert_eq!(client_pairing.token, server_pairing.token);
+        assert_ne!(client_pairing.role, server_pairing.role);
+        assert!(matches!(client_pairing.role, PairingRole::CommunicationServer));
+
+        server_handle.shutdown();
+    }
+
+    #[tokio::test]
+    async fn pairing_rejects_invalid_hmac() {
+        let server_config = NodeConfig::builder(basic_node_description(UUID_A, S2Role::Cem), vec![MessageVersion("v1".into())])
+            .with_connection_initiate_url("test.example.com".into())
+            .build()
+            .unwrap();
+
+        let client_config = NodeConfig::builder(basic_node_description(UUID_B, S2Role::Rm), vec![MessageVersion("v1".into())])
+            .with_connection_initiate_url("client.example.com".into())
+            .build()
+            .unwrap();
+
+        let finalize_result = Arc::new(Mutex::new(None));
+        let finalize_result_clone = finalize_result.clone();
+        let (server_handle, _) = setup_server(
+            server_config,
+            Router::new()
+                .route(
+                    "/v1/requestPairing",
+                    post(|| async {
+                        Json(RequestPairingResponse {
+                            pairing_attempt_id: PairingAttemptId("testid".into()),
+                            server_s2_node_description: basic_node_description(UUID_A, S2Role::Cem),
+                            server_s2_endpoint_description: S2EndpointDescription::default(),
+                            selected_hmac_hashing_algorithm: crate::pairing::wire::HmacHashingAlgorithm::Sha256,
+                            client_hmac_challenge_response: HmacChallengeResponse(vec![0; 64]),
+                            server_hmac_challenge: HmacChallenge::new(&mut rand::rng(), 32),
+                        })
+                    }),
+                )
+                .route(
+                    "/v1/finalizePairing",
+                    post(|attempt_id: PairingAttemptId, Json(success): Json<bool>| async move {
+                        assert_eq!(attempt_id.0, "testid");
+                        *finalize_result_clone.lock().unwrap() = Some(success);
+                    }),
+                ),
+        )
+        .await;
+
+        let addr = server_handle.listening().await.unwrap();
+        let remote = PairingRemote {
+            url: format!("https://localhost:{}/", addr.port()),
+            id: UUID_A.into(),
+        };
+
+        let client = Client::new(
+            Arc::new(client_config),
+            ClientConfig {
+                additional_certificates: vec![CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()],
+                pairing_deployment: Deployment::Wan,
+            },
+        )
+        .unwrap();
+
+        let client_pairing = client.pair(remote, b"testtoken").await.unwrap_err();
+        assert_eq!(client_pairing.kind(), ErrorKind::InvalidToken);
+        assert_eq!(*finalize_result.lock().unwrap(), Some(false));
+
+        server_handle.shutdown();
+    }
+
+    #[tokio::test]
+    async fn pairing_rejects_same_role() {
+        let server_config = NodeConfig::builder(basic_node_description(UUID_A, S2Role::Rm), vec![MessageVersion("v1".into())])
+            .with_connection_initiate_url("test.example.com".into())
+            .build()
+            .unwrap();
+
+        let client_config = NodeConfig::builder(basic_node_description(UUID_B, S2Role::Rm), vec![MessageVersion("v1".into())])
+            .with_connection_initiate_url("client.example.com".into())
+            .build()
+            .unwrap();
+
+        let finalize_result = Arc::new(Mutex::new(None));
+        let finalize_result_clone = finalize_result.clone();
+        let (server_handle, _) = setup_server(
+            server_config,
+            Router::new()
+                .route(
+                    "/v1/requestPairing",
+                    post(|Json(request): Json<RequestPairing>| async move {
+                        Json(RequestPairingResponse {
+                            pairing_attempt_id: PairingAttemptId("testid".into()),
+                            server_s2_node_description: basic_node_description(UUID_A, S2Role::Rm),
+                            server_s2_endpoint_description: S2EndpointDescription::default(),
+                            selected_hmac_hashing_algorithm: crate::pairing::wire::HmacHashingAlgorithm::Sha256,
+                            client_hmac_challenge_response: request.client_hmac_challenge.sha256(&Network::Wan, b"testtoken"),
+                            server_hmac_challenge: HmacChallenge::new(&mut rand::rng(), 32),
+                        })
+                    }),
+                )
+                .route(
+                    "/v1/finalizePairing",
+                    post(|attempt_id: PairingAttemptId, Json(success): Json<bool>| async move {
+                        assert_eq!(attempt_id.0, "testid");
+                        *finalize_result_clone.lock().unwrap() = Some(success);
+                    }),
+                ),
+        )
+        .await;
+
+        let addr = server_handle.listening().await.unwrap();
+        let remote = PairingRemote {
+            url: format!("https://localhost:{}/", addr.port()),
+            id: UUID_A.into(),
+        };
+
+        let client = Client::new(
+            Arc::new(client_config),
+            ClientConfig {
+                additional_certificates: vec![CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()],
+                pairing_deployment: Deployment::Wan,
+            },
+        )
+        .unwrap();
+
+        let client_pairing = client.pair(remote, b"testtoken").await.unwrap_err();
+        assert_eq!(client_pairing.kind(), ErrorKind::RemoteOfSameType);
+        assert_eq!(*finalize_result.lock().unwrap(), Some(false));
+
+        server_handle.shutdown();
+    }
+
+    #[tokio::test]
+    async fn pairing_invokes_finalize_on_bad_request_connection_details() {
+        let server_config = NodeConfig::builder(basic_node_description(UUID_A, S2Role::Cem), vec![MessageVersion("v1".into())])
+            .with_connection_initiate_url("test.example.com".into())
+            .build()
+            .unwrap();
+
+        let client_config = NodeConfig::builder(basic_node_description(UUID_B, S2Role::Rm), vec![MessageVersion("v1".into())])
+            .with_connection_initiate_url("client.example.com".into())
+            .build()
+            .unwrap();
+
+        let finalize_result = Arc::new(Mutex::new(None));
+        let finalize_result_clone = finalize_result.clone();
+        let (server_handle, _) = setup_server(
+            server_config,
+            Router::new()
+                .route("/v1/requestConnectionDetails", post(|| async { StatusCode::BAD_GATEWAY }))
+                .route(
+                    "/v1/finalizePairing",
+                    post(|Json(success): Json<bool>| async move {
+                        *finalize_result_clone.lock().unwrap() = Some(success);
+                    }),
+                ),
+        )
+        .await;
+
+        let addr = server_handle.listening().await.unwrap();
+        let remote = PairingRemote {
+            url: format!("https://localhost:{}/", addr.port()),
+            id: UUID_A.into(),
+        };
+
+        let client = Client::new(
+            Arc::new(client_config),
+            ClientConfig {
+                additional_certificates: vec![CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()],
+                pairing_deployment: Deployment::Wan,
+            },
+        )
+        .unwrap();
+
+        let client_pairing = client.pair(remote, b"testtoken").await.unwrap_err();
+        assert_eq!(client_pairing.kind(), ErrorKind::ProtocolError);
+        assert_eq!(*finalize_result.lock().unwrap(), Some(false));
+
+        server_handle.shutdown();
+    }
+
+    #[tokio::test]
+    async fn pairing_invokes_finalize_on_bad_post_connection_details() {
+        let server_config = NodeConfig::builder(basic_node_description(UUID_A, S2Role::Rm), vec![MessageVersion("v1".into())])
+            .with_connection_initiate_url("test.example.com".into())
+            .build()
+            .unwrap();
+
+        let client_config = NodeConfig::builder(basic_node_description(UUID_B, S2Role::Cem), vec![MessageVersion("v1".into())])
+            .with_connection_initiate_url("client.example.com".into())
+            .build()
+            .unwrap();
+
+        let finalize_result = Arc::new(Mutex::new(None));
+        let finalize_result_clone = finalize_result.clone();
+        let (server_handle, _) = setup_server(
+            server_config,
+            Router::new()
+                .route("/v1/postConnectionDetails", post(|| async { StatusCode::BAD_GATEWAY }))
+                .route(
+                    "/v1/finalizePairing",
+                    post(|Json(success): Json<bool>| async move {
+                        *finalize_result_clone.lock().unwrap() = Some(success);
+                    }),
+                ),
+        )
+        .await;
+
+        let addr = server_handle.listening().await.unwrap();
+        let remote = PairingRemote {
+            url: format!("https://localhost:{}/", addr.port()),
+            id: UUID_A.into(),
+        };
+
+        let client = Client::new(
+            Arc::new(client_config),
+            ClientConfig {
+                additional_certificates: vec![CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()],
+                pairing_deployment: Deployment::Wan,
+            },
+        )
+        .unwrap();
+
+        let client_pairing = client.pair(remote, b"testtoken").await.unwrap_err();
+        assert_eq!(client_pairing.kind(), ErrorKind::ProtocolError);
+        assert_eq!(*finalize_result.lock().unwrap(), Some(false));
+
+        server_handle.shutdown();
+    }
+}

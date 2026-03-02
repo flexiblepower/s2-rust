@@ -55,7 +55,7 @@ pub struct S2EndpointDescription {
 /// It must be renewed every time a client wants to access the S2 message communication
 /// channel by calling the requestToken endpoint. This token is valid for one time login,
 /// with a maximum of 5 years, and should have a minimum length of 32 bytes.
-#[derive(Serialize, Deserialize, Clone, Eq)]
+#[derive(Debug, Serialize, Deserialize, Clone, Eq)]
 pub struct AccessToken(pub String);
 
 impl PartialEq for AccessToken {
