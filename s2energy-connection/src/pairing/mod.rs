@@ -300,6 +300,7 @@ impl ConfigBuilder {
 }
 
 /// Role for the communication protocol assigned to the node in the pairing process.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum PairingRole {
     /// This node must initiate the connection protocol.
     CommunicationClient {
@@ -313,6 +314,7 @@ pub enum PairingRole {
 /// The result of a pairing operation.
 ///
 /// Describes the remote node, and how communication between the nodes will happen.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Pairing {
     /// Description of the remote S2 Node.
     pub remote_node_description: S2NodeDescription,
