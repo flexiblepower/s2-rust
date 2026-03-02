@@ -67,8 +67,10 @@ impl From<zeroconf_tokio::error::Error> for WrappedError {
     }
 }
 
+/// The kind of error that occurred.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ErrorKind {
+    /// Somehting went wrong with the mDNS protocol handling.
     MdnsError,
 }
 
