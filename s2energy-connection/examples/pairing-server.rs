@@ -5,7 +5,7 @@ use uuid::uuid;
 
 use s2energy_connection::{
     MessageVersion, S2NodeDescription, S2Role,
-    pairing::{NodeConfig, PairingToken, Server, ServerConfig},
+    pairing::{NodeConfig, PairingS2NodeId, PairingToken, Server, ServerConfig},
 };
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
@@ -58,15 +58,23 @@ async fn main() {
             .unwrap();
     });
 
+    let pairing_node_id = PairingS2NodeId::from_bytes(b"ninechars");
+
     let pairing = server
-        .pair_once(Arc::new(config.clone()), PairingToken(PAIRING_TOKEN.into()))
+        .pair_once(
+            Arc::new(config.clone()),
+            pairing_node_id.clone(),
+            PairingToken(PAIRING_TOKEN.into()),
+        )
         .unwrap()
         .result()
         .await
         .unwrap();
     println!("token: {}", pairing.token.0);
 
-    let mut repeated_pairing = server.pair_repeated(Arc::new(config), PairingToken(PAIRING_TOKEN.into())).unwrap();
+    let mut repeated_pairing = server
+        .pair_repeated(Arc::new(config), pairing_node_id, PairingToken(PAIRING_TOKEN.into()))
+        .unwrap();
 
     while let Some(result) = repeated_pairing.next().await {
         println!("token: {}", result.token.0);

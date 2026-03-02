@@ -105,20 +105,27 @@ impl Server {
     }
 
     /// Start a one-time pairing session for the given node using the given token.
-    pub fn pair_once(&self, config: Arc<NodeConfig>, pairing_token: PairingToken) -> Result<PendingPairing, ErrorKind> {
+    pub fn pair_once(
+        &self,
+        config: Arc<NodeConfig>,
+        pairing_node_id: PairingS2NodeId,
+        pairing_token: PairingToken,
+    ) -> Result<PendingPairing, ErrorKind> {
         if config.connection_initiate_url.is_none() {
             return Err(ErrorKind::InvalidConfig(super::ConfigError::MissingInitiateUrl));
         }
 
+        // We hit issues here, because the node node_description only has S2NodeId with no
+        // efficient way of mapping that back.
         let mut open_pairings = self.state.open_pairings.lock().unwrap();
         let mut permanent_pairings = self.state.permanent_pairings.lock().unwrap();
-        if open_pairings.contains_key(&config.node_description.id) || permanent_pairings.contains_key(&config.node_description.id) {
+        if open_pairings.contains_key(&pairing_node_id) || permanent_pairings.contains_key(&pairing_node_id) {
             return Err(ErrorKind::AlreadyPending);
         }
         drop(permanent_pairings);
         let (sender, receiver) = tokio::sync::oneshot::channel();
         open_pairings.insert(
-            config.node_description.id,
+            pairing_node_id,
             PairingRequest {
                 config,
                 sender: ResultSender::Oneshot(sender),
@@ -129,20 +136,25 @@ impl Server {
     }
 
     /// Allow repeated pairing sessions for the given endpoing using the given token.
-    pub fn pair_repeated(&self, config: Arc<NodeConfig>, pairing_token: PairingToken) -> Result<RepeatedPairing, ErrorKind> {
+    pub fn pair_repeated(
+        &self,
+        config: Arc<NodeConfig>,
+        pairing_node_id: PairingS2NodeId,
+        pairing_token: PairingToken,
+    ) -> Result<RepeatedPairing, ErrorKind> {
         if config.connection_initiate_url.is_none() {
             return Err(ErrorKind::InvalidConfig(super::ConfigError::MissingInitiateUrl));
         }
 
         let mut open_pairings = self.state.open_pairings.lock().unwrap();
         let mut permanent_pairings = self.state.permanent_pairings.lock().unwrap();
-        if open_pairings.contains_key(&config.node_description.id) || permanent_pairings.contains_key(&config.node_description.id) {
+        if open_pairings.contains_key(&pairing_node_id) || permanent_pairings.contains_key(&pairing_node_id) {
             return Err(ErrorKind::AlreadyPending);
         }
         drop(open_pairings);
         let (sender, receiver) = tokio::sync::mpsc::channel(PERMANENT_PAIRING_BUFFER_SIZE);
         permanent_pairings.insert(
-            config.node_description.id,
+            pairing_node_id,
             PermanentPairingRequest {
                 config,
                 sender,
@@ -245,8 +257,8 @@ type AppState = Arc<AppStateInner>;
 struct AppStateInner {
     // rng: ThreadRng,
     network: Network,
-    permanent_pairings: Mutex<HashMap<S2NodeId, PermanentPairingRequest>>,
-    open_pairings: Mutex<HashMap<S2NodeId, PairingRequest>>,
+    permanent_pairings: Mutex<HashMap<PairingS2NodeId, PermanentPairingRequest>>,
+    open_pairings: Mutex<HashMap<PairingS2NodeId, PairingRequest>>,
     attempts: Mutex<HashMap<PairingAttemptId, ExpiringPairingState>>,
 }
 
@@ -274,20 +286,23 @@ async fn v1_request_pairing(
 
     let server_hmac_challenge = HmacChallenge::new(&mut rand::rng(), HMAC_CHALLENGE_BYTES);
 
-    let open_pairing = {
-        let mut open_pairings = state.open_pairings.lock().unwrap();
-        if let Some((_, request)) = open_pairings.remove_entry(&request_pairing.id) {
-            request
-        } else {
-            drop(open_pairings);
-            let permanent_pairings = state.permanent_pairings.lock().unwrap();
-            let entry = permanent_pairings
-                .get(&request_pairing.id)
-                .ok_or(PairingResponseErrorMessage::S2NodeNotFound)?;
-            PairingRequest {
-                config: entry.config.clone(),
-                sender: ResultSender::Multi(entry.sender.clone()),
-                token: PairingToken(entry.token.0.clone()),
+    let open_pairing = match request_pairing.id {
+        None => todo!("handle missing request_pairing id"),
+        Some(ref pairing_s2_node_id) => {
+            let mut open_pairings = state.open_pairings.lock().unwrap();
+            if let Some((_, request)) = open_pairings.remove_entry(pairing_s2_node_id) {
+                request
+            } else {
+                drop(open_pairings);
+                let permanent_pairings = state.permanent_pairings.lock().unwrap();
+                let entry = permanent_pairings
+                    .get(pairing_s2_node_id)
+                    .ok_or(PairingResponseErrorMessage::S2NodeNotFound)?;
+                PairingRequest {
+                    config: entry.config.clone(),
+                    sender: ResultSender::Multi(entry.sender.clone()),
+                    token: PairingToken(entry.token.0.clone()),
+                }
             }
         }
     };
@@ -579,9 +594,9 @@ mod tests {
 
     use crate::{
         AccessToken, CommunicationProtocol, MessageVersion, S2EndpointDescription, S2NodeDescription, S2Role,
-        common::wire::test::{UUID_A, UUID_B, basic_node_description},
+        common::wire::test::{UUID_A, UUID_B, basic_node_description, pairing_s2_node_id},
         pairing::{
-            ErrorKind, Network, NodeConfig, PairingRole, PairingToken, Server, ServerConfig,
+            ErrorKind, Network, NodeConfig, PairingRole, PairingS2NodeId, PairingToken, Server, ServerConfig,
             server::{CompletePairingState, ExpiringPairingState, InitialPairingState, PairingRequest, PairingState, ResultSender},
             wire::{
                 ConnectionDetails, HmacChallenge, HmacHashingAlgorithm, PairingAttemptId, PairingResponseErrorMessage,
@@ -615,6 +630,7 @@ mod tests {
                         .build()
                         .unwrap(),
                 ),
+                pairing_s2_node_id(),
                 PairingToken(b"testtoken".as_slice().into()),
             )
             .unwrap();
@@ -629,7 +645,7 @@ mod tests {
                         serde_json::to_vec(&RequestPairing {
                             node_description: basic_node_description(UUID_B, S2Role::Cem),
                             endpoint_description: S2EndpointDescription::default(),
-                            id: UUID_A.into(),
+                            id: Some(pairing_s2_node_id()),
                             supported_protocols: vec![CommunicationProtocol("WebSocket".into())],
                             supported_versions: vec![MessageVersion("v1".into())],
                             supported_hashing_algorithms: vec![HmacHashingAlgorithm::Sha256],
@@ -661,6 +677,7 @@ mod tests {
                         .build()
                         .unwrap(),
                 ),
+                pairing_s2_node_id(),
                 PairingToken(b"testtoken".as_slice().into()),
             )
             .unwrap();
@@ -675,7 +692,7 @@ mod tests {
                         serde_json::to_vec(&RequestPairing {
                             node_description: basic_node_description(UUID_B, S2Role::Cem),
                             endpoint_description: S2EndpointDescription::default(),
-                            id: UUID_A.into(),
+                            id: Some(pairing_s2_node_id()),
                             supported_protocols: vec![CommunicationProtocol("HTTP/3".into())],
                             supported_versions: vec![MessageVersion("v1".into())],
                             supported_hashing_algorithms: vec![HmacHashingAlgorithm::Sha256],
@@ -706,6 +723,7 @@ mod tests {
                         .build()
                         .unwrap(),
                 ),
+                pairing_s2_node_id(),
                 PairingToken(b"testtoken".as_slice().into()),
             )
             .unwrap();
@@ -720,7 +738,7 @@ mod tests {
                         serde_json::to_vec(&RequestPairing {
                             node_description: basic_node_description(UUID_B, S2Role::Cem),
                             endpoint_description: S2EndpointDescription::default(),
-                            id: UUID_A.into(),
+                            id: Some(pairing_s2_node_id()),
                             supported_protocols: vec![CommunicationProtocol("WebSocket".into())],
                             supported_versions: vec![MessageVersion("v0".into())],
                             supported_hashing_algorithms: vec![HmacHashingAlgorithm::Sha256],
@@ -751,6 +769,7 @@ mod tests {
                         .build()
                         .unwrap(),
                 ),
+                pairing_s2_node_id(),
                 PairingToken(b"testtoken".as_slice().into()),
             )
             .unwrap();
@@ -765,7 +784,7 @@ mod tests {
                         serde_json::to_vec(&RequestPairing {
                             node_description: basic_node_description(UUID_B, S2Role::Cem),
                             endpoint_description: S2EndpointDescription::default(),
-                            id: UUID_A.into(),
+                            id: Some(pairing_s2_node_id()),
                             supported_protocols: vec![CommunicationProtocol("HTTP/3".into())],
                             supported_versions: vec![MessageVersion("v0".into())],
                             supported_hashing_algorithms: vec![HmacHashingAlgorithm::Sha256],
@@ -799,7 +818,7 @@ mod tests {
                         serde_json::to_vec(&RequestPairing {
                             node_description: basic_node_description(UUID_A, S2Role::Cem),
                             endpoint_description: S2EndpointDescription::default(),
-                            id: UUID_A.into(),
+                            id: Some(pairing_s2_node_id()),
                             supported_protocols: vec![CommunicationProtocol("WebSocket".into())],
                             supported_versions: vec![MessageVersion("v1".into())],
                             supported_hashing_algorithms: vec![HmacHashingAlgorithm::Sha256],
@@ -830,6 +849,7 @@ mod tests {
                         .build()
                         .unwrap(),
                 ),
+                pairing_s2_node_id(),
                 PairingToken(b"testtoken".as_slice().into()),
             )
             .unwrap();
@@ -844,7 +864,7 @@ mod tests {
                         serde_json::to_vec(&RequestPairing {
                             node_description: basic_node_description(UUID_B, S2Role::Rm),
                             endpoint_description: S2EndpointDescription::default(),
-                            id: UUID_A.into(),
+                            id: Some(pairing_s2_node_id()),
                             supported_protocols: vec![CommunicationProtocol("WebSocket".into())],
                             supported_versions: vec![MessageVersion("v1".into())],
                             supported_hashing_algorithms: vec![HmacHashingAlgorithm::Sha256],

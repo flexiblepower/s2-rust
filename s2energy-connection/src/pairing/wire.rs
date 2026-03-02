@@ -6,7 +6,7 @@ use subtle::ConstantTimeEq;
 use thiserror::Error;
 use tracing::info;
 
-use crate::common::wire::{AccessToken, CommunicationProtocol, MessageVersion, S2EndpointDescription, S2NodeDescription, S2NodeId};
+use crate::common::wire::{AccessToken, CommunicationProtocol, MessageVersion, S2EndpointDescription, S2NodeDescription};
 
 #[derive(Error, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub(crate) enum PairingResponseErrorMessage {
@@ -72,14 +72,45 @@ impl PartialEq for HmacChallengeResponse {
     }
 }
 
+/// An identifier of the S2 node which is unique for the context of the Endpoint.
+///
+/// It is used as a short identifier (since the user might have to type it in manually)
+/// for the S2Node, which can be used to lookup the actual [`S2NodeId`].
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct PairingS2NodeId(#[serde(serialize_with = "base64_bytes::serialize", deserialize_with = "base64_bytes::deserialize")] Vec<u8>);
+
+impl PairingS2NodeId {
+    /// Create a new id.
+    pub fn new(rng: &mut impl rand::CryptoRng) -> Self {
+        let mut bytes = vec![0u8; 12];
+        rng.fill_bytes(&mut bytes);
+
+        Self(bytes)
+    }
+
+    /// Create an ID from bytes.
+    pub fn from_bytes(bytes: &[u8]) -> Self {
+        Self(bytes.to_vec())
+    }
+}
+
+impl std::fmt::Display for PairingS2NodeId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use base64::{Engine as _, engine::general_purpose::STANDARD};
+        f.write_str(&STANDARD.encode(&self.0))
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 pub(crate) struct RequestPairing {
     #[serde(rename = "clientS2NodeDescription")]
     pub node_description: S2NodeDescription,
     #[serde(rename = "clientS2EndpointDescription")]
     pub endpoint_description: S2EndpointDescription,
+    /// A server-assigned identifier of the S2Node that this server represents.
     #[serde(rename = "pairingS2NodeId")]
-    pub id: S2NodeId,
+    #[serde(default)]
+    pub id: Option<PairingS2NodeId>,
     #[serde(rename = "supportedCommunicationProtocols")]
     pub supported_protocols: Vec<CommunicationProtocol>,
     /// The versions of the S2 JSON message schemas this S2Node implementation currently supports.
