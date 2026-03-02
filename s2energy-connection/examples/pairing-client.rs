@@ -1,4 +1,5 @@
-use std::sync::Arc;
+use rustls::pki_types::{CertificateDer, pem::PemObject};
+use std::{path::PathBuf, sync::Arc};
 use uuid::uuid;
 
 use s2energy_connection::{
@@ -35,7 +36,9 @@ async fn main() {
     let client = Client::new(
         Arc::new(config),
         ClientConfig {
-            additional_certificates: vec![],
+            additional_certificates: vec![
+                CertificateDer::from_pem_file(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("testdata").join("root.pem")).unwrap(),
+            ],
             pairing_deployment: Deployment::Lan,
         },
     )
@@ -44,7 +47,7 @@ async fn main() {
     let pair_result = client
         .pair(
             PairingRemote {
-                url: "https://test.local:8005".into(),
+                url: "https://localhost:8005".into(),
                 id: uuid!("67e55044-10b1-426f-9247-bb680e5fe0c8").into(),
             },
             PAIRING_TOKEN,
