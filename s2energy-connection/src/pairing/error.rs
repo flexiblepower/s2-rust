@@ -1,6 +1,9 @@
 use thiserror::Error;
 
-use crate::common::{BaseError, BaseErrorKind, BaseWrappedError};
+use crate::{
+    common::{BaseError, BaseErrorKind, BaseWrappedError},
+    pairing::wire::PairingResponseErrorMessage,
+};
 
 /// An error that occured during the pairing process.
 #[derive(Debug)]
@@ -67,6 +70,7 @@ enum WrappedError {
     Reqwest(reqwest::Error),
     UrlParse(url::ParseError),
     Rustls(rustls::Error),
+    Remote(PairingResponseErrorMessage),
 }
 
 impl WrappedError {
@@ -76,6 +80,7 @@ impl WrappedError {
             Self::Reqwest(error) => Some(error),
             Self::UrlParse(error) => Some(error),
             Self::Rustls(error) => Some(error),
+            Self::Remote(error) => Some(error),
         }
     }
 }
@@ -107,6 +112,12 @@ impl From<rustls::Error> for WrappedError {
     }
 }
 
+impl From<PairingResponseErrorMessage> for WrappedError {
+    fn from(value: PairingResponseErrorMessage) -> Self {
+        Self::Remote(value)
+    }
+}
+
 /// Kind of error that occured during the pairing process.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ErrorKind {
@@ -118,6 +129,8 @@ pub enum ErrorKind {
     ProtocolError,
     /// No shared version with the remote.
     NoSupportedVersion,
+    /// Unknown S2 Node
+    UnknownNode,
     /// Session timed out.
     Timeout,
     /// Already a pending pairing session with that node id.
@@ -139,6 +152,7 @@ impl std::fmt::Display for ErrorKind {
             Self::TransportFailed => f.write_str("Could not send or receive protocol message"),
             Self::ProtocolError => f.write_str("Unexpected response from remote"),
             Self::NoSupportedVersion => f.write_str("No overlap in versions"),
+            Self::UnknownNode => f.write_str("Requested S2 Node not known to remote"),
             Self::Timeout => f.write_str("Timed out"),
             Self::AlreadyPending => f.write_str("A pairing session for this node is already pending"),
             Self::InvalidToken => f.write_str("The token used does not match with that of the remote"),
