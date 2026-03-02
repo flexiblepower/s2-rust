@@ -46,8 +46,8 @@ async fn main() {
     let rustls_config = RustlsConfig::from_pem_file(
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("testdata")
-            .join("test.local.chain.pem"),
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("testdata").join("test.local.key"),
+            .join("localhost.chain.pem"),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("testdata").join("localhost.key"),
     )
     .await
     .unwrap();
