@@ -71,14 +71,6 @@ impl ServerPairing for MemoryPairingStore {
         self.0.lock().unwrap().token = token;
         Ok(())
     }
-
-    async fn update_remote_node_description(&mut self, _node_description: s2energy_connection::S2NodeDescription) {
-        println!("Received updated node description");
-    }
-
-    async fn update_remote_endpoint_description(&mut self, _endpoint_description: s2energy_connection::S2EndpointDescription) {
-        println!("Received updated endpoint description");
-    }
 }
 
 #[tokio::main(flavor = "current_thread")]

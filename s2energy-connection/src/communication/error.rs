@@ -2,6 +2,7 @@ use axum::http;
 
 use crate::common::{BaseError, BaseErrorKind, BaseWrappedError};
 
+/// Error that occurred during the communication subprotocol.
 #[derive(Debug)]
 pub struct Error {
     kind: ErrorKind,
@@ -20,6 +21,7 @@ impl Error {
         }
     }
 
+    /// Get a general description of what went wrong.
     pub fn kind(&self) -> ErrorKind {
         self.kind
     }
@@ -132,19 +134,19 @@ impl From<Box<dyn std::error::Error + 'static>> for WrappedError {
 /// Error that occured during the communication process.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ErrorKind {
-    /// Invalid URL for remote
+    /// Invalid URL for remote.
     InvalidUrl,
-    /// Something went wrong in the transport layers
+    /// Something went wrong in the transport layers.
     TransportFailed,
-    /// The remote reacted outside our expectations
+    /// The remote reacted outside our expectations.
     ProtocolError,
     /// No shared version with the remote.
     NoSupportedVersion,
-    /// The nodes are no longer paired
+    /// The nodes are no longer paired.
     Unpaired,
-    /// The nodes were not paired
+    /// The nodes were not paired.
     NotPaired,
-    /// Storage failed to persist token
+    /// Storage failed to persist token.
     Storage,
 }
 

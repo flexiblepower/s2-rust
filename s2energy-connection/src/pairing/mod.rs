@@ -199,7 +199,7 @@ use crate::{
     CommunicationProtocol, Deployment, MessageVersion, S2EndpointDescription, S2NodeDescription, S2Role, common::wire::AccessToken,
 };
 
-/// Full description of an S2 nodew
+/// Full description of an S2 node.
 #[derive(Debug, Clone)]
 pub struct NodeConfig {
     node_description: S2NodeDescription,
@@ -225,7 +225,7 @@ impl NodeConfig {
         &self.supported_message_versions
     }
 
-    /// Communication protocols supported by this node
+    /// Communication protocols supported by this node.
     pub fn supported_communication_protocols(&self) -> &[CommunicationProtocol] {
         &self.supported_communication_protocols
     }
@@ -235,7 +235,7 @@ impl NodeConfig {
         self.connection_initiate_url.as_deref()
     }
 
-    /// Create a builder for a new [`NodeConfig`]
+    /// Create a builder for a new [`NodeConfig`].
     ///
     /// All node configurations must at least contain description of the node and supported message versions. Additional
     /// properties can be configured through the builder.
@@ -250,7 +250,7 @@ impl NodeConfig {
     }
 }
 
-/// Builder for an [`NodeConfig`]
+/// Builder for an [`NodeConfig`].
 pub struct ConfigBuilder {
     node_description: S2NodeDescription,
     endpoint_description: S2EndpointDescription,
@@ -268,7 +268,7 @@ impl ConfigBuilder {
         self
     }
 
-    /// Set the communication protocols supported by
+    /// Set the communication protocols supported by this node.
     pub fn with_supported_communication_protocols(mut self, communication_protocols: Vec<CommunicationProtocol>) -> Self {
         self.supported_communication_protocols = communication_protocols;
         self
@@ -299,7 +299,7 @@ impl ConfigBuilder {
     }
 }
 
-/// Role for the communication protocol assigned to the node in the pairing process
+/// Role for the communication protocol assigned to the node in the pairing process.
 pub enum PairingRole {
     /// This node must initiate the connection protocol.
     CommunicationClient {
@@ -310,7 +310,7 @@ pub enum PairingRole {
     CommunicationServer,
 }
 
-/// The result of a pairing operation
+/// The result of a pairing operation.
 ///
 /// Describes the remote node, and how communication between the nodes will happen.
 pub struct Pairing {
@@ -353,7 +353,7 @@ impl HmacChallenge {
     }
 }
 
-/// Convenience type for [`Result<T, Error>`]
+/// Convenience type for [`Result<T, Error>`].
 pub type PairingResult<T> = Result<T, Error>;
 
 #[derive(Debug)]

@@ -1,3 +1,17 @@
+//! Discovery of S2 endpoints.
+//!
+//! This module provides support for making S2 endpoints discoverable on the network, and finding
+//! advertised S2 endpoints.
+//!
+//! Discovery of other endpoints is done through [`DiscoveryEvent`]s, which indicate changes in what
+//! is available on the local network. When creating a new discovery client, all existing endpoints
+//! discoverable on the network are then also reported as "new".
+//!
+//! # Examples
+//!
+//! Examples showing how to advertise an endpoint, and how to scan the network for discoverable S2
+//! endpoints, are available in the examples directory.
+
 mod error;
 
 use std::collections::HashMap;
@@ -14,12 +28,15 @@ use crate::{
     discovery::error::{Error, ErrorKind},
 };
 
+/// Error that occurred during the process of creating a [`DiscoverableS2Endpoint`].
 #[derive(Debug, Clone, Error, Eq, PartialEq)]
 pub enum BuilderError {
+    /// The provided URL was not valid for use with this endpoint.
     #[error("Invalid url provided")]
     InvalidUrl,
 }
 
+/// A description of an S2 Endpoint for the discovery process.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DiscoverableS2Endpoint {
     endpoint_name: Option<String>,
@@ -31,26 +48,32 @@ pub struct DiscoverableS2Endpoint {
 }
 
 impl DiscoverableS2Endpoint {
+    /// Deployment of the endpoint.
     pub fn deployment(&self) -> Deployment {
         self.deployment
     }
 
+    /// URL that can be used for pairing with nodes at this endpoint.
     pub fn pairing_url(&self) -> Option<&str> {
         self.pairing_url.as_deref()
     }
 
+    /// URL that can be used for longpolling this endpoint.
     pub fn longpolling_url(&self) -> Option<&str> {
         self.longpolling_url.as_deref()
     }
 
+    /// Name of the endpoint.
     pub fn endpoint_name(&self) -> Option<&str> {
         self.endpoint_name.as_deref()
     }
 
+    /// Logo of the endpoint.
     pub fn endpoint_logo_url(&self) -> Option<&str> {
         self.endpoint_logo_url.as_deref()
     }
 
+    /// Build a new [`DiscoverableS2Endpoint`] with support for pairing.
     pub fn build_with_pairing(roles: Vec<S2Role>, pairing_url: String) -> Result<DiscoverableS2EndpointBuilder, BuilderError> {
         let parsed_url: Url = pairing_url.parse().map_err(|_| BuilderError::InvalidUrl)?;
         let host = parsed_url.host().ok_or(BuilderError::InvalidUrl)?;
@@ -66,6 +89,7 @@ impl DiscoverableS2Endpoint {
         })
     }
 
+    /// Build a new [`DiscoverableS2Endpoint`] with support for longpolling.
     pub fn build_with_longpolling(roles: Vec<S2Role>, longpolling_url: String) -> Result<DiscoverableS2EndpointBuilder, BuilderError> {
         let parsed_url: Url = longpolling_url.parse().map_err(|_| BuilderError::InvalidUrl)?;
         let host = parsed_url.host().ok_or(BuilderError::InvalidUrl)?;
@@ -152,6 +176,7 @@ impl DiscoverableS2Endpoint {
     }
 }
 
+/// Builder for a [`DiscoverableS2Endpoint`].
 pub struct DiscoverableS2EndpointBuilder {
     endpoint_name: Option<String>,
     endpoint_logo_url: Option<String>,
@@ -162,6 +187,7 @@ pub struct DiscoverableS2EndpointBuilder {
 }
 
 impl DiscoverableS2EndpointBuilder {
+    /// Create the [`DiscoverableS2Endpoint`].
     pub fn build(self) -> DiscoverableS2Endpoint {
         DiscoverableS2Endpoint {
             endpoint_name: self.endpoint_name,
@@ -173,6 +199,7 @@ impl DiscoverableS2EndpointBuilder {
         }
     }
 
+    /// Add or change the pairing url of the endpoint under construction.
     pub fn with_pairing_url(mut self, pairing_url: String) -> Result<Self, BuilderError> {
         let parsed_url: Url = pairing_url.parse().map_err(|_| BuilderError::InvalidUrl)?;
         match parsed_url.host().ok_or(BuilderError::InvalidUrl)? {
@@ -186,6 +213,7 @@ impl DiscoverableS2EndpointBuilder {
         }
     }
 
+    /// Add or change the longpolling url of the endpoint under construction.
     pub fn with_longpolling_url(mut self, longpolling_url: String) -> Result<Self, BuilderError> {
         let parsed_url: Url = longpolling_url.parse().map_err(|_| BuilderError::InvalidUrl)?;
         match parsed_url.host().ok_or(BuilderError::InvalidUrl)? {
@@ -199,28 +227,37 @@ impl DiscoverableS2EndpointBuilder {
         }
     }
 
+    /// Set a name for the endpoint.
     pub fn with_endpoint_name(mut self, name: String) -> Self {
         self.endpoint_name = Some(name);
         self
     }
 
+    /// Set a log url for the endpoint.
     pub fn with_endpoint_logo_url(mut self, logo_url: String) -> Self {
         self.endpoint_logo_url = Some(logo_url);
         self
     }
 }
 
+/// Advertisement of a [`DiscoverableS2Endpoint`] on the network.
+///
+/// The description remains discoverable so long as this object exists.
 pub struct S2Advertisement {
-    // Kept around for the shutdown on drop
+    // Kept around for the shutdown on drop.
     advertisement: MdnsServiceAsync,
 }
 
 impl S2Advertisement {
+    /// Stop advertising on the network.
     pub async fn stop(mut self) {
         self.advertisement.shutdown().await.ok();
     }
 }
 
+/// Advertise a [`DiscoverableS2Endpoint`] on the network.
+///
+/// The description remains discoverable for as long as the returned [`S2Advertisement`] is kept around.
 pub async fn advertise(port: u16, endpoint: DiscoverableS2Endpoint) -> Result<S2Advertisement, Error> {
     // The unwrap here is fine as the arguments always contain valid characters.
     let mut service = MdnsService::new(
@@ -258,21 +295,31 @@ pub async fn advertise(port: u16, endpoint: DiscoverableS2Endpoint) -> Result<S2
     })
 }
 
+/// Discovery client for S2 nodes.
+///
+/// This object monitors the network for changes in which S2 nodes are available for pairing.
 pub struct S2Discoverer {
     browser: MdnsBrowserAsync,
 }
 
+/// Event that was detected by the discovery client.
 pub enum DiscoveryEvent {
+    /// A new endpoint is available at the given hostname.
     NewEndpoint {
+        /// Hostname of the endpoint.
         hostname: String,
+        /// Description of the endpoint.
         endpoint: DiscoverableS2Endpoint,
     },
+    /// An endpoint went away at the given hostname.
     RemovedEndpoint {
+        /// Hostname of the endpoint.
         hostname: String,
     },
 }
 
 impl S2Discoverer {
+    /// Create a new discovery client for endpoints providing the given role.
     pub async fn new(role: S2Role) -> Result<Self, Error> {
         // The unwrap on service type is fine as its arguments are always valid.
         let mut browser = MdnsBrowserAsync::new(MdnsBrowser::new(
@@ -285,6 +332,7 @@ impl S2Discoverer {
         Ok(Self { browser })
     }
 
+    /// Get events describing what is discoverable on the network.
     pub async fn next_event(&mut self) -> Result<DiscoveryEvent, Error> {
         loop {
             let event = self

@@ -34,14 +34,14 @@ impl TryFrom<WirePairingVersion> for PairingVersion {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct MessageVersion(pub String);
 
-/// Information about the pairing endpoint of a S2 node
+/// Information about the pairing endpoint of a S2 node.
 #[derive(Default, Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
 #[serde(rename_all = "camelCase")]
 pub struct S2EndpointDescription {
-    /// Name of the endpoint
+    /// Name of the endpoint.
     #[serde(default)]
     pub name: Option<String>,
-    /// URI of a logo to be used for the endpoint in GUIs
+    /// URI of a logo to be used for the endpoint in GUIs.
     #[serde(default)]
     pub logo_uri: Option<String>,
     /// Type of deployment used by the endpoint (local or globally routable).
@@ -49,13 +49,16 @@ pub struct S2EndpointDescription {
     pub deployment: Option<Deployment>,
 }
 
-/// One-time access token for secure access to the S2 message communication channel. It must be renewed every time a client wants to access
-/// the S2 message communication channel by calling the requestToken endpoint. This token is valid for one time login, with a maximum of 5
-/// years, and should have a minimum length of 32 bytes.
+/// One-time access token for secure access to the S2 message communication channel.
+///
+/// It must be renewed every time a client wants to access the S2 message communication
+/// channel by calling the requestToken endpoint. This token is valid for one time login,
+/// with a maximum of 5 years, and should have a minimum length of 32 bytes.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
 pub struct AccessToken(pub String);
 
 impl AccessToken {
+    /// Generate a new random access token.
     pub fn new(rng: &mut impl rand::CryptoRng) -> Self {
         use base64::{Engine as _, engine::general_purpose::STANDARD};
 
@@ -90,6 +93,7 @@ impl<S: Sync + Send> FromRequestParts<S> for AccessToken {
     }
 }
 
+/// Error generated when trying to parse an invalid node id.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct InvalidNodeId(uuid::Error);
 
@@ -99,7 +103,11 @@ impl core::fmt::Display for InvalidNodeId {
     }
 }
 
-impl std::error::Error for InvalidNodeId {}
+impl std::error::Error for InvalidNodeId {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.0)
+    }
+}
 
 impl From<uuid::Error> for InvalidNodeId {
     fn from(value: uuid::Error) -> Self {
@@ -107,7 +115,7 @@ impl From<uuid::Error> for InvalidNodeId {
     }
 }
 
-/// Unique identifier of the S2 node
+/// Unique identifier of the S2 node.
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct S2NodeId(Uuid);
 
@@ -160,21 +168,22 @@ impl core::fmt::Display for S2NodeId {
 }
 
 impl S2NodeId {
+    /// Generate a new random node id.
     #[expect(clippy::new_without_default, reason = "New uses non-trivial randomness")]
     pub fn new() -> Self {
         Self(Uuid::new_v4())
     }
 }
 
-/// Information about the S2 node
+/// Information about the S2 node.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
 #[serde(rename_all = "camelCase")]
 pub struct S2NodeDescription {
-    /// Unique identifier of the node
+    /// Unique identifier of the node.
     pub id: S2NodeId,
-    /// Brandname used for the node
+    /// Brandname used for the node.
     pub brand: String,
-    /// URI of a logo to be used for the node in GUIs
+    /// URI of a logo to be used for the node in GUIs.
     #[serde(default)]
     pub logo_uri: Option<String>,
     /// The type of this node.
@@ -188,7 +197,10 @@ pub struct S2NodeDescription {
     pub role: S2Role,
 }
 
-/// Identifier of a protocol that can be used for communication of S2 messages between nodes, for example `"WebSocket"`
+/// Identifier of a protocol that can be used for communication of S2 messages between nodes.
+///
+/// An example of a value is `"WebSocket"`, which is used to indicate JSON over WebSockets
+/// communication as specified in [the s2-ws-json specification](https://github.com/flexiblepower/s2-ws-json).
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
 pub struct CommunicationProtocol(pub String);
 
@@ -211,7 +223,7 @@ impl S2Role {
     }
 }
 
-/// Place of deployment for an S2 Node
+/// Place of deployment for an S2 Node.
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum Deployment {
