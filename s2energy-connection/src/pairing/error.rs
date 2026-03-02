@@ -2,6 +2,7 @@ use thiserror::Error;
 
 use crate::common::{BaseError, BaseErrorKind, BaseWrappedError};
 
+/// An error that occured during the pairing process.
 #[derive(Debug)]
 pub struct Error {
     kind: ErrorKind,
@@ -20,6 +21,7 @@ impl Error {
         }
     }
 
+    /// What kind of error occurred?
     pub fn kind(&self) -> ErrorKind {
         self.kind
     }
@@ -105,14 +107,14 @@ impl From<rustls::Error> for WrappedError {
     }
 }
 
-/// Error that occured during the pairing process.
+/// Kind of error that occured during the pairing process.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ErrorKind {
-    /// Invalid URL for remote
+    /// Invalid URL for remote.
     InvalidUrl,
-    /// Something went wrong in the transport layers
+    /// Something went wrong in the transport layers.
     TransportFailed,
-    /// The remote reacted outside our expectations
+    /// The remote reacted outside our expectations.
     ProtocolError,
     /// No shared version with the remote.
     NoSupportedVersion,
@@ -124,9 +126,9 @@ pub enum ErrorKind {
     InvalidToken,
     /// The pairing session was cancelled.
     Cancelled,
-    /// The remote is of the same type
+    /// The remote is of the same type.
     RemoteOfSameType,
-    /// The configuration was invalid
+    /// The configuration was invalid.
     InvalidConfig(ConfigError),
 }
 
@@ -163,10 +165,10 @@ impl From<ConfigError> for ErrorKind {
     }
 }
 
-/// Error for problems with inconsistent [`NodeConfig`]
+/// Error for problems with inconsistent [`NodeConfig`](super::NodeConfig).
 #[derive(Error, Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum ConfigError {
-    /// The [`NodeConfig`] doesn't have an `connection_initiate_url` even though it is needed for the configuration to make sense.
+    /// The [`NodeConfig`](super::NodeConfig) doesn't have an `connection_initiate_url` even though it is needed for the configuration to make sense.
     #[error("Missing connection_initiate_url, even though it is required for CEM and WAN endpoints")]
     MissingInitiateUrl,
 }

@@ -13,7 +13,7 @@ use super::NodeConfig;
 use super::wire::*;
 use super::{ErrorKind, Network, PairingResult};
 
-/// Remote node to pair with
+/// Remote node to pair with.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PairingRemote {
     /// URL at which the remote node can be reached
