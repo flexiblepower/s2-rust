@@ -1,4 +1,4 @@
-use axum::extract::FromRequestParts;
+use axum::{Json, extract::FromRequestParts, response::IntoResponse};
 use axum_extra::{TypedHeader, headers};
 use http::StatusCode;
 use serde::*;
@@ -28,6 +28,12 @@ pub(crate) enum PairingResponseErrorMessage {
     ParsingError,
     #[error("Other")]
     Other,
+}
+
+impl IntoResponse for PairingResponseErrorMessage {
+    fn into_response(self) -> axum::response::Response {
+        (StatusCode::BAD_REQUEST, Json(self)).into_response()
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash)]

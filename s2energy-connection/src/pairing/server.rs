@@ -262,11 +262,11 @@ fn v1_router() -> Router<AppState> {
 async fn v1_request_pairing(
     State(state): State<AppState>,
     Json(request_pairing): Json<RequestPairing>,
-) -> Result<Json<RequestPairingResponse>, Json<PairingResponseErrorMessage>> {
+) -> Result<Json<RequestPairingResponse>, PairingResponseErrorMessage> {
     trace!("Received pairing request.");
     if !request_pairing.supported_hashing_algorithms.contains(&HmacHashingAlgorithm::Sha256) {
         info!(remote_hashing_algorithms = ?request_pairing.supported_hashing_algorithms, "No shared hashing algorithm with remote");
-        return Err(PairingResponseErrorMessage::IncompatibleHMACHashingAlgorithms.into());
+        return Err(PairingResponseErrorMessage::IncompatibleHMACHashingAlgorithms);
     }
 
     // 32 bytes is the minimum, this tests that the client can handle more.
@@ -307,7 +307,7 @@ async fn v1_request_pairing(
                 }
             }
             if !communication_overlap {
-                return Err(PairingResponseErrorMessage::IncompatibleCommunicationProtocols.into());
+                return Err(PairingResponseErrorMessage::IncompatibleCommunicationProtocols);
             }
             let mut connection_overlap = false;
             for connection_protocol in &open_pairing.config.supported_message_versions {
@@ -317,7 +317,7 @@ async fn v1_request_pairing(
                 }
             }
             if !connection_overlap {
-                return Err(PairingResponseErrorMessage::IncompatibleS2MessageVersions.into());
+                return Err(PairingResponseErrorMessage::IncompatibleS2MessageVersions);
             }
         }
 
@@ -647,6 +647,96 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn pair_attempt_no_common_communication() {
+        let server = Server::new(ServerConfig { root_certificate: None });
+        let pairing_waiter = server
+            .pair_once(
+                Arc::new(
+                    NodeConfig::builder(basic_node_description(UUID_A, S2Role::Rm), vec![MessageVersion("v1".into())])
+                        .with_connection_initiate_url("https://example.com/".into())
+                        .build()
+                        .unwrap(),
+                ),
+                PairingToken(b"testtoken".as_slice().into()),
+            )
+            .unwrap();
+
+        let challenge = HmacChallenge::new(&mut rand::rng(), 64);
+        let response = server
+            .get_router()
+            .oneshot(
+                http::Request::post("/v1/requestPairing")
+                    .header(http::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&RequestPairing {
+                            node_description: basic_node_description(UUID_B, S2Role::Cem),
+                            endpoint_description: S2EndpointDescription::default(),
+                            id: UUID_A.into(),
+                            supported_protocols: vec![CommunicationProtocol("HTTP/3".into())],
+                            supported_versions: vec![MessageVersion("v1".into())],
+                            supported_hashing_algorithms: vec![HmacHashingAlgorithm::Sha256],
+                            client_hmac_challenge: challenge.clone(),
+                            force_pairing: false,
+                        })
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let error: PairingResponseErrorMessage = serde_json::from_slice(&body).unwrap();
+        assert_eq!(error, PairingResponseErrorMessage::IncompatibleCommunicationProtocols);
+    }
+
+    #[tokio::test]
+    async fn pair_attempt_no_common_messages() {
+        let server = Server::new(ServerConfig { root_certificate: None });
+        let pairing_waiter = server
+            .pair_once(
+                Arc::new(
+                    NodeConfig::builder(basic_node_description(UUID_A, S2Role::Rm), vec![MessageVersion("v1".into())])
+                        .with_connection_initiate_url("https://example.com/".into())
+                        .build()
+                        .unwrap(),
+                ),
+                PairingToken(b"testtoken".as_slice().into()),
+            )
+            .unwrap();
+
+        let challenge = HmacChallenge::new(&mut rand::rng(), 64);
+        let response = server
+            .get_router()
+            .oneshot(
+                http::Request::post("/v1/requestPairing")
+                    .header(http::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&RequestPairing {
+                            node_description: basic_node_description(UUID_B, S2Role::Cem),
+                            endpoint_description: S2EndpointDescription::default(),
+                            id: UUID_A.into(),
+                            supported_protocols: vec![CommunicationProtocol("WebSocket".into())],
+                            supported_versions: vec![MessageVersion("v0".into())],
+                            supported_hashing_algorithms: vec![HmacHashingAlgorithm::Sha256],
+                            client_hmac_challenge: challenge.clone(),
+                            force_pairing: false,
+                        })
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let error: PairingResponseErrorMessage = serde_json::from_slice(&body).unwrap();
+        assert_eq!(error, PairingResponseErrorMessage::IncompatibleS2MessageVersions);
+    }
+
+    #[tokio::test]
     async fn pair_attempt_forced() {
         let server = Server::new(ServerConfig { root_certificate: None });
         let pairing_waiter = server
@@ -690,6 +780,39 @@ mod tests {
         let response_data: RequestPairingResponse = serde_json::from_slice(&body).unwrap();
         let expected_response = challenge.sha256(&Network::Wan, b"testtoken");
         assert_eq!(expected_response, response_data.client_hmac_challenge_response);
+    }
+
+    #[tokio::test]
+    async fn pair_attempt_with_unknown_node() {
+        let server = Server::new(ServerConfig { root_certificate: None });
+
+        let response = server
+            .get_router()
+            .oneshot(
+                http::Request::post("/v1/requestPairing")
+                    .header(http::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&RequestPairing {
+                            node_description: basic_node_description(UUID_A, S2Role::Cem),
+                            endpoint_description: S2EndpointDescription::default(),
+                            id: UUID_A.into(),
+                            supported_protocols: vec![CommunicationProtocol("WebSocket".into())],
+                            supported_versions: vec![MessageVersion("v1".into())],
+                            supported_hashing_algorithms: vec![HmacHashingAlgorithm::Sha256],
+                            client_hmac_challenge: HmacChallenge::new(&mut rand::rng(), 64),
+                            force_pairing: false,
+                        })
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let error: PairingResponseErrorMessage = serde_json::from_slice(&body).unwrap();
+        assert_eq!(error, PairingResponseErrorMessage::S2NodeNotFound);
     }
 
     #[tokio::test]
