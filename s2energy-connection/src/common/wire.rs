@@ -262,3 +262,25 @@ impl TryFrom<url::Host<&str>> for Deployment {
         }
     }
 }
+
+#[cfg(test)]
+pub(crate) mod test {
+    use uuid::{Uuid, uuid};
+
+    use crate::{S2NodeDescription, S2Role};
+
+    pub(crate) const UUID_A: Uuid = uuid!("67e55044-10b1-426f-9247-bb680e5fe0c8");
+    pub(crate) const UUID_B: Uuid = uuid!("67e55044-10b1-426f-9247-bb680e5fe0c7");
+
+    pub(crate) fn basic_node_description(uuid: Uuid, role: S2Role) -> S2NodeDescription {
+        S2NodeDescription {
+            id: uuid.into(),
+            brand: String::from("super-reliable-corp"),
+            logo_uri: None,
+            type_: String::from("fancy"),
+            model_name: String::from("the best"),
+            user_defined_name: None,
+            role,
+        }
+    }
+}
