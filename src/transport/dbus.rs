@@ -29,6 +29,7 @@ pub struct DBusServer {
 impl DBusServer {
     pub async fn new(dbus_name: impl Into<String>) -> Result<Self, S2DBusError> {
         let dbus_name = dbus_name.into();
+        tracing::trace!("Connecting to D-Bus with name {dbus_name}");
         let connection = connection::Builder::system()?
             .name(dbus_name.as_str())?
             .method_timeout(Duration::from_secs(5))
@@ -36,6 +37,7 @@ impl DBusServer {
             .await?;
         let dbus = DBusProxy::new(&connection).await?;
         let pending_names = dbus.list_names().await.map_err(zbus::Error::from)?;
+        tracing::trace!("Connected to D-Bus, identified some existing names: {pending_names:#?}");
         Ok(Self {
             connection,
             pending_names,
@@ -54,7 +56,9 @@ impl DBusServer {
 
             match DBusConnection::new(&self.cem_id, &self.connection, name).await {
                 Ok(connection) => return Ok(connection),
-                Err(_) => continue,
+                Err(err) => {
+                    tracing::trace!("D-Bus connection skipped; reason: {err:?}");
+                }
             }
         }
 
@@ -64,7 +68,9 @@ impl DBusServer {
             let args = new_object.args().unwrap();
             match DBusConnection::new(&self.cem_id, &self.connection, args.name.into()).await {
                 Ok(connection) => return Ok(connection),
-                Err(_) => continue,
+                Err(err) => {
+                    tracing::trace!("D-Bus connection skipped; reason: {err:?}");
+                }
             }
         }
 
@@ -92,6 +98,7 @@ impl DBusConnection {
     async fn new(cem_id: impl Into<String>, connection: &Connection, destination: OwnedBusName) -> Result<Self, S2DBusError> {
         let cem_id = cem_id.into();
 
+        tracing::trace!("Attempting D-Bus connection to {destination:?}");
         let rm_proxy = S2RmProxy::builder(connection).destination(destination)?.build().await?;
         if !rm_proxy.discover().await? {
             return Err(S2DBusError::DiscoverReturnedFalse);
@@ -110,6 +117,7 @@ impl S2Transport for DBusConnection {
     type TransportError = S2DBusError;
 
     async fn send(&mut self, message: crate::common::Message) -> Result<(), Self::TransportError> {
+        tracing::trace!("Sending S2 message over D-Bus: {message:?}");
         let serialized = serde_json::to_string(&message)?;
         self.1.message(self.0.clone(), serialized).await?;
         Ok(())
@@ -125,6 +133,7 @@ impl S2Transport for DBusConnection {
             .ok_or(S2DBusError::EndOfStream)?
             .args()?
             .message;
+        tracing::trace!("Received message over D-Bus: {serialized_contents:?}");
         let msg: crate::common::Message = serde_json::from_str(&serialized_contents)?;
         Ok(msg)
     }
