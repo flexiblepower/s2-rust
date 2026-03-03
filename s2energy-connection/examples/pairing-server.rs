@@ -20,9 +20,7 @@ async fn main() {
         .init();
 
     let server = Server::new(ServerConfig {
-        root_certificate: Some(
-            CertificateDer::from_pem_file(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("testdata").join("root.pem")).unwrap(),
-        ),
+        root_certificate: None,
     });
     let config = NodeConfig::builder(
         S2NodeDescription {
