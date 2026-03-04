@@ -4,8 +4,13 @@
 //! An `S2Connection` is acquired from an implementing transport protocol, for example by using
 //! [`websockets_json::connect_as_client`](crate::transport::websockets_json::connect_as_client).
 
+use std::cmp::Ordering;
+
 use crate::{
-    common::{ControlType, EnergyManagementRole, Handshake, Message, ReceptionStatus, ReceptionStatusValues, ResourceManagerDetails},
+    common::{
+        ControlType, EnergyManagementRole, Handshake, HandshakeResponse, Message, ReceptionStatus, ReceptionStatusValues,
+        ResourceManagerDetails, SelectControlType,
+    },
     transport::S2Transport,
 };
 use semver::VersionReq;
@@ -144,6 +149,62 @@ impl<T: S2Transport> S2Connection<T> {
             }
 
             message.confirm().await?;
+        }
+    }
+
+    pub async fn initialize_as_cem(&mut self, for_control_type: ControlType) -> Result<(), ConnectionError<T::TransportError>> {
+        // TODO: this should support multiple control types, and a priority order between them.
+
+        self.send_message(
+            Handshake::builder()
+                .role(EnergyManagementRole::Cem)
+                .supported_protocol_versions(vec![crate::s2_schema_version().to_string()])
+                .build(),
+        )
+        .await?;
+
+        let mut need_handshake = true;
+        loop {
+            let message = self.receive_message().await?;
+            match message.get_message() {
+                Message::Handshake(handshake) if need_handshake => {
+                    need_handshake = false;
+                    let version = handshake
+                        .supported_protocol_versions
+                        .iter()
+                        .filter(|ver| {
+                            semver::Version::parse(ver.as_str())
+                                .map(|ver| ver.cmp_precedence(&crate::s2_schema_version()) == Ordering::Equal)
+                                .unwrap_or(false)
+                        })
+                        .next()
+                        .cloned();
+                    if let Some(version) = version {
+                        message.confirm().await?;
+                        self.send_message(HandshakeResponse::new(version)).await?;
+                        self.send_message(SelectControlType::new(for_control_type)).await?;
+                        return Ok(());
+                    } else {
+                        message
+                            .error(
+                                ReceptionStatusValues::InvalidContent,
+                                "Could not find a matching S2 protocol version",
+                            )
+                            .await?;
+                    }
+                }
+
+                other_message => {
+                    let diagnostic = format!("Did not expect message at this point in the handshake process: {:?}", other_message);
+                    let message = message.error(ReceptionStatusValues::InvalidContent, &diagnostic).await?;
+                    return Err(ProtocolError::InvalidHandshakeOrder {
+                        message,
+                        handshake_received: !need_handshake,
+                        handshake_response_received: false,
+                    }
+                    .into());
+                }
+            }
         }
     }
 
