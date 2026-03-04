@@ -1,4 +1,4 @@
-use crate::transport::S2Transport;
+use crate::{connection::S2Connection, transport::S2Transport};
 use futures_util::StreamExt;
 use std::time::Duration;
 use uuid::Uuid;
@@ -46,7 +46,7 @@ impl DBusServer {
         })
     }
 
-    pub async fn receive_connection(&mut self) -> Result<DBusConnection, S2DBusError> {
+    pub async fn receive_connection(&mut self) -> Result<S2Connection<DBusConnection>, S2DBusError> {
         // First go through our list of saved names that we haven't processed yet
         while let Some(name) = self.pending_names.pop() {
             if self.connection.unique_name().map(|own_name| ***own_name == **name).unwrap_or(false) || name == self.dbus_name.as_str() {
@@ -55,7 +55,7 @@ impl DBusServer {
             }
 
             match DBusConnection::new(&self.cem_id, &self.connection, name).await {
-                Ok(connection) => return Ok(connection),
+                Ok(connection) => return Ok(S2Connection::new(connection)),
                 Err(err) => {
                     tracing::trace!("D-Bus connection skipped; reason: {err:?}");
                 }
@@ -67,7 +67,7 @@ impl DBusServer {
         while let Some(new_object) = dbus.receive_name_owner_changed().await?.next().await {
             let args = new_object.args().unwrap();
             match DBusConnection::new(&self.cem_id, &self.connection, args.name.into()).await {
-                Ok(connection) => return Ok(connection),
+                Ok(connection) => return Ok(S2Connection::new(connection)),
                 Err(err) => {
                     tracing::trace!("D-Bus connection skipped; reason: {err:?}");
                 }
