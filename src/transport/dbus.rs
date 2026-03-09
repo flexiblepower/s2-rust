@@ -112,7 +112,7 @@ impl DBusConnection {
         Ok(Self(cem_id, rm_proxy, destination))
     }
 
-    async fn destination<'a>(&'a self) -> BusName<'a> {
+    pub async fn destination<'a>(&'a self) -> BusName<'a> {
         self.2.as_ref()
     }
 }
