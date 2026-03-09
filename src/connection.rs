@@ -89,6 +89,7 @@ impl<T: S2Transport> S2Connection<T> {
         &mut self,
         rm_details: ResourceManagerDetails,
     ) -> Result<ControlType, ConnectionError<T::TransportError>> {
+        tracing::trace!("Starting handshake as RM");
         let handshake = Handshake::builder()
             .role(EnergyManagementRole::Rm)
             .supported_protocol_versions(vec![crate::s2_schema_version().to_string()])
@@ -154,7 +155,7 @@ impl<T: S2Transport> S2Connection<T> {
 
     pub async fn initialize_as_cem(&mut self, for_control_type: ControlType) -> Result<(), ConnectionError<T::TransportError>> {
         // TODO: this should support multiple control types, and a priority order between them.
-
+        tracing::trace!("Starting handshake process as CEM");
         self.send_message(
             Handshake::builder()
                 .role(EnergyManagementRole::Cem)
@@ -210,7 +211,9 @@ impl<T: S2Transport> S2Connection<T> {
 
     /// Sends the given message over the websocket.
     pub async fn send_message(&mut self, message: impl Into<Message>) -> Result<(), ConnectionError<T::TransportError>> {
-        self.transport.send(message.into()).await.map_err(ConnectionError::TransportError)?;
+        let message = message.into();
+        tracing::trace!("Sending S2 message: {message:?}");
+        self.transport.send(message).await.map_err(ConnectionError::TransportError)?;
         Ok(())
     }
 
