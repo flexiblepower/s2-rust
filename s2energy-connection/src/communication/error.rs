@@ -1,6 +1,9 @@
 use axum::http;
 
-use crate::common::{BaseError, BaseErrorKind, BaseWrappedError};
+use crate::{
+    common::{BaseError, BaseErrorKind, BaseWrappedError},
+    communication::wire::CommunicationDetailsErrorMessage,
+};
 
 /// Error that occurred during the communication subprotocol.
 #[derive(Debug)]
@@ -69,6 +72,7 @@ enum WrappedError {
     Tungstenite(tokio_tungstenite::tungstenite::Error),
     UrlParse(url::ParseError),
     UriParse(http::uri::InvalidUri),
+    Remote(CommunicationDetailsErrorMessage),
     Store(Box<dyn std::error::Error + 'static>),
 }
 
@@ -81,6 +85,7 @@ impl WrappedError {
             Self::Tungstenite(error) => Some(error),
             Self::UrlParse(error) => Some(error),
             Self::UriParse(error) => Some(error),
+            Self::Remote(error) => Some(error),
             Self::Store(error) => Some(error.as_ref()),
         }
     }
@@ -122,6 +127,12 @@ impl From<url::ParseError> for WrappedError {
 impl From<http::uri::InvalidUri> for WrappedError {
     fn from(value: http::uri::InvalidUri) -> Self {
         WrappedError::UriParse(value)
+    }
+}
+
+impl From<CommunicationDetailsErrorMessage> for WrappedError {
+    fn from(value: CommunicationDetailsErrorMessage) -> Self {
+        WrappedError::Remote(value)
     }
 }
 
