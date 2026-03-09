@@ -147,6 +147,12 @@ impl Client {
                     return Err(ErrorKind::NotPaired.into());
                 };
 
+                if initiate_response.communication_protocol != CommunicationProtocol("WebSocket".into())
+                    || !self.config.supported_message_versions.contains(&initiate_response.message_version)
+                {
+                    return Err(ErrorKind::NoSupportedVersion.into());
+                }
+
                 trace!("Initiated connection attempt.");
 
                 pairing
@@ -233,11 +239,12 @@ mod tests {
     use tokio::net::TcpListener;
 
     use crate::{
-        AccessToken, MessageVersion, S2EndpointDescription, S2NodeId, S2Role,
+        AccessToken, CommunicationProtocol, MessageVersion, S2EndpointDescription, S2NodeId, S2Role,
         common::wire::test::{UUID_A, UUID_B, basic_node_description},
         communication::{
             self, Client, ClientConfig, ClientPairing, ErrorKind, NodeConfig, PairingLookup, Server, ServerConfig, ServerPairing,
-            ServerPairingStore, wire::CommunicationDetailsErrorMessage,
+            ServerPairingStore,
+            wire::{CommunicationDetailsErrorMessage, InitiateConnectionResponse},
         },
     };
 
@@ -675,6 +682,98 @@ mod tests {
             Router::new().route(
                 "/v1/initiateConnection",
                 post(|| async { CommunicationDetailsErrorMessage::IncompatibleS2MessageVersions }),
+            ),
+        )
+        .await;
+
+        let addr = handle.listening().await.unwrap();
+        let client = Client::new(
+            ClientConfig {
+                additional_certificates: vec![CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()],
+                endpoint_description: None,
+            },
+            Arc::new(NodeConfig::builder(vec![MessageVersion("v1".into())]).build()),
+        );
+
+        let pairing = TestPairing {
+            client: UUID_A.into(),
+            server: UUID_B.into(),
+            tokens: Arc::new(Mutex::new(vec![AccessToken("testtoken".into())])),
+            url: format!("https://localhost:{}/", addr.port()),
+        };
+
+        assert_eq!(client.connect(&pairing).await.unwrap_err().kind(), ErrorKind::NoSupportedVersion);
+        assert_eq!(pairing.tokens.lock().unwrap().clone(), vec![AccessToken("testtoken".into())]);
+
+        handle.shutdown();
+    }
+
+    #[tokio::test]
+    async fn unknown_comm_protocol() {
+        let store = TestPairingStore::new(
+            AccessToken("testtoken".into()),
+            NodeConfig::builder(vec![MessageVersion("v1".into())]).build(),
+        );
+        let (handle, _server) = setup_server(
+            store.clone(),
+            None,
+            Router::new().route(
+                "/v1/initiateConnection",
+                post(|| async {
+                    InitiateConnectionResponse {
+                        communication_protocol: CommunicationProtocol("Unknown".into()),
+                        message_version: MessageVersion("v1".into()),
+                        access_token: AccessToken::new(&mut rand::rng()),
+                        node_description: None,
+                        endpoint_description: None,
+                    }
+                }),
+            ),
+        )
+        .await;
+
+        let addr = handle.listening().await.unwrap();
+        let client = Client::new(
+            ClientConfig {
+                additional_certificates: vec![CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()],
+                endpoint_description: None,
+            },
+            Arc::new(NodeConfig::builder(vec![MessageVersion("v1".into())]).build()),
+        );
+
+        let pairing = TestPairing {
+            client: UUID_A.into(),
+            server: UUID_B.into(),
+            tokens: Arc::new(Mutex::new(vec![AccessToken("testtoken".into())])),
+            url: format!("https://localhost:{}/", addr.port()),
+        };
+
+        assert_eq!(client.connect(&pairing).await.unwrap_err().kind(), ErrorKind::NoSupportedVersion);
+        assert_eq!(pairing.tokens.lock().unwrap().clone(), vec![AccessToken("testtoken".into())]);
+
+        handle.shutdown();
+    }
+
+    #[tokio::test]
+    async fn unknown_message_version() {
+        let store = TestPairingStore::new(
+            AccessToken("testtoken".into()),
+            NodeConfig::builder(vec![MessageVersion("v1".into())]).build(),
+        );
+        let (handle, _server) = setup_server(
+            store.clone(),
+            None,
+            Router::new().route(
+                "/v1/initiateConnection",
+                post(|| async {
+                    InitiateConnectionResponse {
+                        communication_protocol: CommunicationProtocol("WebSocket".into()),
+                        message_version: MessageVersion("v0".into()),
+                        access_token: AccessToken::new(&mut rand::rng()),
+                        node_description: None,
+                        endpoint_description: None,
+                    }
+                }),
             ),
         )
         .await;
