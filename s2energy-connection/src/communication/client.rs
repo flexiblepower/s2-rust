@@ -11,7 +11,7 @@ use crate::{
     common::negotiate_version,
     communication::{
         CommunicationResult, ConnectionInfo, Error, ErrorKind, NodeConfig, WebSocketTransport,
-        wire::{CommunicationDetails, InitiateConnectionRequest, InitiateConnectionResponse},
+        wire::{CommunicationDetails, CommunicationDetailsErrorMessage, InitiateConnectionRequest, InitiateConnectionResponse},
     },
 };
 
@@ -111,6 +111,24 @@ impl Client {
                             debug!("Token was rejected by remote, assuming it is old.");
                             continue;
                         }
+
+                        if response.status() == StatusCode::BAD_REQUEST {
+                            let e = response
+                                .json::<CommunicationDetailsErrorMessage>()
+                                .await
+                                .map_err(|e| Error::new(ErrorKind::TransportFailed, e))?;
+                            return Err(match e {
+                                CommunicationDetailsErrorMessage::IncompatibleS2MessageVersions
+                                | CommunicationDetailsErrorMessage::IncompatibleCommunicationProtocols => {
+                                    Error::new(ErrorKind::NoSupportedVersion, e)
+                                }
+                                CommunicationDetailsErrorMessage::NoLongerPaired => Error::new(ErrorKind::Unpaired, e),
+                                CommunicationDetailsErrorMessage::ParsingError | CommunicationDetailsErrorMessage::Other => {
+                                    Error::new(ErrorKind::ProtocolError, e)
+                                }
+                            });
+                        }
+
                         if response.status() != StatusCode::OK {
                             debug!(status = ?response.status(), "Unexpected status in response to initiateConnection request.");
                             return Err(ErrorKind::ProtocolError.into());
@@ -219,7 +237,7 @@ mod tests {
         common::wire::test::{UUID_A, UUID_B, basic_node_description},
         communication::{
             self, Client, ClientConfig, ClientPairing, ErrorKind, NodeConfig, PairingLookup, Server, ServerConfig, ServerPairing,
-            ServerPairingStore,
+            ServerPairingStore, wire::CommunicationDetailsErrorMessage,
         },
     };
 
@@ -603,6 +621,82 @@ mod tests {
         assert_eq!(recv, "hello world");
         server_connection.transport.disconnect().await;
         assert!(client_connection.transport.receive::<String>().await.is_err());
+
+        handle.shutdown();
+    }
+
+    #[tokio::test]
+    async fn no_shared_comm_protocol() {
+        let store = TestPairingStore::new(
+            AccessToken("testtoken".into()),
+            NodeConfig::builder(vec![MessageVersion("v1".into())]).build(),
+        );
+        let (handle, _server) = setup_server(
+            store.clone(),
+            None,
+            Router::new().route(
+                "/v1/initiateConnection",
+                post(|| async { CommunicationDetailsErrorMessage::IncompatibleCommunicationProtocols }),
+            ),
+        )
+        .await;
+
+        let addr = handle.listening().await.unwrap();
+        let client = Client::new(
+            ClientConfig {
+                additional_certificates: vec![CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()],
+                endpoint_description: None,
+            },
+            Arc::new(NodeConfig::builder(vec![MessageVersion("v1".into())]).build()),
+        );
+
+        let pairing = TestPairing {
+            client: UUID_A.into(),
+            server: UUID_B.into(),
+            tokens: Arc::new(Mutex::new(vec![AccessToken("testtoken".into())])),
+            url: format!("https://localhost:{}/", addr.port()),
+        };
+
+        assert_eq!(client.connect(&pairing).await.unwrap_err().kind(), ErrorKind::NoSupportedVersion);
+        assert_eq!(pairing.tokens.lock().unwrap().clone(), vec![AccessToken("testtoken".into())]);
+
+        handle.shutdown();
+    }
+
+    #[tokio::test]
+    async fn no_shared_message_version() {
+        let store = TestPairingStore::new(
+            AccessToken("testtoken".into()),
+            NodeConfig::builder(vec![MessageVersion("v1".into())]).build(),
+        );
+        let (handle, _server) = setup_server(
+            store.clone(),
+            None,
+            Router::new().route(
+                "/v1/initiateConnection",
+                post(|| async { CommunicationDetailsErrorMessage::IncompatibleS2MessageVersions }),
+            ),
+        )
+        .await;
+
+        let addr = handle.listening().await.unwrap();
+        let client = Client::new(
+            ClientConfig {
+                additional_certificates: vec![CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()],
+                endpoint_description: None,
+            },
+            Arc::new(NodeConfig::builder(vec![MessageVersion("v1".into())]).build()),
+        );
+
+        let pairing = TestPairing {
+            client: UUID_A.into(),
+            server: UUID_B.into(),
+            tokens: Arc::new(Mutex::new(vec![AccessToken("testtoken".into())])),
+            url: format!("https://localhost:{}/", addr.port()),
+        };
+
+        assert_eq!(client.connect(&pairing).await.unwrap_err().kind(), ErrorKind::NoSupportedVersion);
+        assert_eq!(pairing.tokens.lock().unwrap().clone(), vec![AccessToken("testtoken".into())]);
 
         handle.shutdown();
     }
