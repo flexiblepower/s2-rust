@@ -276,6 +276,7 @@ impl ConfigBuilder {
 pub type CommunicationResult<T> = Result<T, Error>;
 
 /// Information on a newly established connection.
+#[derive(Debug)]
 pub struct ConnectionInfo {
     /// New description of the remote node received during establishing of this connection.
     pub remote_node_description: Option<S2NodeDescription>,
