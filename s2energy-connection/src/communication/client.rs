@@ -198,3 +198,565 @@ impl Client {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        convert::Infallible,
+        net::{Ipv4Addr, SocketAddr},
+        sync::{Arc, Mutex},
+    };
+
+    use axum::{Router, routing::post};
+    use axum_server::{Handle, tls_rustls::RustlsConfig};
+    use http::StatusCode;
+    use rustls::pki_types::{CertificateDer, pem::PemObject};
+    use s2energy_common::S2Transport;
+    use tokio::net::TcpListener;
+
+    use crate::{
+        AccessToken, MessageVersion, S2EndpointDescription, S2NodeId, S2Role,
+        common::wire::test::{UUID_A, UUID_B, basic_node_description},
+        communication::{
+            self, Client, ClientConfig, ClientPairing, ErrorKind, NodeConfig, PairingLookup, Server, ServerConfig, ServerPairing,
+            ServerPairingStore,
+        },
+    };
+
+    #[derive(Clone)]
+    struct TestPairingStore {
+        token: Arc<Mutex<AccessToken>>,
+        last_request: Arc<Mutex<Option<PairingLookup>>>,
+        config: NodeConfig,
+    }
+
+    impl TestPairingStore {
+        fn new(token: AccessToken, config: NodeConfig) -> Self {
+            Self {
+                token: Arc::new(Mutex::new(token)),
+                last_request: Arc::default(),
+                config,
+            }
+        }
+    }
+
+    impl ServerPairingStore for TestPairingStore {
+        type Error = Infallible;
+
+        type Pairing<'a>
+            = &'a TestPairingStore
+        where
+            Self: 'a;
+
+        async fn lookup(&self, request: PairingLookup) -> Result<communication::PairingLookupResult<Self::Pairing<'_>>, Self::Error> {
+            *self.last_request.lock().unwrap() = Some(request);
+            Ok(communication::PairingLookupResult::Pairing(self))
+        }
+    }
+
+    impl ServerPairing for &TestPairingStore {
+        type Error = Infallible;
+
+        fn access_token(&self) -> impl AsRef<crate::AccessToken> {
+            self.token.lock().unwrap().clone()
+        }
+
+        fn config(&self) -> impl AsRef<NodeConfig> {
+            &self.config
+        }
+
+        async fn set_access_token(&mut self, token: crate::AccessToken) -> Result<(), Self::Error> {
+            *self.token.lock().unwrap() = token;
+            Ok(())
+        }
+    }
+
+    struct TestPairing {
+        client: S2NodeId,
+        server: S2NodeId,
+        tokens: Arc<Mutex<Vec<AccessToken>>>,
+        url: String,
+    }
+
+    impl ClientPairing for &TestPairing {
+        type Error = Infallible;
+
+        fn client_id(&self) -> S2NodeId {
+            self.server
+        }
+
+        fn server_id(&self) -> S2NodeId {
+            self.client
+        }
+
+        fn access_tokens(&self) -> impl AsRef<[AccessToken]> {
+            self.tokens.lock().unwrap().clone()
+        }
+
+        fn communication_url(&self) -> impl AsRef<str> {
+            &self.url
+        }
+
+        async fn set_access_tokens(&mut self, tokens: Vec<AccessToken>) -> Result<(), Self::Error> {
+            *self.tokens.lock().unwrap() = tokens;
+            Ok(())
+        }
+    }
+
+    async fn setup_server<S: ServerPairingStore>(
+        store: S,
+        endpoint: Option<S2EndpointDescription>,
+        overrides: Router<()>,
+    ) -> (Handle<SocketAddr>, Server<S>) {
+        let rustls_config = RustlsConfig::from_pem(
+            include_bytes!("../../testdata/localhost.chain.pem").into(),
+            include_bytes!("../../testdata/localhost.key").into(),
+        )
+        .await
+        .unwrap();
+        let socket = TcpListener::bind(SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 0)).await.unwrap();
+        let addr = socket.local_addr().unwrap();
+        let server = Server::new(
+            ServerConfig {
+                base_url: format!("localhost:{}", addr.port()),
+                endpoint_description: endpoint,
+            },
+            store,
+        );
+        let http_server_handle = Handle::new();
+        let axum_server = axum_server::from_tcp_rustls(socket.into_std().unwrap(), rustls_config)
+            .unwrap()
+            .handle(http_server_handle.clone())
+            .serve(overrides.fallback_service(server.get_router()).into_make_service());
+        tokio::spawn(async move {
+            axum_server.await.unwrap();
+        });
+
+        (http_server_handle, server)
+    }
+
+    #[tokio::test]
+    async fn succesfull_communication() {
+        let store = TestPairingStore::new(
+            AccessToken("testtoken".into()),
+            NodeConfig::builder(vec![MessageVersion("v1".into())]).build(),
+        );
+        let (handle, mut server) = setup_server(store.clone(), None, Router::new()).await;
+
+        let addr = handle.listening().await.unwrap();
+        let client = Client::new(
+            ClientConfig {
+                additional_certificates: vec![CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()],
+                endpoint_description: None,
+            },
+            Arc::new(NodeConfig::builder(vec![MessageVersion("v1".into())]).build()),
+        );
+
+        let pairing = TestPairing {
+            client: UUID_A.into(),
+            server: UUID_B.into(),
+            tokens: Arc::new(Mutex::new(vec![AccessToken("testtoken".into())])),
+            url: format!("https://localhost:{}/", addr.port()),
+        };
+
+        let mut client_connection = client.connect(&pairing).await.unwrap();
+        assert_eq!(client_connection.message_version, MessageVersion("v1".into()));
+        assert!(client_connection.remote_endpoint_description.is_none());
+        assert!(client_connection.remote_node_description.is_none());
+
+        let (requested_pairing, mut server_connection) = server.next_connection().await;
+        assert_eq!(requested_pairing, store.last_request.lock().unwrap().take().unwrap());
+        assert_eq!(server_connection.message_version, MessageVersion("v1".into()));
+        assert!(server_connection.remote_endpoint_description.is_none());
+        assert!(server_connection.remote_node_description.is_none());
+
+        client_connection.transport.send("hello world").await.unwrap();
+        let recv = server_connection.transport.receive::<String>().await.unwrap();
+        assert_eq!(recv, "hello world");
+        server_connection.transport.disconnect().await;
+        assert!(client_connection.transport.receive::<String>().await.is_err());
+
+        let mut client_connection = client.connect(&pairing).await.unwrap();
+        assert_eq!(client_connection.message_version, MessageVersion("v1".into()));
+        assert!(client_connection.remote_endpoint_description.is_none());
+        assert!(client_connection.remote_node_description.is_none());
+
+        let (requested_pairing, mut server_connection) = server.next_connection().await;
+        assert_eq!(requested_pairing, store.last_request.lock().unwrap().take().unwrap());
+        assert_eq!(server_connection.message_version, MessageVersion("v1".into()));
+        assert!(server_connection.remote_endpoint_description.is_none());
+        assert!(server_connection.remote_node_description.is_none());
+
+        client_connection.transport.send("hello world").await.unwrap();
+        let recv = server_connection.transport.receive::<String>().await.unwrap();
+        assert_eq!(recv, "hello world");
+        server_connection.transport.disconnect().await;
+        assert!(client_connection.transport.receive::<String>().await.is_err());
+
+        handle.shutdown();
+    }
+
+    #[tokio::test]
+    async fn send_endpoint_config() {
+        let store = TestPairingStore::new(
+            AccessToken("testtoken".into()),
+            NodeConfig::builder(vec![MessageVersion("v1".into())]).build(),
+        );
+        let (handle, mut server) = setup_server(store.clone(), None, Router::new()).await;
+
+        let addr = handle.listening().await.unwrap();
+        let client = Client::new(
+            ClientConfig {
+                additional_certificates: vec![CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()],
+                endpoint_description: Some(S2EndpointDescription {
+                    name: Some("a".into()),
+                    logo_uri: Some("b".into()),
+                    deployment: None,
+                }),
+            },
+            Arc::new(NodeConfig::builder(vec![MessageVersion("v1".into())]).build()),
+        );
+
+        let pairing = TestPairing {
+            client: UUID_A.into(),
+            server: UUID_B.into(),
+            tokens: Arc::new(Mutex::new(vec![AccessToken("testtoken".into())])),
+            url: format!("https://localhost:{}/", addr.port()),
+        };
+
+        let mut client_connection = client.connect(&pairing).await.unwrap();
+        assert_eq!(client_connection.message_version, MessageVersion("v1".into()));
+        assert!(client_connection.remote_endpoint_description.is_none());
+        assert!(client_connection.remote_node_description.is_none());
+
+        let (requested_pairing, mut server_connection) = server.next_connection().await;
+        assert_eq!(requested_pairing, store.last_request.lock().unwrap().take().unwrap());
+        assert_eq!(server_connection.message_version, MessageVersion("v1".into()));
+        assert_eq!(
+            server_connection.remote_endpoint_description.unwrap(),
+            S2EndpointDescription {
+                name: Some("a".into()),
+                logo_uri: Some("b".into()),
+                deployment: None,
+            }
+        );
+        assert!(server_connection.remote_node_description.is_none());
+
+        client_connection.transport.send("hello world").await.unwrap();
+        let recv = server_connection.transport.receive::<String>().await.unwrap();
+        assert_eq!(recv, "hello world");
+        server_connection.transport.disconnect().await;
+        assert!(client_connection.transport.receive::<String>().await.is_err());
+
+        handle.shutdown();
+    }
+
+    #[tokio::test]
+    async fn recv_endpoint_config() {
+        let store = TestPairingStore::new(
+            AccessToken("testtoken".into()),
+            NodeConfig::builder(vec![MessageVersion("v1".into())]).build(),
+        );
+        let (handle, mut server) = setup_server(
+            store.clone(),
+            Some(S2EndpointDescription {
+                name: Some("a".into()),
+                logo_uri: Some("b".into()),
+                deployment: None,
+            }),
+            Router::new(),
+        )
+        .await;
+
+        let addr = handle.listening().await.unwrap();
+        let client = Client::new(
+            ClientConfig {
+                additional_certificates: vec![CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()],
+                endpoint_description: None,
+            },
+            Arc::new(NodeConfig::builder(vec![MessageVersion("v1".into())]).build()),
+        );
+
+        let pairing = TestPairing {
+            client: UUID_A.into(),
+            server: UUID_B.into(),
+            tokens: Arc::new(Mutex::new(vec![AccessToken("testtoken".into())])),
+            url: format!("https://localhost:{}/", addr.port()),
+        };
+
+        let mut client_connection = client.connect(&pairing).await.unwrap();
+        assert_eq!(client_connection.message_version, MessageVersion("v1".into()));
+        assert_eq!(
+            client_connection.remote_endpoint_description.unwrap(),
+            S2EndpointDescription {
+                name: Some("a".into()),
+                logo_uri: Some("b".into()),
+                deployment: None,
+            }
+        );
+        assert!(client_connection.remote_node_description.is_none());
+
+        let (requested_pairing, mut server_connection) = server.next_connection().await;
+        assert_eq!(requested_pairing, store.last_request.lock().unwrap().take().unwrap());
+        assert_eq!(server_connection.message_version, MessageVersion("v1".into()));
+        assert!(server_connection.remote_endpoint_description.is_none());
+        assert!(server_connection.remote_node_description.is_none());
+
+        client_connection.transport.send("hello world").await.unwrap();
+        let recv = server_connection.transport.receive::<String>().await.unwrap();
+        assert_eq!(recv, "hello world");
+        server_connection.transport.disconnect().await;
+        assert!(client_connection.transport.receive::<String>().await.is_err());
+
+        handle.shutdown();
+    }
+
+    #[tokio::test]
+    async fn send_node_config() {
+        let store = TestPairingStore::new(
+            AccessToken("testtoken".into()),
+            NodeConfig::builder(vec![MessageVersion("v1".into())]).build(),
+        );
+        let (handle, mut server) = setup_server(store.clone(), None, Router::new()).await;
+
+        let addr = handle.listening().await.unwrap();
+        let client = Client::new(
+            ClientConfig {
+                additional_certificates: vec![CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()],
+                endpoint_description: None,
+            },
+            Arc::new(
+                NodeConfig::builder(vec![MessageVersion("v1".into())])
+                    .with_node_description(basic_node_description(UUID_A, S2Role::Rm))
+                    .build(),
+            ),
+        );
+
+        let pairing = TestPairing {
+            client: UUID_A.into(),
+            server: UUID_B.into(),
+            tokens: Arc::new(Mutex::new(vec![AccessToken("testtoken".into())])),
+            url: format!("https://localhost:{}/", addr.port()),
+        };
+
+        let mut client_connection = client.connect(&pairing).await.unwrap();
+        assert_eq!(client_connection.message_version, MessageVersion("v1".into()));
+        assert!(client_connection.remote_endpoint_description.is_none());
+        assert!(client_connection.remote_node_description.is_none());
+
+        let (requested_pairing, mut server_connection) = server.next_connection().await;
+        assert_eq!(requested_pairing, store.last_request.lock().unwrap().take().unwrap());
+        assert_eq!(server_connection.message_version, MessageVersion("v1".into()));
+        assert!(server_connection.remote_endpoint_description.is_none());
+        assert_eq!(server_connection.remote_node_description.unwrap().id, UUID_A.into());
+
+        client_connection.transport.send("hello world").await.unwrap();
+        let recv = server_connection.transport.receive::<String>().await.unwrap();
+        assert_eq!(recv, "hello world");
+        server_connection.transport.disconnect().await;
+        assert!(client_connection.transport.receive::<String>().await.is_err());
+
+        handle.shutdown();
+    }
+
+    #[tokio::test]
+    async fn recv_node_config() {
+        let store = TestPairingStore::new(
+            AccessToken("testtoken".into()),
+            NodeConfig::builder(vec![MessageVersion("v1".into())]).build(),
+        );
+        let (handle, mut server) = setup_server(store.clone(), None, Router::new()).await;
+
+        let addr = handle.listening().await.unwrap();
+        let client = Client::new(
+            ClientConfig {
+                additional_certificates: vec![CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()],
+                endpoint_description: None,
+            },
+            Arc::new(
+                NodeConfig::builder(vec![MessageVersion("v1".into())])
+                    .with_node_description(basic_node_description(UUID_B, S2Role::Cem))
+                    .build(),
+            ),
+        );
+
+        let pairing = TestPairing {
+            client: UUID_A.into(),
+            server: UUID_B.into(),
+            tokens: Arc::new(Mutex::new(vec![AccessToken("testtoken".into())])),
+            url: format!("https://localhost:{}/", addr.port()),
+        };
+
+        let mut client_connection = client.connect(&pairing).await.unwrap();
+        assert_eq!(client_connection.message_version, MessageVersion("v1".into()));
+        assert!(client_connection.remote_endpoint_description.is_none());
+        assert!(client_connection.remote_node_description.is_none());
+
+        let (requested_pairing, mut server_connection) = server.next_connection().await;
+        assert_eq!(requested_pairing, store.last_request.lock().unwrap().take().unwrap());
+        assert_eq!(server_connection.message_version, MessageVersion("v1".into()));
+        assert!(server_connection.remote_endpoint_description.is_none());
+        assert_eq!(server_connection.remote_node_description.unwrap().id, UUID_B.into());
+
+        client_connection.transport.send("hello world").await.unwrap();
+        let recv = server_connection.transport.receive::<String>().await.unwrap();
+        assert_eq!(recv, "hello world");
+        server_connection.transport.disconnect().await;
+        assert!(client_connection.transport.receive::<String>().await.is_err());
+
+        handle.shutdown();
+    }
+
+    #[tokio::test]
+    async fn cannot_persist_token() {
+        let store = TestPairingStore::new(
+            AccessToken("testtoken".into()),
+            NodeConfig::builder(vec![MessageVersion("v1".into())]).build(),
+        );
+        let (handle, mut server) = setup_server(store.clone(), None, Router::new()).await;
+
+        let addr = handle.listening().await.unwrap();
+        let client = Client::new(
+            ClientConfig {
+                additional_certificates: vec![CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()],
+                endpoint_description: None,
+            },
+            Arc::new(NodeConfig::builder(vec![MessageVersion("v1".into())]).build()),
+        );
+
+        struct NonPersistingPairing {
+            client: S2NodeId,
+            server: S2NodeId,
+            tokens: Vec<AccessToken>,
+            url: String,
+        }
+
+        impl ClientPairing for NonPersistingPairing {
+            type Error = std::io::Error;
+
+            fn client_id(&self) -> S2NodeId {
+                self.server
+            }
+
+            fn server_id(&self) -> S2NodeId {
+                self.client
+            }
+
+            fn access_tokens(&self) -> impl AsRef<[AccessToken]> {
+                self.tokens.clone()
+            }
+
+            fn communication_url(&self) -> impl AsRef<str> {
+                &self.url
+            }
+
+            async fn set_access_tokens(&mut self, _tokens: Vec<AccessToken>) -> Result<(), Self::Error> {
+                Err(std::io::ErrorKind::Other.into())
+            }
+        }
+
+        assert!(
+            client
+                .connect(NonPersistingPairing {
+                    client: UUID_A.into(),
+                    server: UUID_B.into(),
+                    tokens: vec![AccessToken("testtoken".into())],
+                    url: format!("https://localhost:{}/", addr.port()),
+                })
+                .await
+                .is_err()
+        );
+
+        let pairing = TestPairing {
+            client: UUID_A.into(),
+            server: UUID_B.into(),
+            tokens: Arc::new(Mutex::new(vec![AccessToken("testtoken".into())])),
+            url: format!("https://localhost:{}/", addr.port()),
+        };
+
+        let mut client_connection = client.connect(&pairing).await.unwrap();
+        assert_eq!(client_connection.message_version, MessageVersion("v1".into()));
+        assert!(client_connection.remote_endpoint_description.is_none());
+        assert!(client_connection.remote_node_description.is_none());
+
+        let (requested_pairing, mut server_connection) = server.next_connection().await;
+        assert_eq!(requested_pairing, store.last_request.lock().unwrap().take().unwrap());
+        assert_eq!(server_connection.message_version, MessageVersion("v1".into()));
+        assert!(server_connection.remote_endpoint_description.is_none());
+        assert!(server_connection.remote_node_description.is_none());
+
+        client_connection.transport.send("hello world").await.unwrap();
+        let recv = server_connection.transport.receive::<String>().await.unwrap();
+        assert_eq!(recv, "hello world");
+        server_connection.transport.disconnect().await;
+        assert!(client_connection.transport.receive::<String>().await.is_err());
+    }
+
+    #[tokio::test]
+    async fn confirmation_failed_server_could_not_store() {
+        let store = TestPairingStore::new(
+            AccessToken("testtoken".into()),
+            NodeConfig::builder(vec![MessageVersion("v1".into())]).build(),
+        );
+        let (handle, _server) = setup_server(
+            store.clone(),
+            None,
+            Router::new().route("/v1/confirmAccessToken", post(|| async { StatusCode::INTERNAL_SERVER_ERROR })),
+        )
+        .await;
+
+        let addr = handle.listening().await.unwrap();
+        let client = Client::new(
+            ClientConfig {
+                additional_certificates: vec![CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()],
+                endpoint_description: None,
+            },
+            Arc::new(NodeConfig::builder(vec![MessageVersion("v1".into())]).build()),
+        );
+
+        let pairing = TestPairing {
+            client: UUID_A.into(),
+            server: UUID_B.into(),
+            tokens: Arc::new(Mutex::new(vec![AccessToken("testtoken".into())])),
+            url: format!("https://localhost:{}/", addr.port()),
+        };
+
+        assert_eq!(client.connect(&pairing).await.unwrap_err().kind(), ErrorKind::ProtocolError);
+        assert_eq!(*store.token.lock().unwrap(), AccessToken("testtoken".into()));
+        assert!(pairing.tokens.lock().unwrap().contains(&AccessToken("testtoken".into())));
+    }
+
+    #[tokio::test]
+    async fn confirmation_failed_unknown() {
+        let store = TestPairingStore::new(
+            AccessToken("testtoken".into()),
+            NodeConfig::builder(vec![MessageVersion("v1".into())]).build(),
+        );
+        let (handle, _server) = setup_server(
+            store.clone(),
+            None,
+            Router::new().route("/v1/confirmAccessToken", post(|| async { StatusCode::UNAUTHORIZED })),
+        )
+        .await;
+
+        let addr = handle.listening().await.unwrap();
+        let client = Client::new(
+            ClientConfig {
+                additional_certificates: vec![CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()],
+                endpoint_description: None,
+            },
+            Arc::new(NodeConfig::builder(vec![MessageVersion("v1".into())]).build()),
+        );
+
+        let pairing = TestPairing {
+            client: UUID_A.into(),
+            server: UUID_B.into(),
+            tokens: Arc::new(Mutex::new(vec![AccessToken("testtoken".into())])),
+            url: format!("https://localhost:{}/", addr.port()),
+        };
+
+        assert_eq!(client.connect(&pairing).await.unwrap_err().kind(), ErrorKind::ProtocolError);
+        assert_eq!(*store.token.lock().unwrap(), AccessToken("testtoken".into()));
+        assert!(pairing.tokens.lock().unwrap().contains(&AccessToken("testtoken".into())));
+    }
+}
