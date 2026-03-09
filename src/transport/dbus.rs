@@ -2,7 +2,7 @@ use crate::{connection::S2Connection, transport::S2Transport};
 use futures_util::StreamExt;
 use std::time::Duration;
 use uuid::Uuid;
-use zbus::{Connection, connection, fdo::DBusProxy, names::OwnedBusName, proxy};
+use zbus::{Connection, connection, fdo::DBusProxy, names::{BusName, OwnedBusName}, proxy};
 
 #[derive(Debug, thiserror::Error)]
 pub enum S2DBusError {
@@ -92,14 +92,14 @@ trait S2Rm {
     fn disconnect(cem_id: String, reason: String);
 }
 
-pub struct DBusConnection(String, S2RmProxy<'static>);
+pub struct DBusConnection(String, S2RmProxy<'static>, OwnedBusName);
 
 impl DBusConnection {
     async fn new(cem_id: impl Into<String>, connection: &Connection, destination: OwnedBusName) -> Result<Self, S2DBusError> {
         let cem_id = cem_id.into();
 
         tracing::trace!("Attempting D-Bus connection to {destination:?}");
-        let rm_proxy = S2RmProxy::builder(connection).destination(destination)?.build().await?;
+        let rm_proxy = S2RmProxy::builder(connection).destination(destination.clone())?.build().await?;
         if !rm_proxy.discover().await? {
             return Err(S2DBusError::DiscoverReturnedFalse);
         }
@@ -109,7 +109,11 @@ impl DBusConnection {
             return Err(S2DBusError::AlreadyConnectedCem);
         }
 
-        Ok(Self(cem_id, rm_proxy))
+        Ok(Self(cem_id, rm_proxy, destination))
+    }
+
+    async fn destination<'a>(&'a self) -> BusName<'a> {
+        self.2.as_ref()
     }
 }
 

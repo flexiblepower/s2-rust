@@ -241,6 +241,10 @@ impl<T: S2Transport> S2Connection<T> {
     pub async fn disconnect(self) {
         self.transport.disconnect().await
     }
+
+    pub fn inner(&self) -> &T {
+        &self.transport
+    }
 }
 
 /// An S2 message for which no [`ReceptionStatus`] has been returned yet.
