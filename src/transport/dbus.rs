@@ -1,8 +1,14 @@
 use crate::{connection::S2Connection, transport::S2Transport};
 use futures_util::StreamExt;
 use std::time::Duration;
+use tokio::task::AbortHandle;
 use uuid::Uuid;
-use zbus::{Connection, connection, fdo::DBusProxy, names::{BusName, OwnedBusName}, proxy};
+use zbus::{
+    Connection, connection,
+    fdo::DBusProxy,
+    names::{BusName, OwnedBusName},
+    proxy,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum S2DBusError {
@@ -81,7 +87,7 @@ impl DBusServer {
 #[proxy(default_path = "/S2/0/Rm", interface = "com.victronenergy.S2")]
 trait S2Rm {
     fn discover(&self) -> zbus::Result<bool>;
-    fn connect(&self, cem_id: String, keep_alive_internal: i32) -> zbus::Result<bool>;
+    fn connect(&self, cem_id: String, keep_alive_interval: i32) -> zbus::Result<bool>;
     fn disconnect(&self, cem_id: String) -> zbus::Result<()>;
     fn message(&self, cem_id: String, message: String) -> zbus::Result<()>;
     fn keep_alive(&self, cem_id: String) -> zbus::Result<bool>;
@@ -92,9 +98,16 @@ trait S2Rm {
     fn disconnect(cem_id: String, reason: String);
 }
 
-pub struct DBusConnection(String, S2RmProxy<'static>, OwnedBusName);
+pub struct DBusConnection {
+    cem_id: String,
+    rm_proxy: S2RmProxy<'static>,
+    destination: OwnedBusName,
+    keep_alive_abort: AbortHandle,
+}
 
 impl DBusConnection {
+    const KEEP_ALIVE_INTERVAL: i32 = 2;
+
     async fn new(cem_id: impl Into<String>, connection: &Connection, destination: OwnedBusName) -> Result<Self, S2DBusError> {
         let cem_id = cem_id.into();
 
@@ -104,16 +117,41 @@ impl DBusConnection {
             return Err(S2DBusError::DiscoverReturnedFalse);
         }
 
-        let connected = rm_proxy.connect(cem_id.clone(), 30).await?;
+        let connected = rm_proxy.connect(cem_id.clone(), Self::KEEP_ALIVE_INTERVAL).await?;
         if !connected {
             return Err(S2DBusError::AlreadyConnectedCem);
         }
 
-        Ok(Self(cem_id, rm_proxy, destination))
+        let keep_alive_proxy = rm_proxy.clone();
+        let cloned_id = cem_id.clone();
+        let cloned_destination = destination.clone();
+        let abort_handle = tokio::task::spawn(async move {
+            loop {
+                match keep_alive_proxy.keep_alive(cloned_id.clone()).await {
+                    Ok(_) => { /* Great! */ }
+                    Err(err) => {
+                        tracing::error!("KeepAlive for destination {cloned_destination} failed with error: {err}");
+                        return;
+                    }
+                }
+
+                tokio::time::sleep(Duration::from_secs(Self::KEEP_ALIVE_INTERVAL as u64)).await;
+            }
+        })
+        .abort_handle();
+
+        rm_proxy.keep_alive(cem_id.clone()).await?;
+
+        Ok(Self {
+            cem_id,
+            rm_proxy,
+            destination,
+            keep_alive_abort: abort_handle,
+        })
     }
 
     pub async fn destination<'a>(&'a self) -> BusName<'a> {
-        self.2.as_ref()
+        self.destination.as_ref()
     }
 }
 
@@ -123,13 +161,13 @@ impl S2Transport for DBusConnection {
     async fn send(&mut self, message: crate::common::Message) -> Result<(), Self::TransportError> {
         tracing::trace!("Sending S2 message over D-Bus: {message:?}");
         let serialized = serde_json::to_string(&message)?;
-        self.1.message(self.0.clone(), serialized).await?;
+        self.rm_proxy.message(self.cem_id.clone(), serialized).await?;
         Ok(())
     }
 
     async fn receive(&mut self) -> Result<crate::common::Message, Self::TransportError> {
         let serialized_contents = self
-            .1
+            .rm_proxy
             .receive_message()
             .await?
             .next()
@@ -143,7 +181,21 @@ impl S2Transport for DBusConnection {
     }
 
     async fn disconnect(self) {
-        let _ = self.1.disconnect(self.0).await;
+        tracing::trace!(
+            "Disconnecting from destination {} because DBusConnection::disconnect was called",
+            self.destination
+        );
+        let _ = self.rm_proxy.disconnect(self.cem_id.clone()).await;
+    }
+}
+
+impl Drop for DBusConnection {
+    fn drop(&mut self) {
+        tracing::trace!(
+            "DBusConnection with destination {} is being dropped; aborting KeepAlive task",
+            self.destination
+        );
+        self.keep_alive_abort.abort();
     }
 }
 
