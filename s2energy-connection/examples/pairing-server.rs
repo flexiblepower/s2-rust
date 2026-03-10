@@ -19,9 +19,7 @@ async fn main() {
         .with(EnvFilter::from_default_env())
         .init();
 
-    let server = Server::new(ServerConfig {
-        root_certificate: None,
-    });
+    let server = Server::new(ServerConfig { root_certificate: None });
     let config = NodeConfig::builder(
         S2NodeDescription {
             id: uuid!("67e55044-10b1-426f-9247-bb680e5fe0c8").into(),

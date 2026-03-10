@@ -1,6 +1,7 @@
 #![allow(unused)]
 use std::{
     collections::HashMap,
+    str::FromStr,
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -11,6 +12,8 @@ use axum::{
     http::HeaderMap,
     routing::{get, post},
 };
+use base64::{DecodeError, Engine, display::Base64Display, prelude::BASE64_STANDARD};
+use rand::RngCore;
 use reqwest::StatusCode;
 use rustls::pki_types::CertificateDer;
 use sha2::Digest;
@@ -32,7 +35,61 @@ const PERMANENT_PAIRING_BUFFER_SIZE: usize = 1;
 /// Token known to both S2 nodes trying to pair.
 ///
 /// This token is used to validate the identity of the nodes.
+#[derive(Debug, Clone)]
 pub struct PairingToken(pub Box<[u8]>);
+
+impl std::fmt::Display for PairingToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        Base64Display::new(&self.0, &BASE64_STANDARD).fmt(f)
+    }
+}
+
+/// Error that occurred when parsing a pairing token.
+#[derive(Debug, PartialEq, Eq)]
+pub struct PairingTokenError(DecodeError);
+
+impl std::fmt::Display for PairingTokenError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Invalid pairing token: {}", self.0)
+    }
+}
+
+impl std::error::Error for PairingTokenError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.0)
+    }
+}
+
+impl From<DecodeError> for PairingTokenError {
+    fn from(value: DecodeError) -> Self {
+        Self(value)
+    }
+}
+
+impl FromStr for PairingToken {
+    type Err = PairingTokenError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(PairingToken(BASE64_STANDARD.decode(s)?.into()))
+    }
+}
+
+impl PairingToken {
+    /// Generate a new pairing token suitable for short-lived use.
+    #[expect(clippy::new_without_default, reason = "Uses non-trivial randomness")]
+    pub fn new() -> Self {
+        let mut result = Self(Box::new([0; 9]));
+        rand::rng().fill_bytes(&mut result.0);
+        result
+    }
+
+    /// Generate a new pairing token suitable for long-term use.
+    pub fn new_static() -> Self {
+        let mut result = Self(Box::new([0; 12]));
+        rand::rng().fill_bytes(&mut result.0);
+        result
+    }
+}
 
 /// Server for handling S2 pairing transactions.
 ///
@@ -604,6 +661,13 @@ mod tests {
             },
         },
     };
+
+    #[test]
+    fn token_encode_decode() {
+        let token = PairingToken(Box::new([0, 1, 2, 3, 4, 5, 6, 7, 8]));
+        assert_eq!(token.to_string(), "AAECAwQFBgcI");
+        assert_eq!(token.0, "AAECAwQFBgcI".parse::<PairingToken>().unwrap().0);
+    }
 
     #[tokio::test]
     async fn version_negotiation() {
