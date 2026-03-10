@@ -318,6 +318,21 @@ async fn v1_confirm_access_token<Store: ServerPairingStore>(
     async move {
         trace!("Found session, looking up pairing.");
 
+        let mut pairing = match state.store.lookup(session.lookup.clone()).await {
+            Ok(PairingLookupResult::Pairing(pairing)) => pairing,
+            Ok(PairingLookupResult::NeverPaired | PairingLookupResult::Unpaired) => return Err(StatusCode::UNAUTHORIZED),
+            Err(_) => return Err(StatusCode::UNAUTHORIZED),
+        };
+
+        trace!("Found pairing, storing new token.");
+
+        pairing
+            .set_access_token(session.token)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+        trace!("Stored token, returning websocket");
+
         let websocket_token = {
             let mut pending_websockets = state.pending_websockets.lock().unwrap();
             let websocket_token = loop {
@@ -405,7 +420,10 @@ mod tests {
         communication::{
             NodeConfig, Server, ServerConfig, ServerPairing, ServerPairingStore, WebSocketTransport,
             server::{Expiring, PendingWebsocket, Session},
-            wire::{CommunicationDetailsErrorMessage, CommunicationToken, InitiateConnectionRequest, InitiateConnectionResponse},
+            wire::{
+                CommunicationDetails, CommunicationDetailsErrorMessage, CommunicationToken, InitiateConnectionRequest,
+                InitiateConnectionResponse,
+            },
         },
     };
 
@@ -739,6 +757,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn confirm_access_token() {
+        let store = TestStore {
+            token: Arc::new(Mutex::new(AccessToken("testtoken".into()))),
+            config: NodeConfig::builder(vec![MessageVersion("v1".into())]).build(),
+        };
+        let server = Server::new(
+            ServerConfig {
+                base_url: "localhost".into(),
+                endpoint_description: None,
+            },
+            store.clone(),
+        );
+        server.app_state.pending_tokens.lock().unwrap().insert(
+            AccessToken("newtoken".into()),
+            Expiring {
+                start_time: Instant::now(),
+                session: Session {
+                    span: span!(Level::TRACE, "testspan"),
+                    lookup: PairingLookup {
+                        client: UUID_A.into(),
+                        server: UUID_B.into(),
+                    },
+                    token: AccessToken("newtoken".into()),
+                    node_description: None,
+                    endpoint_description: None,
+                    message_version: MessageVersion("v1".into()),
+                    communication_protocol: CommunicationProtocol("WebSocket".into()),
+                },
+            },
+        );
+
+        let response = server
+            .get_router()
+            .oneshot(
+                http::Request::post("/v1/confirmAccessToken")
+                    .header(http::header::AUTHORIZATION, "Bearer newtoken")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let CommunicationDetails::WebSocket(response_data) = serde_json::from_slice(&body).unwrap();
+        assert_eq!(response_data.websocket_url, "wss://localhost/v1/websocket");
+        assert_eq!(store.token.lock().unwrap().clone(), AccessToken("newtoken".into()));
+    }
+
+    #[tokio::test]
     async fn confirm_incorrect_token() {
         let server = Server::new(
             ServerConfig {
@@ -780,6 +847,88 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn confirm_cant_store_token() {
+        struct NoStoreStore {
+            token: Arc<Mutex<AccessToken>>,
+            config: NodeConfig,
+        }
+
+        impl ServerPairing for &NoStoreStore {
+            type Error = std::io::Error;
+
+            fn access_token(&self) -> impl AsRef<AccessToken> {
+                self.token.lock().unwrap().clone()
+            }
+
+            fn config(&self) -> impl AsRef<NodeConfig> {
+                &self.config
+            }
+
+            async fn set_access_token(&mut self, _token: AccessToken) -> Result<(), Self::Error> {
+                Err(std::io::ErrorKind::Other.into())
+            }
+        }
+
+        impl ServerPairingStore for NoStoreStore {
+            type Error = std::io::Error;
+
+            type Pairing<'a>
+                = &'a NoStoreStore
+            where
+                Self: 'a;
+
+            async fn lookup(&self, request: PairingLookup) -> Result<PairingLookupResult<Self::Pairing<'_>>, Self::Error> {
+                if request.client == UUID_A.into() && request.server == UUID_B.into() {
+                    Ok(PairingLookupResult::Pairing(self))
+                } else {
+                    Ok(PairingLookupResult::NeverPaired)
+                }
+            }
+        }
+
+        let server = Server::new(
+            ServerConfig {
+                base_url: "localhost".into(),
+                endpoint_description: None,
+            },
+            NoStoreStore {
+                token: Arc::new(Mutex::new(AccessToken("testtoken".into()))),
+                config: NodeConfig::builder(vec![MessageVersion("v1".into())]).build(),
+            },
+        );
+        server.app_state.pending_tokens.lock().unwrap().insert(
+            AccessToken("newtoken".into()),
+            Expiring {
+                start_time: Instant::now(),
+                session: Session {
+                    span: span!(Level::TRACE, "testspan"),
+                    lookup: PairingLookup {
+                        client: UUID_A.into(),
+                        server: UUID_B.into(),
+                    },
+                    token: AccessToken("newtoken".into()),
+                    node_description: None,
+                    endpoint_description: None,
+                    message_version: MessageVersion("v1".into()),
+                    communication_protocol: CommunicationProtocol("WebSocket".into()),
+                },
+            },
+        );
+
+        let response = server
+            .get_router()
+            .oneshot(
+                http::Request::post("/v1/confirmAccessToken")
+                    .header(http::header::AUTHORIZATION, "Bearer newtoken")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
     #[tokio::test]
