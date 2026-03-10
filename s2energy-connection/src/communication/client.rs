@@ -181,6 +181,13 @@ impl Client {
 
                 trace!("Confirmed new access token to server.");
 
+                pairing
+                    .set_access_tokens(dbg!(vec![initiate_response.access_token]))
+                    .await
+                    .map_err(|e| Error::new(ErrorKind::Storage, Box::new(e) as Box<_>))?;
+
+                trace!("Reduced stored access token to only new one.");
+
                 match communication_details {
                     CommunicationDetails::WebSocket(web_socket_communication_details) => {
                         let tls_config_builder = rustls::ClientConfig::builder();
@@ -291,7 +298,7 @@ mod tests {
         }
 
         async fn set_access_token(&mut self, token: crate::AccessToken) -> Result<(), Self::Error> {
-            *self.token.lock().unwrap() = token;
+            *self.token.lock().unwrap() = dbg!(token);
             Ok(())
         }
     }
@@ -388,6 +395,7 @@ mod tests {
         assert_eq!(client_connection.message_version, MessageVersion("v1".into()));
         assert!(client_connection.remote_endpoint_description.is_none());
         assert!(client_connection.remote_node_description.is_none());
+        assert_eq!(pairing.tokens.lock().unwrap().len(), 1);
 
         let (requested_pairing, mut server_connection) = server.next_connection().await;
         assert_eq!(requested_pairing, store.last_request.lock().unwrap().take().unwrap());
