@@ -2,6 +2,7 @@ use crate::{connection::S2Connection, transport::S2Transport};
 use futures_util::StreamExt;
 use std::time::Duration;
 use tokio::task::AbortHandle;
+use tracing::Instrument;
 use uuid::Uuid;
 use zbus::{
     Connection, connection,
@@ -106,7 +107,7 @@ pub struct DBusConnection {
 }
 
 impl DBusConnection {
-    const KEEP_ALIVE_INTERVAL: i32 = 2;
+    const KEEP_ALIVE_INTERVAL: i32 = 30;
 
     async fn new(cem_id: impl Into<String>, connection: &Connection, destination: OwnedBusName) -> Result<Self, S2DBusError> {
         let cem_id = cem_id.into();
@@ -125,7 +126,7 @@ impl DBusConnection {
         let keep_alive_proxy = rm_proxy.clone();
         let cloned_id = cem_id.clone();
         let cloned_destination = destination.clone();
-        let abort_handle = tokio::task::spawn(async move {
+        let keep_alive = async move {
             loop {
                 match keep_alive_proxy.keep_alive(cloned_id.clone()).await {
                     Ok(_) => { /* Great! */ }
@@ -135,10 +136,13 @@ impl DBusConnection {
                     }
                 }
 
+                tracing::trace!("Successfully pinged KeepAlive for destination {cloned_destination}");
                 tokio::time::sleep(Duration::from_secs(Self::KEEP_ALIVE_INTERVAL as u64)).await;
             }
-        })
-        .abort_handle();
+        };
+        let abort_handle =
+            tokio::task::spawn(keep_alive.instrument(tracing::trace_span!("keep_alive_task", destination = destination.as_str())))
+                .abort_handle();
 
         rm_proxy.keep_alive(cem_id.clone()).await?;
 
