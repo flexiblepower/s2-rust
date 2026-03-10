@@ -193,7 +193,7 @@ use wire::{HmacChallenge, HmacChallengeResponse};
 
 pub use client::{Client, ClientConfig, PairingRemote};
 pub use error::{ConfigError, Error, ErrorKind};
-pub use server::{PairingToken, PendingPairing, RepeatedPairing, Server, ServerConfig};
+pub use server::{PairingToken, PairingTokenError, PendingPairing, RepeatedPairing, Server, ServerConfig};
 pub use wire::PairingS2NodeId;
 
 use crate::{
