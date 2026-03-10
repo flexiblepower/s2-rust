@@ -268,7 +268,7 @@ async fn v1_initiate_connection<Store: ServerPairingStore>(
                 session: Session {
                     span: session_span,
                     lookup,
-                    token,
+                    token: new_access_token.clone(),
                     node_description: request.node_description,
                     endpoint_description: request.endpoint_description,
                     message_version: message_version.clone(),
