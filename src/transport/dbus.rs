@@ -154,6 +154,21 @@ impl DBusConnection {
         })
     }
 
+    pub async fn new_for_destination(
+        cem_id: impl Into<String>,
+        dbus_name: impl Into<String>,
+        destination: impl Into<OwnedBusName>,
+    ) -> Result<S2Connection<Self>, S2DBusError> {
+        let connection = connection::Builder::system()?
+            .name(dbus_name.into().as_str())?
+            .method_timeout(Duration::from_secs(5))
+            .build()
+            .await?;
+
+        let dbus_connection = Self::new(cem_id, &connection, destination.into()).await?;
+        Ok(S2Connection::new(dbus_connection))
+    }
+
     pub async fn destination<'a>(&'a self) -> BusName<'a> {
         self.destination.as_ref()
     }
