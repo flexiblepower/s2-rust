@@ -268,7 +268,7 @@ async fn v1_initiate_connection<Store: ServerPairingStore>(
                 session: Session {
                     span: session_span,
                     lookup,
-                    token,
+                    token: new_access_token.clone(),
                     node_description: request.node_description,
                     endpoint_description: request.endpoint_description,
                     message_version: message_version.clone(),
@@ -317,6 +317,21 @@ async fn v1_confirm_access_token<Store: ServerPairingStore>(
 
     async move {
         trace!("Found session, looking up pairing.");
+
+        let mut pairing = match state.store.lookup(session.lookup.clone()).await {
+            Ok(PairingLookupResult::Pairing(pairing)) => pairing,
+            Ok(PairingLookupResult::NeverPaired | PairingLookupResult::Unpaired) => return Err(StatusCode::UNAUTHORIZED),
+            Err(_) => return Err(StatusCode::UNAUTHORIZED),
+        };
+
+        trace!("Found pairing, storing new token.");
+
+        pairing
+            .set_access_token(session.token)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+        trace!("Stored token, returning websocket");
 
         let websocket_token = {
             let mut pending_websockets = state.pending_websockets.lock().unwrap();
@@ -378,4 +393,683 @@ async fn v1_websocket<Store: ServerPairingStore>(
             .await
             .ok();
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        convert::Infallible,
+        net::{Ipv4Addr, SocketAddr},
+        sync::{Arc, Mutex},
+    };
+
+    use axum::body::Body;
+    use axum_server::{Handle, tls_rustls::RustlsConfig};
+    use http::StatusCode;
+    use http_body_util::BodyExt;
+    use rustls::pki_types::{CertificateDer, pem::PemObject};
+    use s2energy_common::S2Transport;
+    use tokio::{net::TcpListener, time::Instant};
+    use tokio_tungstenite::{Connector, connect_async_tls_with_config, tungstenite::ClientRequestBuilder};
+    use tower::ServiceExt;
+    use tracing::{Level, span};
+
+    use crate::{
+        AccessToken, CommunicationProtocol, MessageVersion,
+        common::wire::test::{UUID_A, UUID_B},
+        communication::{
+            NodeConfig, Server, ServerConfig, ServerPairing, ServerPairingStore, WebSocketTransport,
+            server::{Expiring, PendingWebsocket, Session},
+            wire::{
+                CommunicationDetails, CommunicationDetailsErrorMessage, CommunicationToken, InitiateConnectionRequest,
+                InitiateConnectionResponse,
+            },
+        },
+    };
+
+    use super::{PairingLookup, PairingLookupResult};
+
+    #[derive(Debug, Clone)]
+    struct NoneStore;
+
+    impl ServerPairing for &NoneStore {
+        type Error = Infallible;
+
+        fn access_token(&self) -> impl AsRef<AccessToken> {
+            unimplemented!() as &AccessToken
+        }
+
+        fn config(&self) -> impl AsRef<NodeConfig> {
+            unimplemented!() as &NodeConfig
+        }
+
+        async fn set_access_token(&mut self, _token: AccessToken) -> Result<(), Self::Error> {
+            unimplemented!()
+        }
+    }
+
+    impl ServerPairingStore for NoneStore {
+        type Error = Infallible;
+
+        type Pairing<'a>
+            = &'a NoneStore
+        where
+            Self: 'a;
+
+        async fn lookup(&self, request: PairingLookup) -> Result<PairingLookupResult<Self::Pairing<'_>>, Self::Error> {
+            Ok(if request.client == UUID_B.into() && request.server == UUID_A.into() {
+                PairingLookupResult::Unpaired
+            } else {
+                PairingLookupResult::NeverPaired
+            })
+        }
+    }
+
+    #[derive(Debug, Clone)]
+    struct TestStore {
+        token: Arc<Mutex<AccessToken>>,
+        config: NodeConfig,
+    }
+
+    impl ServerPairing for &TestStore {
+        type Error = Infallible;
+
+        fn access_token(&self) -> impl AsRef<AccessToken> {
+            self.token.lock().unwrap().clone()
+        }
+
+        fn config(&self) -> impl AsRef<NodeConfig> {
+            &self.config
+        }
+
+        async fn set_access_token(&mut self, token: AccessToken) -> Result<(), Self::Error> {
+            *self.token.lock().unwrap() = token;
+            Ok(())
+        }
+    }
+
+    impl ServerPairingStore for TestStore {
+        type Error = Infallible;
+
+        type Pairing<'a>
+            = &'a TestStore
+        where
+            Self: 'a;
+
+        async fn lookup(&self, request: PairingLookup) -> Result<PairingLookupResult<Self::Pairing<'_>>, Self::Error> {
+            if request.client == UUID_A.into() && request.server == UUID_B.into() {
+                Ok(PairingLookupResult::Pairing(self))
+            } else {
+                Ok(PairingLookupResult::NeverPaired)
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn version_negotiation() {
+        let server = Server::new(
+            ServerConfig {
+                base_url: "localhost:8005".into(),
+                endpoint_description: None,
+            },
+            NoneStore,
+        );
+
+        let response = server
+            .get_router()
+            .oneshot(http::Request::get("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(body, b"[\"v1\"]".as_slice());
+    }
+
+    #[tokio::test]
+    async fn initiate_communication() {
+        let server = Server::new(
+            ServerConfig {
+                base_url: "localhost".into(),
+                endpoint_description: None,
+            },
+            TestStore {
+                token: Arc::new(Mutex::new(AccessToken("testtoken".into()))),
+                config: NodeConfig::builder(vec![MessageVersion("v1".into())]).build(),
+            },
+        );
+
+        let response = server
+            .get_router()
+            .oneshot(
+                http::Request::post("/v1/initiateConnection")
+                    .header(http::header::AUTHORIZATION, "Bearer testtoken")
+                    .header(http::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&InitiateConnectionRequest {
+                            client_node_id: UUID_A.into(),
+                            server_node_id: UUID_B.into(),
+                            supported_message_versions: vec![MessageVersion("v1".into())],
+                            supported_communication_protocols: vec![CommunicationProtocol("WebSocket".into())],
+                            node_description: None,
+                            endpoint_description: None,
+                        })
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let response_data: InitiateConnectionResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(response_data.message_version, MessageVersion("v1".into()));
+        assert_eq!(response_data.communication_protocol, CommunicationProtocol("WebSocket".into()));
+        assert!(response_data.endpoint_description.is_none());
+        assert!(response_data.node_description.is_none());
+    }
+
+    #[tokio::test]
+    async fn never_paired_initiate() {
+        let server = Server::new(
+            ServerConfig {
+                base_url: "localhost:8005".into(),
+                endpoint_description: None,
+            },
+            NoneStore,
+        );
+
+        let response = server
+            .get_router()
+            .oneshot(
+                http::Request::post("/v1/initiateConnection")
+                    .header(http::header::AUTHORIZATION, "Bearer testtoken")
+                    .header(http::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&InitiateConnectionRequest {
+                            client_node_id: UUID_A.into(),
+                            server_node_id: UUID_B.into(),
+                            supported_message_versions: vec![MessageVersion("v1".into())],
+                            supported_communication_protocols: vec![CommunicationProtocol("WebSocket".into())],
+                            node_description: None,
+                            endpoint_description: None,
+                        })
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn unpaired_initiate() {
+        let server = Server::new(
+            ServerConfig {
+                base_url: "localhost:8005".into(),
+                endpoint_description: None,
+            },
+            NoneStore,
+        );
+
+        let response = server
+            .get_router()
+            .oneshot(
+                http::Request::post("/v1/initiateConnection")
+                    .header(http::header::AUTHORIZATION, "Bearer testtoken")
+                    .header(http::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&InitiateConnectionRequest {
+                            client_node_id: UUID_B.into(),
+                            server_node_id: UUID_A.into(),
+                            supported_message_versions: vec![MessageVersion("v1".into())],
+                            supported_communication_protocols: vec![CommunicationProtocol("WebSocket".into())],
+                            node_description: None,
+                            endpoint_description: None,
+                        })
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let response_data: CommunicationDetailsErrorMessage = serde_json::from_slice(&body).unwrap();
+        assert_eq!(response_data, CommunicationDetailsErrorMessage::NoLongerPaired);
+    }
+
+    #[tokio::test]
+    async fn incorrect_token() {
+        let server = Server::new(
+            ServerConfig {
+                base_url: "localhost".into(),
+                endpoint_description: None,
+            },
+            TestStore {
+                token: Arc::new(Mutex::new(AccessToken("testtoken".into()))),
+                config: NodeConfig::builder(vec![MessageVersion("v1".into())]).build(),
+            },
+        );
+
+        let response = server
+            .get_router()
+            .oneshot(
+                http::Request::post("/v1/initiateConnection")
+                    .header(http::header::AUTHORIZATION, "Bearer invalid")
+                    .header(http::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&InitiateConnectionRequest {
+                            client_node_id: UUID_A.into(),
+                            server_node_id: UUID_B.into(),
+                            supported_message_versions: vec![MessageVersion("v1".into())],
+                            supported_communication_protocols: vec![CommunicationProtocol("WebSocket".into())],
+                            node_description: None,
+                            endpoint_description: None,
+                        })
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn no_communication_protocol_shared() {
+        let server = Server::new(
+            ServerConfig {
+                base_url: "localhost".into(),
+                endpoint_description: None,
+            },
+            TestStore {
+                token: Arc::new(Mutex::new(AccessToken("testtoken".into()))),
+                config: NodeConfig::builder(vec![MessageVersion("v1".into())]).build(),
+            },
+        );
+
+        let response = server
+            .get_router()
+            .oneshot(
+                http::Request::post("/v1/initiateConnection")
+                    .header(http::header::AUTHORIZATION, "Bearer testtoken")
+                    .header(http::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&InitiateConnectionRequest {
+                            client_node_id: UUID_A.into(),
+                            server_node_id: UUID_B.into(),
+                            supported_message_versions: vec![MessageVersion("v1".into())],
+                            supported_communication_protocols: vec![CommunicationProtocol("Unknown".into())],
+                            node_description: None,
+                            endpoint_description: None,
+                        })
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let response_data: CommunicationDetailsErrorMessage = serde_json::from_slice(&body).unwrap();
+        assert_eq!(response_data, CommunicationDetailsErrorMessage::IncompatibleCommunicationProtocols);
+    }
+
+    #[tokio::test]
+    async fn no_message_version_shared() {
+        let server = Server::new(
+            ServerConfig {
+                base_url: "localhost".into(),
+                endpoint_description: None,
+            },
+            TestStore {
+                token: Arc::new(Mutex::new(AccessToken("testtoken".into()))),
+                config: NodeConfig::builder(vec![MessageVersion("v1".into())]).build(),
+            },
+        );
+
+        let response = server
+            .get_router()
+            .oneshot(
+                http::Request::post("/v1/initiateConnection")
+                    .header(http::header::AUTHORIZATION, "Bearer testtoken")
+                    .header(http::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&InitiateConnectionRequest {
+                            client_node_id: UUID_A.into(),
+                            server_node_id: UUID_B.into(),
+                            supported_message_versions: vec![MessageVersion("v0".into())],
+                            supported_communication_protocols: vec![CommunicationProtocol("WebSocket".into())],
+                            node_description: None,
+                            endpoint_description: None,
+                        })
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let response_data: CommunicationDetailsErrorMessage = serde_json::from_slice(&body).unwrap();
+        assert_eq!(response_data, CommunicationDetailsErrorMessage::IncompatibleS2MessageVersions);
+    }
+
+    #[tokio::test]
+    async fn confirm_access_token() {
+        let store = TestStore {
+            token: Arc::new(Mutex::new(AccessToken("testtoken".into()))),
+            config: NodeConfig::builder(vec![MessageVersion("v1".into())]).build(),
+        };
+        let server = Server::new(
+            ServerConfig {
+                base_url: "localhost".into(),
+                endpoint_description: None,
+            },
+            store.clone(),
+        );
+        server.app_state.pending_tokens.lock().unwrap().insert(
+            AccessToken("newtoken".into()),
+            Expiring {
+                start_time: Instant::now(),
+                session: Session {
+                    span: span!(Level::TRACE, "testspan"),
+                    lookup: PairingLookup {
+                        client: UUID_A.into(),
+                        server: UUID_B.into(),
+                    },
+                    token: AccessToken("newtoken".into()),
+                    node_description: None,
+                    endpoint_description: None,
+                    message_version: MessageVersion("v1".into()),
+                    communication_protocol: CommunicationProtocol("WebSocket".into()),
+                },
+            },
+        );
+
+        let response = server
+            .get_router()
+            .oneshot(
+                http::Request::post("/v1/confirmAccessToken")
+                    .header(http::header::AUTHORIZATION, "Bearer newtoken")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let CommunicationDetails::WebSocket(response_data) = serde_json::from_slice(&body).unwrap();
+        assert_eq!(response_data.websocket_url, "wss://localhost/v1/websocket");
+        assert_eq!(store.token.lock().unwrap().clone(), AccessToken("newtoken".into()));
+    }
+
+    #[tokio::test]
+    async fn confirm_incorrect_token() {
+        let server = Server::new(
+            ServerConfig {
+                base_url: "localhost".into(),
+                endpoint_description: None,
+            },
+            TestStore {
+                token: Arc::new(Mutex::new(AccessToken("testtoken".into()))),
+                config: NodeConfig::builder(vec![MessageVersion("v1".into())]).build(),
+            },
+        );
+        server.app_state.pending_tokens.lock().unwrap().insert(
+            AccessToken("newtoken".into()),
+            Expiring {
+                start_time: Instant::now(),
+                session: Session {
+                    span: span!(Level::TRACE, "testspan"),
+                    lookup: PairingLookup {
+                        client: UUID_A.into(),
+                        server: UUID_B.into(),
+                    },
+                    token: AccessToken("newtoken".into()),
+                    node_description: None,
+                    endpoint_description: None,
+                    message_version: MessageVersion("v1".into()),
+                    communication_protocol: CommunicationProtocol("WebSocket".into()),
+                },
+            },
+        );
+
+        let response = server
+            .get_router()
+            .oneshot(
+                http::Request::post("/v1/confirmAccessToken")
+                    .header(http::header::AUTHORIZATION, "Bearer testtoken")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn confirm_cant_store_token() {
+        struct NoStoreStore {
+            token: Arc<Mutex<AccessToken>>,
+            config: NodeConfig,
+        }
+
+        impl ServerPairing for &NoStoreStore {
+            type Error = std::io::Error;
+
+            fn access_token(&self) -> impl AsRef<AccessToken> {
+                self.token.lock().unwrap().clone()
+            }
+
+            fn config(&self) -> impl AsRef<NodeConfig> {
+                &self.config
+            }
+
+            async fn set_access_token(&mut self, _token: AccessToken) -> Result<(), Self::Error> {
+                Err(std::io::ErrorKind::Other.into())
+            }
+        }
+
+        impl ServerPairingStore for NoStoreStore {
+            type Error = std::io::Error;
+
+            type Pairing<'a>
+                = &'a NoStoreStore
+            where
+                Self: 'a;
+
+            async fn lookup(&self, request: PairingLookup) -> Result<PairingLookupResult<Self::Pairing<'_>>, Self::Error> {
+                if request.client == UUID_A.into() && request.server == UUID_B.into() {
+                    Ok(PairingLookupResult::Pairing(self))
+                } else {
+                    Ok(PairingLookupResult::NeverPaired)
+                }
+            }
+        }
+
+        let server = Server::new(
+            ServerConfig {
+                base_url: "localhost".into(),
+                endpoint_description: None,
+            },
+            NoStoreStore {
+                token: Arc::new(Mutex::new(AccessToken("testtoken".into()))),
+                config: NodeConfig::builder(vec![MessageVersion("v1".into())]).build(),
+            },
+        );
+        server.app_state.pending_tokens.lock().unwrap().insert(
+            AccessToken("newtoken".into()),
+            Expiring {
+                start_time: Instant::now(),
+                session: Session {
+                    span: span!(Level::TRACE, "testspan"),
+                    lookup: PairingLookup {
+                        client: UUID_A.into(),
+                        server: UUID_B.into(),
+                    },
+                    token: AccessToken("newtoken".into()),
+                    node_description: None,
+                    endpoint_description: None,
+                    message_version: MessageVersion("v1".into()),
+                    communication_protocol: CommunicationProtocol("WebSocket".into()),
+                },
+            },
+        );
+
+        let response = server
+            .get_router()
+            .oneshot(
+                http::Request::post("/v1/confirmAccessToken")
+                    .header(http::header::AUTHORIZATION, "Bearer newtoken")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[tokio::test]
+    async fn websocket_handling() {
+        let listener = TcpListener::bind(SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let mut server = Server::new(
+            ServerConfig {
+                base_url: format!("localhost:{}", port),
+                endpoint_description: None,
+            },
+            TestStore {
+                token: Arc::new(Mutex::new(AccessToken("testtoken".into()))),
+                config: NodeConfig::builder(vec![MessageVersion("v1".into())]).build(),
+            },
+        );
+        server.app_state.pending_websockets.lock().unwrap().insert(
+            CommunicationToken("testtoken".into()),
+            Expiring {
+                start_time: Instant::now(),
+                session: PendingWebsocket {
+                    lookup: PairingLookup {
+                        client: UUID_A.into(),
+                        server: UUID_B.into(),
+                    },
+                    node_description: None,
+                    endpoint_description: None,
+                    message_version: MessageVersion("v1".into()),
+                },
+            },
+        );
+        let rustls_config = RustlsConfig::from_pem(
+            include_bytes!("../../testdata/localhost.chain.pem").into(),
+            include_bytes!("../../testdata/localhost.key").into(),
+        )
+        .await
+        .unwrap();
+        let http_server_handle = Handle::new();
+        let axum_server = axum_server::from_tcp_rustls(listener.into_std().unwrap(), rustls_config)
+            .unwrap()
+            .handle(http_server_handle.clone())
+            .serve(server.get_router().into_make_service());
+        tokio::spawn(async move {
+            axum_server.await.unwrap();
+        });
+
+        let tls_config_builder = rustls::ClientConfig::builder();
+        let cert_verifier = rustls_platform_verifier::Verifier::new_with_extra_roots(
+            vec![CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()],
+            tls_config_builder.crypto_provider().clone(),
+        )
+        .unwrap();
+        let tls_config = tls_config_builder
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(cert_verifier))
+            .with_no_client_auth();
+
+        let request = ClientRequestBuilder::new(format!("wss://localhost:{}/v1/websocket", port).try_into().unwrap())
+            .with_header(http::header::AUTHORIZATION.as_str(), format!("Bearer testtoken"));
+
+        let (client_socket, _) = connect_async_tls_with_config(request, None, false, Some(Connector::Rustls(Arc::new(tls_config))))
+            .await
+            .unwrap();
+
+        let (_, mut server_connection) = server.next_connection().await;
+
+        let mut client_socket = WebSocketTransport::new_client(client_socket);
+
+        client_socket.send("hello world").await.unwrap();
+        let recv = server_connection.transport.receive::<String>().await.unwrap();
+        assert_eq!(recv, "hello world");
+        server_connection.transport.disconnect().await;
+        assert!(client_socket.receive::<String>().await.is_err());
+
+        http_server_handle.shutdown();
+    }
+
+    #[tokio::test]
+    async fn websocket_invalid_token() {
+        let listener = TcpListener::bind(SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = Server::new(
+            ServerConfig {
+                base_url: format!("localhost:{}", port),
+                endpoint_description: None,
+            },
+            TestStore {
+                token: Arc::new(Mutex::new(AccessToken("testtoken".into()))),
+                config: NodeConfig::builder(vec![MessageVersion("v1".into())]).build(),
+            },
+        );
+        server.app_state.pending_websockets.lock().unwrap().insert(
+            CommunicationToken("testtoken".into()),
+            Expiring {
+                start_time: Instant::now(),
+                session: PendingWebsocket {
+                    lookup: PairingLookup {
+                        client: UUID_A.into(),
+                        server: UUID_B.into(),
+                    },
+                    node_description: None,
+                    endpoint_description: None,
+                    message_version: MessageVersion("v1".into()),
+                },
+            },
+        );
+        let rustls_config = RustlsConfig::from_pem(
+            include_bytes!("../../testdata/localhost.chain.pem").into(),
+            include_bytes!("../../testdata/localhost.key").into(),
+        )
+        .await
+        .unwrap();
+        let http_server_handle = Handle::new();
+        let axum_server = axum_server::from_tcp_rustls(listener.into_std().unwrap(), rustls_config)
+            .unwrap()
+            .handle(http_server_handle.clone())
+            .serve(server.get_router().into_make_service());
+        tokio::spawn(async move {
+            axum_server.await.unwrap();
+        });
+
+        let tls_config_builder = rustls::ClientConfig::builder();
+        let cert_verifier = rustls_platform_verifier::Verifier::new_with_extra_roots(
+            vec![CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()],
+            tls_config_builder.crypto_provider().clone(),
+        )
+        .unwrap();
+        let tls_config = tls_config_builder
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(cert_verifier))
+            .with_no_client_auth();
+
+        let request = ClientRequestBuilder::new(format!("wss://localhost:{}/v1/websocket", port).try_into().unwrap())
+            .with_header(http::header::AUTHORIZATION.as_str(), format!("Bearer invalidtoken"));
+
+        assert!(
+            connect_async_tls_with_config(request, None, false, Some(Connector::Rustls(Arc::new(tls_config))))
+                .await
+                .is_err()
+        );
+
+        http_server_handle.shutdown();
+    }
 }

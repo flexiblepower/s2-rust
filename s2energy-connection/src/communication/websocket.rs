@@ -6,6 +6,7 @@ use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, tungstenite::Message};
 use crate::common::websocket_extractor::TokioIo;
 
 #[allow(clippy::large_enum_variant)]
+#[derive(Debug)]
 enum WebSocketImplementation {
     Server(WebSocketStream<TokioIo<hyper::upgrade::Upgraded>>),
     Client(WebSocketStream<MaybeTlsStream<TcpStream>>),
@@ -144,6 +145,7 @@ impl std::fmt::Display for WebSocketErrorKind {
 }
 
 /// An [`S2Transport`] using [json over websocket](https://github.com/flexiblepower/s2-ws-json).
+#[derive(Debug)]
 pub struct WebSocketTransport {
     inner: WebSocketImplementation,
 }
