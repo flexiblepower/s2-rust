@@ -124,6 +124,7 @@ impl DBusConnection {
             return Err(S2DBusError::AlreadyConnectedCem);
         }
 
+        let message_stream = rm_proxy.receive_message().await?;
         let keep_alive_proxy = rm_proxy.clone();
         let cloned_id = cem_id.clone();
         let cloned_destination = destination.clone();
@@ -146,7 +147,6 @@ impl DBusConnection {
                 .abort_handle();
 
         rm_proxy.keep_alive(cem_id.clone()).await?;
-        let message_stream = rm_proxy.receive_message().await?;
 
         Ok(Self {
             cem_id,
