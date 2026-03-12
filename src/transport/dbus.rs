@@ -102,6 +102,7 @@ trait S2Rm {
 pub struct DBusConnection {
     cem_id: String,
     rm_proxy: S2RmProxy<'static>,
+    message_stream: MessageStream,
     destination: OwnedBusName,
     keep_alive_abort: AbortHandle,
 }
@@ -145,11 +146,13 @@ impl DBusConnection {
                 .abort_handle();
 
         rm_proxy.keep_alive(cem_id.clone()).await?;
+        let message_stream = rm_proxy.receive_message().await?;
 
         Ok(Self {
             cem_id,
             rm_proxy,
             destination,
+            message_stream,
             keep_alive_abort: abort_handle,
         })
     }
@@ -185,15 +188,7 @@ impl S2Transport for DBusConnection {
     }
 
     async fn receive(&mut self) -> Result<crate::common::Message, Self::TransportError> {
-        let serialized_contents = self
-            .rm_proxy
-            .receive_message()
-            .await?
-            .next()
-            .await
-            .ok_or(S2DBusError::EndOfStream)?
-            .args()?
-            .message;
+        let serialized_contents = self.message_stream.next().await.ok_or(S2DBusError::EndOfStream)?.args()?.message;
         tracing::trace!("Received message over D-Bus: {serialized_contents:?}");
         let msg: crate::common::Message = serde_json::from_str(&serialized_contents)?;
         Ok(msg)
