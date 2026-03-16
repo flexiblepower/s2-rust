@@ -11,7 +11,9 @@ use crate::{
     common::negotiate_version,
     communication::{
         CommunicationResult, ConnectionInfo, Error, ErrorKind, NodeConfig, WebSocketTransport,
-        wire::{CommunicationDetails, CommunicationDetailsErrorMessage, InitiateConnectionRequest, InitiateConnectionResponse},
+        wire::{
+            CommunicationDetails, CommunicationDetailsErrorMessage, InitiateConnectionRequest, InitiateConnectionResponse, UnpairRequest,
+        },
     },
 };
 
@@ -62,6 +64,59 @@ impl Client {
             config: node_config,
             additional_certificates: config.additional_certificates,
             endpoint_description: config.endpoint_description,
+        }
+    }
+
+    /// Unpair the given pairing. The caller is responsible for deleting the pairing
+    /// upon success.
+    #[tracing::instrument(skip_all, fields(client = %pairing.client_id(), server = %pairing.server_id()), level = tracing::Level::ERROR)]
+    pub async fn unpair(&self, pairing: impl ClientPairing) -> CommunicationResult<()> {
+        let client = reqwest::Client::builder()
+            .tls_certs_merge(
+                self.additional_certificates
+                    .iter()
+                    .filter_map(|v| reqwest::Certificate::from_der(v).ok()),
+            )
+            .build()
+            .map_err(|e| Error::new(ErrorKind::TransportFailed, e))?;
+
+        let communication_url = Url::parse(pairing.communication_url().as_ref()).map_err(|e| Error::new(ErrorKind::InvalidUrl, e))?;
+
+        let version = negotiate_version(&client, communication_url.clone()).await?;
+
+        match version {
+            crate::common::wire::PairingVersion::V1 => {
+                let base_url = communication_url.join("v1/").unwrap();
+
+                let request = UnpairRequest {
+                    client_node_id: pairing.client_id(),
+                    server_node_id: pairing.server_id(),
+                };
+
+                for token in pairing.access_tokens().as_ref() {
+                    let response = client
+                        .post(base_url.join("unpair").unwrap())
+                        .bearer_auth(&token.0)
+                        .json(&request)
+                        .send()
+                        .await
+                        .map_err(|e| Error::new(ErrorKind::TransportFailed, e))?;
+
+                    if response.status() == StatusCode::UNAUTHORIZED {
+                        debug!("Token was rejected by remote, assuming it is old.");
+                        continue;
+                    }
+
+                    if response.status() != StatusCode::NO_CONTENT {
+                        debug!(status = ?response.status(), "Unexpected status in response to initiateConnection request.");
+                        return Err(ErrorKind::ProtocolError.into());
+                    }
+
+                    return Ok(());
+                }
+
+                Err(ErrorKind::NotPaired.into())
+            }
         }
     }
 
@@ -260,6 +315,7 @@ mod tests {
         token: Arc<Mutex<AccessToken>>,
         last_request: Arc<Mutex<Option<PairingLookup>>>,
         config: NodeConfig,
+        deleted: Arc<Mutex<bool>>,
     }
 
     impl TestPairingStore {
@@ -268,6 +324,7 @@ mod tests {
                 token: Arc::new(Mutex::new(token)),
                 last_request: Arc::default(),
                 config,
+                deleted: Arc::default(),
             }
         }
     }
@@ -303,7 +360,8 @@ mod tests {
         }
 
         async fn unpair(self) -> Result<(), Self::Error> {
-            unimplemented!()
+            *self.deleted.lock().unwrap() = true;
+            Ok(())
         }
     }
 
@@ -369,6 +427,66 @@ mod tests {
         });
 
         (http_server_handle, server)
+    }
+
+    #[tokio::test]
+    async fn unpair() {
+        let store = TestPairingStore::new(
+            AccessToken("testtoken".into()),
+            NodeConfig::builder(vec![MessageVersion("v1".into())]).build(),
+        );
+        let (handle, _) = setup_server(store.clone(), None, Router::new()).await;
+
+        let addr = handle.listening().await.unwrap();
+        let client = Client::new(
+            ClientConfig {
+                additional_certificates: vec![CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()],
+                endpoint_description: None,
+            },
+            Arc::new(NodeConfig::builder(vec![MessageVersion("v1".into())]).build()),
+        );
+
+        let pairing = TestPairing {
+            client: UUID_A.into(),
+            server: UUID_B.into(),
+            tokens: Arc::new(Mutex::new(vec![AccessToken("testtoken".into())])),
+            url: format!("https://localhost:{}/", addr.port()),
+        };
+
+        assert!(client.unpair(&pairing).await.is_ok());
+        assert!(*store.deleted.lock().unwrap());
+    }
+
+    #[tokio::test]
+    async fn unpair_unauthorized() {
+        let (handle, _) = setup_server(
+            TestPairingStore::new(
+                AccessToken("testtoken".into()),
+                NodeConfig::builder(vec![MessageVersion("v1".into())]).build(),
+            ),
+            None,
+            Router::new(),
+        )
+        .await;
+
+        let addr = handle.listening().await.unwrap();
+        let client = Client::new(
+            ClientConfig {
+                additional_certificates: vec![CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()],
+                endpoint_description: None,
+            },
+            Arc::new(NodeConfig::builder(vec![MessageVersion("v1".into())]).build()),
+        );
+
+        let pairing = TestPairing {
+            client: UUID_A.into(),
+            server: UUID_B.into(),
+            tokens: Arc::new(Mutex::new(vec![AccessToken("invalidtoken".into())])),
+            url: format!("https://localhost:{}/", addr.port()),
+        };
+
+        let error = client.unpair(&pairing).await.unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::NotPaired);
     }
 
     #[tokio::test]
