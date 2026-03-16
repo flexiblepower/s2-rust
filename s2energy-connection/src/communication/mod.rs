@@ -125,6 +125,9 @@
 //! #     async fn set_access_token(&mut self, token: AccessToken) -> Result<(), Self::Error> {
 //! #         unimplemented!()
 //! #     }
+//! #     async fn unpair(self) -> Result<(), Self::Error> {
+//! #         unimplemented!()
+//! #     }
 //! # }
 //! # impl ServerPairingStore for SomeStorageProvider {
 //! #     type Error = Infallible;
@@ -175,6 +178,9 @@
 //! #         unimplemented!() as &NodeConfig
 //! #     }
 //! #     async fn set_access_token(&mut self, token: AccessToken) -> Result<(), Self::Error> {
+//! #         unimplemented!()
+//! #     }
+//! #     async fn unpair(self) -> Result<(), Self::Error> {
 //! #         unimplemented!()
 //! #     }
 //! # }
