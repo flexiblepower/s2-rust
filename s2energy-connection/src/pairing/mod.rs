@@ -79,6 +79,7 @@
 //! # use std::{path::PathBuf, net::SocketAddr};
 //! # use axum_server::tls_rustls::RustlsConfig;
 //! # use s2energy_connection::pairing::{Server, ServerConfig};
+//! # use s2energy_connection::S2EndpointDescription;
 //! # #[tokio::main(flavor = "current_thread")]
 //! # async fn main() {
 //! # let tls_config = RustlsConfig::from_pem_file(
@@ -92,6 +93,8 @@
 //! # let addr = SocketAddr::from(([127, 0, 0, 1], 8005));
 //! let server = Server::new(ServerConfig {
 //!     root_certificate: None,
+//!     advertised_endpoint: S2EndpointDescription::default(),
+//!     advertised_nodes: vec![],
 //! });
 //! tokio::spawn(async move {
 //!     axum_server::bind_rustls(addr, tls_config)
@@ -106,7 +109,7 @@
 //! # use std::{path::PathBuf, net::SocketAddr, sync::Arc};
 //! # use axum_server::tls_rustls::RustlsConfig;
 //! # use s2energy_connection::pairing::{NodeConfig, PairingToken, Server, ServerConfig, PairingS2NodeId};
-//! # use s2energy_connection::{MessageVersion, S2NodeDescription, S2NodeId, S2Role};
+//! # use s2energy_connection::{MessageVersion, S2NodeDescription, S2EndpointDescription, S2NodeId, S2Role};
 //! # #[tokio::main(flavor = "current_thread")]
 //! # async fn main() {
 //! # let tls_config = RustlsConfig::from_pem_file(
@@ -120,6 +123,8 @@
 //! # let addr = SocketAddr::from(([127, 0, 0, 1], 8005));
 //! # let server = Server::new(ServerConfig {
 //! #     root_certificate: None,
+//! #     advertised_endpoint: S2EndpointDescription::default(),
+//! #     advertised_nodes: vec![],
 //! # });
 //! # let config = Arc::new(NodeConfig::builder(S2NodeDescription {
 //! #     id: S2NodeId::new(),
@@ -142,7 +147,7 @@
 //! # use std::{path::PathBuf, net::SocketAddr, sync::Arc};
 //! # use axum_server::tls_rustls::RustlsConfig;
 //! # use s2energy_connection::pairing::{NodeConfig, PairingToken, Server, ServerConfig, PairingS2NodeId};
-//! # use s2energy_connection::{MessageVersion, S2NodeDescription, S2NodeId, S2Role};
+//! # use s2energy_connection::{MessageVersion, S2NodeDescription, S2EndpointDescription, S2NodeId, S2Role};
 //! # #[tokio::main(flavor = "current_thread")]
 //! # async fn main() {
 //! # let tls_config = RustlsConfig::from_pem_file(
@@ -156,6 +161,8 @@
 //! # let addr = SocketAddr::from(([127, 0, 0, 1], 8005));
 //! # let server = Server::new(ServerConfig {
 //! #     root_certificate: None,
+//! #     advertised_endpoint: S2EndpointDescription::default(),
+//! #     advertised_nodes: vec![],
 //! # });
 //! # let config = Arc::new(NodeConfig::builder(S2NodeDescription {
 //! #     id: S2NodeId::new(),
@@ -374,5 +381,9 @@ impl Network {
             Network::Wan => Deployment::Wan,
             Network::Lan { .. } => Deployment::Lan,
         }
+    }
+
+    fn is_lan(&self) -> bool {
+        matches!(self, Network::Lan { .. })
     }
 }

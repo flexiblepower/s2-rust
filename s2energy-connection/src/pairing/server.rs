@@ -103,6 +103,11 @@ pub struct ServerConfig {
     /// The root certificate of the server, if we are using a self-signed root.
     /// Presence of this field indicates we are deployed on LAN.
     pub root_certificate: Option<CertificateDer<'static>>,
+    /// Endpoint description of the server
+    pub advertised_endpoint: S2EndpointDescription,
+    /// Initial set of nodes to advertise. This is only used if the server
+    /// is deployed on LAN.
+    pub advertised_nodes: Vec<S2NodeDescription>,
 }
 
 /// A pending one-time pairing transaction.
@@ -197,6 +202,8 @@ impl Server<NoopPrePairingHandler> {
                     fingerprint: sha2::Sha256::digest(v).into(),
                 })
                 .unwrap_or(Network::Wan),
+            advertised_nodes: Mutex::new(server_config.advertised_nodes),
+            advertised_endpoint: server_config.advertised_endpoint,
             permanent_pairings: Mutex::new(HashMap::new()),
             open_pairings: Mutex::new(HashMap::new()),
             attempts: Mutex::new(HashMap::default()),
@@ -218,6 +225,8 @@ impl<H: PrePairingHandler> Server<H> {
                     fingerprint: sha2::Sha256::digest(v).into(),
                 })
                 .unwrap_or(Network::Wan),
+            advertised_nodes: Mutex::new(server_config.advertised_nodes),
+            advertised_endpoint: server_config.advertised_endpoint,
             permanent_pairings: Mutex::new(HashMap::new()),
             open_pairings: Mutex::new(HashMap::new()),
             attempts: Mutex::new(HashMap::default()),
@@ -237,6 +246,13 @@ impl<H: PrePairingHandler> Server<H> {
             .route("/", get(root))
             .nest("/v1", v1_router())
             .with_state(self.state.clone())
+    }
+
+    /// Update the nodes advertised by this server.
+    ///
+    /// These are only used when the server is on a LAN.
+    pub fn update_advertised_nodes(&self, advertised_nodes: Vec<S2NodeDescription>) {
+        *self.state.advertised_nodes.lock().unwrap() = advertised_nodes;
     }
 
     /// Start a one-time pairing session for the given node using the given token.
@@ -391,6 +407,8 @@ type AppState<H> = Arc<AppStateInner<H>>;
 
 struct AppStateInner<H> {
     network: Network,
+    advertised_endpoint: S2EndpointDescription,
+    advertised_nodes: Mutex<Vec<S2NodeDescription>>,
     permanent_pairings: Mutex<HashMap<PairingS2NodeId, PermanentPairingRequest>>,
     open_pairings: Mutex<HashMap<PairingS2NodeId, PairingRequest>>,
     attempts: Mutex<HashMap<PairingAttemptId, ExpiringPairingState>>,
@@ -399,12 +417,32 @@ struct AppStateInner<H> {
 
 fn v1_router<H: PrePairingHandler>() -> Router<AppState<H>> {
     Router::new()
+        .route("/s2endpoint", get(v1_s2endpoint))
+        .route("/s2nodes", get(v1_s2nodes))
         .route("/preparePairing", post(v1_prepare_pairing))
         .route("/cancelPreparePairing", post(v1_cancel_prepare_pairing))
         .route("/requestPairing", post(v1_request_pairing))
         .route("/requestConnectionDetails", post(v1_request_connection_details))
         .route("/postConnectionDetails", post(v1_post_connection_details))
         .route("/finalizePairing", post(v1_finalize_pairing))
+}
+
+#[tracing::instrument(skip_all, level = tracing::Level::INFO)]
+async fn v1_s2endpoint<H>(State(state): State<AppState<H>>) -> Result<Json<S2EndpointDescription>, StatusCode> {
+    if state.network.is_lan() {
+        Ok(Json(state.advertised_endpoint.clone()))
+    } else {
+        Err(StatusCode::UNAUTHORIZED)
+    }
+}
+
+#[tracing::instrument(skip_all, level = tracing::Level::INFO)]
+async fn v1_s2nodes<H>(State(state): State<AppState<H>>) -> Result<Json<Vec<S2NodeDescription>>, StatusCode> {
+    if state.network.is_lan() {
+        Ok(Json(state.advertised_nodes.lock().unwrap().clone()))
+    } else {
+        Err(StatusCode::UNAUTHORIZED)
+    }
 }
 
 #[tracing::instrument(skip_all, level = tracing::Level::INFO)]
@@ -754,6 +792,7 @@ mod tests {
     use axum::body::Body;
     use http::StatusCode;
     use http_body_util::BodyExt;
+    use rustls::pki_types::{CertificateDer, pem::PemObject};
     use tokio::time::Instant;
     use tower::ServiceExt;
     use tracing::{Level, span};
@@ -782,7 +821,11 @@ mod tests {
 
     #[tokio::test]
     async fn version_negotiation() {
-        let server = Server::new(ServerConfig { root_certificate: None });
+        let server = Server::new(ServerConfig {
+            root_certificate: None,
+            advertised_endpoint: S2EndpointDescription::default(),
+            advertised_nodes: vec![],
+        });
 
         let response = server
             .get_router()
@@ -792,6 +835,92 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let body = response.into_body().collect().await.unwrap().to_bytes();
         assert_eq!(body, b"[\"v1\"]".as_slice());
+    }
+
+    #[tokio::test]
+    async fn advertised_endpoint() {
+        let server = Server::new(ServerConfig {
+            root_certificate: Some(CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()),
+            advertised_endpoint: S2EndpointDescription {
+                name: Some("Testendpoint".into()),
+                logo_uri: None,
+                deployment: None,
+            },
+            advertised_nodes: vec![basic_node_description(UUID_A, S2Role::Cem)],
+        });
+
+        let response = server
+            .get_router()
+            .oneshot(http::Request::get("/v1/s2endpoint").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let body_data: S2EndpointDescription = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body_data.name.as_deref(), Some("Testendpoint"));
+    }
+
+    #[tokio::test]
+    async fn advertised_endpoint_wan() {
+        let server = Server::new(ServerConfig {
+            root_certificate: None,
+            advertised_endpoint: S2EndpointDescription {
+                name: Some("Testendpoint".into()),
+                logo_uri: None,
+                deployment: None,
+            },
+            advertised_nodes: vec![basic_node_description(UUID_A, S2Role::Cem)],
+        });
+
+        let response = server
+            .get_router()
+            .oneshot(http::Request::get("/v1/s2endpoint").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn advertised_nodes() {
+        let server = Server::new(ServerConfig {
+            root_certificate: Some(CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()),
+            advertised_endpoint: S2EndpointDescription {
+                name: Some("Testendpoint".into()),
+                logo_uri: None,
+                deployment: None,
+            },
+            advertised_nodes: vec![basic_node_description(UUID_A, S2Role::Cem)],
+        });
+
+        let response = server
+            .get_router()
+            .oneshot(http::Request::get("/v1/s2nodes").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let body_data: Vec<S2NodeDescription> = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body_data, vec![basic_node_description(UUID_A, S2Role::Cem)]);
+    }
+
+    #[tokio::test]
+    async fn advertised_nodes_wan() {
+        let server = Server::new(ServerConfig {
+            root_certificate: None,
+            advertised_endpoint: S2EndpointDescription {
+                name: Some("Testendpoint".into()),
+                logo_uri: None,
+                deployment: None,
+            },
+            advertised_nodes: vec![basic_node_description(UUID_A, S2Role::Cem)],
+        });
+
+        let response = server
+            .get_router()
+            .oneshot(http::Request::get("/v1/s2nodes").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[derive(Debug, Clone)]
@@ -837,7 +966,14 @@ mod tests {
     #[tokio::test]
     async fn prepairing_accept() {
         let test_handler = TestPrePairingHandler::new(PrePairingResponse::Accept);
-        let server = Server::new_with_prepairing(ServerConfig { root_certificate: None }, test_handler.clone());
+        let server = Server::new_with_prepairing(
+            ServerConfig {
+                root_certificate: None,
+                advertised_endpoint: S2EndpointDescription::default(),
+                advertised_nodes: vec![],
+            },
+            test_handler.clone(),
+        );
         let response = server
             .get_router()
             .oneshot(
@@ -869,7 +1005,14 @@ mod tests {
     #[tokio::test]
     async fn prepairing_reject_no_node() {
         let test_handler = TestPrePairingHandler::new(PrePairingResponse::RejectNoS2Node);
-        let server = Server::new_with_prepairing(ServerConfig { root_certificate: None }, test_handler.clone());
+        let server = Server::new_with_prepairing(
+            ServerConfig {
+                root_certificate: None,
+                advertised_endpoint: S2EndpointDescription::default(),
+                advertised_nodes: vec![],
+            },
+            test_handler.clone(),
+        );
         let response = server
             .get_router()
             .oneshot(
@@ -904,7 +1047,14 @@ mod tests {
     #[tokio::test]
     async fn prepairing_reject_role() {
         let test_handler = TestPrePairingHandler::new(PrePairingResponse::RejectUnwantedRole);
-        let server = Server::new_with_prepairing(ServerConfig { root_certificate: None }, test_handler.clone());
+        let server = Server::new_with_prepairing(
+            ServerConfig {
+                root_certificate: None,
+                advertised_endpoint: S2EndpointDescription::default(),
+                advertised_nodes: vec![],
+            },
+            test_handler.clone(),
+        );
         let response = server
             .get_router()
             .oneshot(
@@ -939,7 +1089,14 @@ mod tests {
     #[tokio::test]
     async fn cancel_prepairing() {
         let test_handler = TestPrePairingHandler::new(PrePairingResponse::Accept);
-        let server = Server::new_with_prepairing(ServerConfig { root_certificate: None }, test_handler.clone());
+        let server = Server::new_with_prepairing(
+            ServerConfig {
+                root_certificate: None,
+                advertised_endpoint: S2EndpointDescription::default(),
+                advertised_nodes: vec![],
+            },
+            test_handler.clone(),
+        );
         let response = server
             .get_router()
             .oneshot(
@@ -966,7 +1123,11 @@ mod tests {
 
     #[tokio::test]
     async fn pair_attempt() {
-        let server = Server::new(ServerConfig { root_certificate: None });
+        let server = Server::new(ServerConfig {
+            root_certificate: None,
+            advertised_endpoint: S2EndpointDescription::default(),
+            advertised_nodes: vec![],
+        });
         let pairing_waiter = server
             .pair_once(
                 Arc::new(
@@ -1013,7 +1174,11 @@ mod tests {
 
     #[tokio::test]
     async fn pair_attempt_no_common_communication() {
-        let server = Server::new(ServerConfig { root_certificate: None });
+        let server = Server::new(ServerConfig {
+            root_certificate: None,
+            advertised_endpoint: S2EndpointDescription::default(),
+            advertised_nodes: vec![],
+        });
         let pairing_waiter = server
             .pair_once(
                 Arc::new(
@@ -1059,7 +1224,11 @@ mod tests {
 
     #[tokio::test]
     async fn pair_attempt_no_common_messages() {
-        let server = Server::new(ServerConfig { root_certificate: None });
+        let server = Server::new(ServerConfig {
+            root_certificate: None,
+            advertised_endpoint: S2EndpointDescription::default(),
+            advertised_nodes: vec![],
+        });
         let pairing_waiter = server
             .pair_once(
                 Arc::new(
@@ -1105,7 +1274,11 @@ mod tests {
 
     #[tokio::test]
     async fn pair_attempt_forced() {
-        let server = Server::new(ServerConfig { root_certificate: None });
+        let server = Server::new(ServerConfig {
+            root_certificate: None,
+            advertised_endpoint: S2EndpointDescription::default(),
+            advertised_nodes: vec![],
+        });
         let pairing_waiter = server
             .pair_once(
                 Arc::new(
@@ -1152,7 +1325,11 @@ mod tests {
 
     #[tokio::test]
     async fn pair_attempt_with_unknown_node() {
-        let server = Server::new(ServerConfig { root_certificate: None });
+        let server = Server::new(ServerConfig {
+            root_certificate: None,
+            advertised_endpoint: S2EndpointDescription::default(),
+            advertised_nodes: vec![],
+        });
 
         let response = server
             .get_router()
@@ -1185,7 +1362,11 @@ mod tests {
 
     #[tokio::test]
     async fn pair_attempt_same_role() {
-        let server = Server::new(ServerConfig { root_certificate: None });
+        let server = Server::new(ServerConfig {
+            root_certificate: None,
+            advertised_endpoint: S2EndpointDescription::default(),
+            advertised_nodes: vec![],
+        });
         let pairing_waiter = server
             .pair_once(
                 Arc::new(
@@ -1231,7 +1412,11 @@ mod tests {
 
     #[tokio::test]
     async fn request_connection_details() {
-        let server = Server::new(ServerConfig { root_certificate: None });
+        let server = Server::new(ServerConfig {
+            root_certificate: None,
+            advertised_endpoint: S2EndpointDescription::default(),
+            advertised_nodes: vec![],
+        });
         let mut attempts = server.state.attempts.lock().unwrap();
         let (sender, _receiver) = tokio::sync::oneshot::channel();
         let challenge = HmacChallenge::new(&mut rand::rng(), 64);
@@ -1282,7 +1467,11 @@ mod tests {
 
     #[tokio::test]
     async fn request_connection_details_invalid_response() {
-        let server = Server::new(ServerConfig { root_certificate: None });
+        let server = Server::new(ServerConfig {
+            root_certificate: None,
+            advertised_endpoint: S2EndpointDescription::default(),
+            advertised_nodes: vec![],
+        });
         let mut attempts = server.state.attempts.lock().unwrap();
         let (sender, _receiver) = tokio::sync::oneshot::channel();
         let challenge = HmacChallenge::new(&mut rand::rng(), 64);
@@ -1330,7 +1519,11 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn request_connection_details_too_late() {
-        let server = Server::new(ServerConfig { root_certificate: None });
+        let server = Server::new(ServerConfig {
+            root_certificate: None,
+            advertised_endpoint: S2EndpointDescription::default(),
+            advertised_nodes: vec![],
+        });
         let mut attempts = server.state.attempts.lock().unwrap();
         let (sender, _receiver) = tokio::sync::oneshot::channel();
         let challenge = HmacChallenge::new(&mut rand::rng(), 64);
@@ -1380,7 +1573,11 @@ mod tests {
 
     #[tokio::test]
     async fn post_connection_details() {
-        let server = Server::new(ServerConfig { root_certificate: None });
+        let server = Server::new(ServerConfig {
+            root_certificate: None,
+            advertised_endpoint: S2EndpointDescription::default(),
+            advertised_nodes: vec![],
+        });
         let mut attempts = server.state.attempts.lock().unwrap();
         let (sender, _receiver) = tokio::sync::oneshot::channel();
         let challenge = HmacChallenge::new(&mut rand::rng(), 64);
@@ -1432,7 +1629,11 @@ mod tests {
 
     #[tokio::test]
     async fn post_connection_details_invalid_response() {
-        let server = Server::new(ServerConfig { root_certificate: None });
+        let server = Server::new(ServerConfig {
+            root_certificate: None,
+            advertised_endpoint: S2EndpointDescription::default(),
+            advertised_nodes: vec![],
+        });
         let mut attempts = server.state.attempts.lock().unwrap();
         let (sender, _receiver) = tokio::sync::oneshot::channel();
         let challenge = HmacChallenge::new(&mut rand::rng(), 64);
@@ -1484,7 +1685,11 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn post_connection_details_too_late() {
-        let server = Server::new(ServerConfig { root_certificate: None });
+        let server = Server::new(ServerConfig {
+            root_certificate: None,
+            advertised_endpoint: S2EndpointDescription::default(),
+            advertised_nodes: vec![],
+        });
         let mut attempts = server.state.attempts.lock().unwrap();
         let (sender, _receiver) = tokio::sync::oneshot::channel();
         let challenge = HmacChallenge::new(&mut rand::rng(), 64);
@@ -1538,7 +1743,11 @@ mod tests {
 
     #[tokio::test]
     async fn finalize() {
-        let server = Server::new(ServerConfig { root_certificate: None });
+        let server = Server::new(ServerConfig {
+            root_certificate: None,
+            advertised_endpoint: S2EndpointDescription::default(),
+            advertised_nodes: vec![],
+        });
         let mut attempts = server.state.attempts.lock().unwrap();
         let (sender, receiver) = tokio::sync::oneshot::channel();
         let challenge = HmacChallenge::new(&mut rand::rng(), 64);
@@ -1577,7 +1786,11 @@ mod tests {
 
     #[tokio::test]
     async fn finalize_cancel() {
-        let server = Server::new(ServerConfig { root_certificate: None });
+        let server = Server::new(ServerConfig {
+            root_certificate: None,
+            advertised_endpoint: S2EndpointDescription::default(),
+            advertised_nodes: vec![],
+        });
         let mut attempts = server.state.attempts.lock().unwrap();
         let (sender, receiver) = tokio::sync::oneshot::channel();
         let challenge = HmacChallenge::new(&mut rand::rng(), 64);
@@ -1616,7 +1829,11 @@ mod tests {
 
     #[tokio::test]
     async fn finalize_cancel_at_intermediate() {
-        let server = Server::new(ServerConfig { root_certificate: None });
+        let server = Server::new(ServerConfig {
+            root_certificate: None,
+            advertised_endpoint: S2EndpointDescription::default(),
+            advertised_nodes: vec![],
+        });
         let mut attempts = server.state.attempts.lock().unwrap();
         let (sender, receiver) = tokio::sync::oneshot::channel();
         let challenge = HmacChallenge::new(&mut rand::rng(), 64);
@@ -1661,7 +1878,11 @@ mod tests {
 
     #[tokio::test]
     async fn finalize_unknown_session() {
-        let server = Server::new(ServerConfig { root_certificate: None });
+        let server = Server::new(ServerConfig {
+            root_certificate: None,
+            advertised_endpoint: S2EndpointDescription::default(),
+            advertised_nodes: vec![],
+        });
 
         let response = server
             .get_router()
@@ -1680,7 +1901,11 @@ mod tests {
 
     #[tokio::test]
     async fn finalize_cancel_unknown_session() {
-        let server = Server::new(ServerConfig { root_certificate: None });
+        let server = Server::new(ServerConfig {
+            root_certificate: None,
+            advertised_endpoint: S2EndpointDescription::default(),
+            advertised_nodes: vec![],
+        });
 
         let response = server
             .get_router()

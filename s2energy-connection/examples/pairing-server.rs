@@ -1,10 +1,9 @@
 use axum_server::tls_rustls::RustlsConfig;
-use rustls::pki_types::{CertificateDer, pem::PemObject};
 use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 use uuid::uuid;
 
 use s2energy_connection::{
-    MessageVersion, S2NodeDescription, S2Role,
+    MessageVersion, S2EndpointDescription, S2NodeDescription, S2Role,
     pairing::{NodeConfig, PairingS2NodeId, PairingToken, Server, ServerConfig},
 };
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
@@ -19,7 +18,11 @@ async fn main() {
         .with(EnvFilter::from_default_env())
         .init();
 
-    let server = Server::new(ServerConfig { root_certificate: None });
+    let server = Server::new(ServerConfig {
+        root_certificate: None,
+        advertised_endpoint: S2EndpointDescription::default(),
+        advertised_nodes: vec![],
+    });
     let config = NodeConfig::builder(
         S2NodeDescription {
             id: uuid!("67e55044-10b1-426f-9247-bb680e5fe0c8").into(),
