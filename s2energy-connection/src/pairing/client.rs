@@ -2,8 +2,9 @@ use std::sync::Arc;
 
 use reqwest::{StatusCode, Url};
 use rustls::pki_types::CertificateDer;
-use tracing::{debug, trace};
+use tracing::{Instrument, Span, debug, span, trace};
 
+use crate::S2NodeId;
 use crate::common::negotiate_version;
 use crate::common::wire::{AccessToken, Deployment, PairingVersion, S2Role};
 use crate::pairing::transport::{HashProvider, hash_providing_https_client};
@@ -20,6 +21,15 @@ pub struct PairingRemote {
     pub url: String,
     /// S2 node id of the remote node.
     pub id: PairingS2NodeId,
+}
+
+/// Remote node to pair with.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PrePairingRemote {
+    /// URL at which the remote node can be reached
+    pub url: String,
+    /// S2 node id of the remote node.
+    pub id: S2NodeId,
 }
 
 /// Configuration for pairing clients.
@@ -41,6 +51,42 @@ pub struct Client {
     pairing_deployment: Deployment,
 }
 
+pub struct PrePairing<'a> {
+    span: tracing::Span,
+    remote_id: S2NodeId,
+    session: V1Session<'a>,
+    local_deployment: Deployment,
+    certhash: Option<HashProvider>,
+}
+
+impl PrePairing<'_> {
+    pub async fn cancel(self) -> PairingResult<()> {
+        self.session
+            .client
+            .post(self.session.base_url.join("cancelPreparePairing").unwrap())
+            .json(&CancelPrePairingRequest {
+                client_id: self.session.config.node_description.id,
+                server_id: Some(self.remote_id),
+            })
+            .send()
+            .instrument(self.span)
+            .await
+            .map_err(|e| Error::new(ErrorKind::TransportFailed, e))?;
+        Ok(())
+    }
+
+    pub async fn pair(self, remote_id: PairingS2NodeId, pairing_token: &[u8]) -> PairingResult<Pairing> {
+        async move {
+            trace!("Start pairing after pre-pairing.");
+            self.session
+                .pair(self.certhash, self.local_deployment, remote_id, pairing_token)
+                .await
+        }
+        .instrument(self.span)
+        .await
+    }
+}
+
 impl Client {
     /// Create a new client for pairing on an node with the given configuration.
     pub fn new(config: Arc<NodeConfig>, client_config: ClientConfig) -> PairingResult<Self> {
@@ -51,12 +97,54 @@ impl Client {
         })
     }
 
+    /// Start a pre-pairing session with the remote. This can be used to trigger the remote to provide the user with a pairing code and such.
+    pub async fn prepair(&self, remote: PrePairingRemote) -> PairingResult<PrePairing<'_>> {
+        let span = span!(tracing::Level::ERROR, "prepair", local = %self.config.node_description.id, remote = ?remote);
+        let span_clone = span.clone();
+        async move {
+            trace!("Start pre-pairing with new remote.");
+            let url = Url::try_from(remote.url.as_str()).map_err(|e| Error::new(ErrorKind::InvalidUrl, e))?;
+
+            let (client, certhash) = self.prepare_reqwest_client(&url)?;
+
+            trace!("Prepared reqwest client.");
+
+            let pairing_version = negotiate_version(&client, url.clone()).await?;
+
+            match pairing_version {
+                PairingVersion::V1 => {
+                    V1Session::new(client, url, &self.config)
+                        .prepair(certhash, self.pairing_deployment, remote.id, span)
+                        .await
+                }
+            }
+        }
+        .instrument(span_clone)
+        .await
+    }
+
     /// Pair with a given remote S2 node, using the provided token.
     #[tracing::instrument(skip_all, fields(local = %self.config.node_description.id, remote = ?remote), level = tracing::Level::ERROR)]
     pub async fn pair(&self, remote: PairingRemote, pairing_token: &[u8]) -> PairingResult<Pairing> {
         trace!("Start pairing with new remote.");
         let url = Url::try_from(remote.url.as_str()).map_err(|e| Error::new(ErrorKind::InvalidUrl, e))?;
 
+        let (client, certhash) = self.prepare_reqwest_client(&url)?;
+
+        trace!("Prepared reqwest client.");
+
+        let pairing_version = negotiate_version(&client, url.clone()).await?;
+
+        match pairing_version {
+            PairingVersion::V1 => {
+                V1Session::new(client, url, &self.config)
+                    .pair(certhash, self.pairing_deployment, remote.id, pairing_token)
+                    .await
+            }
+        }
+    }
+
+    fn prepare_reqwest_client(&self, url: &Url) -> Result<(reqwest::Client, Option<HashProvider>), Error> {
         let (client, certhash) = if url.domain().map(|v| v.ends_with(".local")).unwrap_or_default() {
             let (client, certhash) = hash_providing_https_client()?;
             (client, Some(certhash))
@@ -73,18 +161,7 @@ impl Client {
                 None,
             )
         };
-
-        trace!("Prepared reqwest client.");
-
-        let pairing_version = negotiate_version(&client, url.clone()).await?;
-
-        match pairing_version {
-            PairingVersion::V1 => {
-                V1Session::new(client, url, &self.config)
-                    .pair(certhash, self.pairing_deployment, remote.id, pairing_token)
-                    .await
-            }
-        }
+        Ok((client, certhash))
     }
 }
 
@@ -101,6 +178,53 @@ impl<'a> V1Session<'a> {
             base_url: url.join("v1/").unwrap(),
             config,
         }
+    }
+
+    async fn prepair(
+        self,
+        certhash: Option<HashProvider>,
+        local_deployment: Deployment,
+        id: S2NodeId,
+        span: Span,
+    ) -> PairingResult<PrePairing<'a>> {
+        let response = self
+            .client
+            .post(self.base_url.join("preparePairing").unwrap())
+            .json(&PrePairingRequest {
+                client_s2_endpoint_description: self.config.endpoint_description.clone(),
+                client_s2_node_description: self.config.node_description.clone(),
+                server_id: Some(id),
+            })
+            .send()
+            .await
+            .map_err(|e| Error::new(ErrorKind::TransportFailed, e))?;
+
+        if response.status() == StatusCode::BAD_REQUEST {
+            let response_error: PairingResponseErrorMessage = response.json().await.map_err(|e| Error::new(ErrorKind::ProtocolError, e))?;
+            return Err(Error::new(
+                match response_error {
+                    PairingResponseErrorMessage::InvalidCombinationOfRoles => ErrorKind::RemoteOfSameType,
+                    PairingResponseErrorMessage::IncompatibleS2MessageVersions
+                    | PairingResponseErrorMessage::IncompatibleHMACHashingAlgorithms
+                    | PairingResponseErrorMessage::IncompatibleCommunicationProtocols => ErrorKind::NoSupportedVersion,
+                    PairingResponseErrorMessage::S2NodeNotFound | PairingResponseErrorMessage::S2NodeNotProvided => ErrorKind::UnknownNode,
+                    PairingResponseErrorMessage::InvalidPairingToken => ErrorKind::InvalidToken,
+                    PairingResponseErrorMessage::ParsingError | PairingResponseErrorMessage::Other => ErrorKind::ProtocolError,
+                },
+                response_error,
+            ));
+        }
+        if response.status() != StatusCode::NO_CONTENT {
+            return Err(ErrorKind::ProtocolError.into());
+        }
+
+        Ok(PrePairing {
+            span,
+            remote_id: id,
+            session: self,
+            local_deployment,
+            certhash,
+        })
     }
 
     async fn pair(
@@ -365,10 +489,12 @@ mod tests {
     };
 
     use crate::{
-        Deployment, MessageVersion, S2EndpointDescription, S2Role,
+        Deployment, MessageVersion, S2EndpointDescription, S2NodeDescription, S2NodeId, S2Role,
         common::wire::test::{UUID_A, UUID_B, basic_node_description, pairing_s2_node_id},
         pairing::{
-            Client, ClientConfig, ErrorKind, Network, NodeConfig, Pairing, PairingRemote, PairingRole, PairingToken, Server, ServerConfig,
+            Client, ClientConfig, ErrorKind, Network, NodeConfig, NoopPrePairingHandler, Pairing, PairingRemote, PairingRole, PairingToken,
+            PrePairingHandler, PrePairingResponse, Server, ServerConfig,
+            client::PrePairingRemote,
             wire::{
                 HmacChallenge, HmacChallengeResponse, PairingAttemptId, PairingResponseErrorMessage, RequestPairing, RequestPairingResponse,
             },
@@ -381,8 +507,12 @@ mod tests {
     use rustls::pki_types::{CertificateDer, pem::PemObject};
     use tokio::task::JoinHandle;
 
-    async fn setup_server(config: NodeConfig, overrides: Router<()>) -> (Handle<SocketAddr>, JoinHandle<Pairing>) {
-        let server = Server::new(ServerConfig { root_certificate: None });
+    async fn setup_server_with_prepairing(
+        config: NodeConfig,
+        handler: impl PrePairingHandler,
+        overrides: Router<()>,
+    ) -> (Handle<SocketAddr>, JoinHandle<Pairing>) {
+        let server = Server::new_with_prepairing(ServerConfig { root_certificate: None }, handler);
         let rustls_config = RustlsConfig::from_pem(
             include_bytes!("../../testdata/localhost.chain.pem").into(),
             include_bytes!("../../testdata/localhost.key").into(),
@@ -409,6 +539,10 @@ mod tests {
         });
 
         (https_server_handle, server_pair_handle)
+    }
+
+    async fn setup_server(config: NodeConfig, overrides: Router<()>) -> (Handle<SocketAddr>, JoinHandle<Pairing>) {
+        setup_server_with_prepairing(config, NoopPrePairingHandler, overrides).await
     }
 
     #[tokio::test]
@@ -485,6 +619,179 @@ mod tests {
         assert!(matches!(client_pairing.role, PairingRole::CommunicationServer));
 
         server_handle.shutdown();
+    }
+
+    #[derive(Debug, Clone)]
+    struct TestPrePairingHandler {
+        endpoint: Arc<Mutex<Option<S2EndpointDescription>>>,
+        node: Arc<Mutex<Option<S2NodeDescription>>>,
+        client_id: Arc<Mutex<Option<S2NodeId>>>,
+        target_node: Arc<Mutex<Option<Option<S2NodeId>>>>,
+        response: PrePairingResponse,
+    }
+
+    impl TestPrePairingHandler {
+        fn new(response: PrePairingResponse) -> Self {
+            Self {
+                endpoint: Arc::default(),
+                node: Arc::default(),
+                client_id: Arc::default(),
+                target_node: Arc::default(),
+                response,
+            }
+        }
+    }
+
+    impl PrePairingHandler for TestPrePairingHandler {
+        fn prepairing_requested(
+            &self,
+            endpoint: S2EndpointDescription,
+            node: S2NodeDescription,
+            target_node: Option<S2NodeId>,
+        ) -> PrePairingResponse {
+            *self.endpoint.lock().unwrap() = Some(endpoint);
+            *self.node.lock().unwrap() = Some(node);
+            *self.target_node.lock().unwrap() = Some(target_node);
+            self.response
+        }
+
+        fn prepairing_cancelled(&self, id: crate::S2NodeId, target_node: Option<S2NodeId>) {
+            *self.client_id.lock().unwrap() = Some(id);
+            *self.target_node.lock().unwrap() = Some(target_node);
+        }
+    }
+
+    #[tokio::test]
+    async fn prepairing_then_pair() {
+        let server_config = NodeConfig::builder(basic_node_description(UUID_A, S2Role::Rm), vec![MessageVersion("v1".into())])
+            .with_connection_initiate_url("test.example.com".into())
+            .build()
+            .unwrap();
+
+        let client_config = NodeConfig::builder(basic_node_description(UUID_B, S2Role::Cem), vec![MessageVersion("v1".into())])
+            .with_connection_initiate_url("client.example.com".into())
+            .build()
+            .unwrap();
+
+        let test_handler = TestPrePairingHandler::new(PrePairingResponse::Accept);
+        let (server_handle, server_pairing) = setup_server_with_prepairing(server_config, test_handler.clone(), Router::new()).await;
+
+        let addr = server_handle.listening().await.unwrap();
+        let remote = PrePairingRemote {
+            url: format!("https://localhost:{}/", addr.port()),
+            id: UUID_A.into(),
+        };
+
+        let client = Client::new(
+            Arc::new(client_config),
+            ClientConfig {
+                additional_certificates: vec![CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()],
+                pairing_deployment: Deployment::Wan,
+            },
+        )
+        .unwrap();
+
+        let client_prepair = client.prepair(remote).await.unwrap();
+        let client_pairing = client_prepair.pair(pairing_s2_node_id(), b"testtoken").await.unwrap();
+        let server_pairing = server_pairing.await.unwrap();
+        assert_eq!(client_pairing.token, server_pairing.token);
+        assert_ne!(client_pairing.role, server_pairing.role);
+        assert!(matches!(client_pairing.role, PairingRole::CommunicationServer));
+
+        let endpoint = test_handler.endpoint.lock().unwrap().take().unwrap();
+        let node = test_handler.node.lock().unwrap().take().unwrap();
+        let target_node = test_handler.target_node.lock().unwrap().take().unwrap();
+        assert_eq!(endpoint.deployment, None);
+        assert_eq!(node.id, UUID_B.into());
+        assert_eq!(target_node, Some(UUID_A.into()));
+
+        server_handle.shutdown();
+    }
+
+    #[tokio::test]
+    async fn prepairing_then_cancel() {
+        let server_config = NodeConfig::builder(basic_node_description(UUID_A, S2Role::Rm), vec![MessageVersion("v1".into())])
+            .with_connection_initiate_url("test.example.com".into())
+            .build()
+            .unwrap();
+
+        let client_config = NodeConfig::builder(basic_node_description(UUID_B, S2Role::Cem), vec![MessageVersion("v1".into())])
+            .with_connection_initiate_url("client.example.com".into())
+            .build()
+            .unwrap();
+
+        let test_handler = TestPrePairingHandler::new(PrePairingResponse::Accept);
+        let (server_handle, _) = setup_server_with_prepairing(server_config, test_handler.clone(), Router::new()).await;
+
+        let addr = server_handle.listening().await.unwrap();
+        let remote = PrePairingRemote {
+            url: format!("https://localhost:{}/", addr.port()),
+            id: UUID_A.into(),
+        };
+
+        let client = Client::new(
+            Arc::new(client_config),
+            ClientConfig {
+                additional_certificates: vec![CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()],
+                pairing_deployment: Deployment::Wan,
+            },
+        )
+        .unwrap();
+
+        let client_prepair = client.prepair(remote).await.unwrap();
+
+        let endpoint = test_handler.endpoint.lock().unwrap().take().unwrap();
+        let node = test_handler.node.lock().unwrap().take().unwrap();
+        let target_node = test_handler.target_node.lock().unwrap().take().unwrap();
+        assert_eq!(endpoint.deployment, None);
+        assert_eq!(node.id, UUID_B.into());
+        assert_eq!(target_node, Some(UUID_A.into()));
+
+        client_prepair.cancel().await.unwrap();
+
+        let client_id = test_handler.client_id.lock().unwrap().take().unwrap();
+        let target_node = test_handler.target_node.lock().unwrap().take().unwrap();
+        assert_eq!(client_id, UUID_B.into());
+        assert_eq!(target_node, Some(UUID_A.into()));
+
+        server_handle.shutdown();
+    }
+
+    #[tokio::test]
+    async fn prepairing_rejected() {
+        let server_config = NodeConfig::builder(basic_node_description(UUID_A, S2Role::Rm), vec![MessageVersion("v1".into())])
+            .with_connection_initiate_url("test.example.com".into())
+            .build()
+            .unwrap();
+
+        let client_config = NodeConfig::builder(basic_node_description(UUID_B, S2Role::Cem), vec![MessageVersion("v1".into())])
+            .with_connection_initiate_url("client.example.com".into())
+            .build()
+            .unwrap();
+
+        let test_handler = TestPrePairingHandler::new(PrePairingResponse::RejectUnwantedRole);
+        let (server_handle, _) = setup_server_with_prepairing(server_config, test_handler.clone(), Router::new()).await;
+
+        let addr = server_handle.listening().await.unwrap();
+        let remote = PrePairingRemote {
+            url: format!("https://localhost:{}/", addr.port()),
+            id: UUID_A.into(),
+        };
+
+        let client = Client::new(
+            Arc::new(client_config),
+            ClientConfig {
+                additional_certificates: vec![CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()],
+                pairing_deployment: Deployment::Wan,
+            },
+        )
+        .unwrap();
+
+        let Err(client_prepair) = client.prepair(remote).await else {
+            panic!("Unexpected successfull prepairing");
+        };
+
+        assert_eq!(client_prepair.kind(), ErrorKind::RemoteOfSameType)
     }
 
     #[tokio::test]
