@@ -512,7 +512,14 @@ mod tests {
         handler: impl PrePairingHandler,
         overrides: Router<()>,
     ) -> (Handle<SocketAddr>, JoinHandle<Pairing>) {
-        let server = Server::new_with_prepairing(ServerConfig { root_certificate: None }, handler);
+        let server = Server::new_with_prepairing(
+            ServerConfig {
+                root_certificate: None,
+                advertised_endpoint: S2EndpointDescription::default(),
+                advertised_nodes: vec![],
+            },
+            handler,
+        );
         let rustls_config = RustlsConfig::from_pem(
             include_bytes!("../../testdata/localhost.chain.pem").into(),
             include_bytes!("../../testdata/localhost.key").into(),
