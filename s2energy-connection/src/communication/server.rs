@@ -20,7 +20,7 @@ use crate::{
         ConnectionInfo, NodeConfig, WebSocketTransport,
         wire::{
             CommunicationDetails, CommunicationDetailsErrorMessage, CommunicationToken, InitiateConnectionRequest,
-            InitiateConnectionResponse, WebSocketCommunicationDetails,
+            InitiateConnectionResponse, UnpairRequest, WebSocketCommunicationDetails,
         },
     },
 };
@@ -76,6 +76,9 @@ pub trait ServerPairing: Send {
 
     /// Change the stored access token for this pairing.
     fn set_access_token(&mut self, token: AccessToken) -> impl Future<Output = Result<(), Self::Error>> + Send;
+
+    /// Remove this pairing from the store.
+    fn unpair(self) -> impl Future<Output = Result<(), Self::Error>> + Send;
 }
 
 /// Configuration for the S2 connection server.
@@ -194,9 +197,38 @@ fn select_overlap<T: Eq + Clone>(primary: &[T], secondary: &[T]) -> Option<T> {
 
 fn v1_router<Store: ServerPairingStore>() -> Router<AppState<Store>> {
     Router::new()
+        .route("/unpair", post(v1_unpair))
         .route("/initiateConnection", post(v1_initiate_connection))
         .route("/confirmAccessToken", post(v1_confirm_access_token))
         .route("/websocket", get(v1_websocket))
+}
+
+#[tracing::instrument(skip_all, level = tracing::Level::INFO)]
+async fn v1_unpair<Store: ServerPairingStore>(
+    State(state): State<AppState<Store>>,
+    token: AccessToken,
+    Json(request): Json<UnpairRequest>,
+) -> StatusCode {
+    let lookup = PairingLookup {
+        client: request.client_node_id,
+        server: request.server_node_id,
+    };
+
+    let pairing = match state.store.lookup(lookup.clone()).await {
+        Ok(PairingLookupResult::Pairing(pairing)) => pairing,
+        Ok(PairingLookupResult::NeverPaired | PairingLookupResult::Unpaired) => return StatusCode::UNAUTHORIZED,
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR,
+    };
+
+    if pairing.access_token().as_ref() != &token {
+        return StatusCode::UNAUTHORIZED;
+    }
+
+    if pairing.unpair().await.is_err() {
+        return StatusCode::INTERNAL_SERVER_ERROR;
+    }
+
+    StatusCode::NO_CONTENT
 }
 
 #[tracing::instrument(skip_all, level = tracing::Level::INFO)]
@@ -422,7 +454,7 @@ mod tests {
             server::{Expiring, PendingWebsocket, Session},
             wire::{
                 CommunicationDetails, CommunicationDetailsErrorMessage, CommunicationToken, InitiateConnectionRequest,
-                InitiateConnectionResponse,
+                InitiateConnectionResponse, UnpairRequest,
             },
         },
     };
@@ -444,6 +476,10 @@ mod tests {
         }
 
         async fn set_access_token(&mut self, _token: AccessToken) -> Result<(), Self::Error> {
+            unimplemented!()
+        }
+
+        async fn unpair(self) -> Result<(), Self::Error> {
             unimplemented!()
         }
     }
@@ -468,6 +504,7 @@ mod tests {
     #[derive(Debug, Clone)]
     struct TestStore {
         token: Arc<Mutex<AccessToken>>,
+        deleted: Arc<Mutex<bool>>,
         config: NodeConfig,
     }
 
@@ -484,6 +521,11 @@ mod tests {
 
         async fn set_access_token(&mut self, token: AccessToken) -> Result<(), Self::Error> {
             *self.token.lock().unwrap() = token;
+            Ok(())
+        }
+
+        async fn unpair(self) -> Result<(), Self::Error> {
+            *self.deleted.lock().unwrap() = true;
             Ok(())
         }
     }
@@ -526,6 +568,117 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn unpair() {
+        let store = TestStore {
+            token: Arc::new(Mutex::new(AccessToken("testtoken".into()))),
+            config: NodeConfig::builder(vec![MessageVersion("v1".into())]).build(),
+            deleted: Arc::default(),
+        };
+        let server = Server::new(
+            ServerConfig {
+                base_url: "localhost".into(),
+                endpoint_description: None,
+            },
+            store.clone(),
+        );
+
+        let response = server
+            .get_router()
+            .oneshot(
+                http::Request::post("/v1/unpair")
+                    .header(http::header::AUTHORIZATION, "Bearer testtoken")
+                    .header(http::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&UnpairRequest {
+                            client_node_id: UUID_A.into(),
+                            server_node_id: UUID_B.into(),
+                        })
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+        assert!(*store.deleted.lock().unwrap());
+    }
+
+    #[tokio::test]
+    async fn unpair_nonexisting() {
+        let store = TestStore {
+            token: Arc::new(Mutex::new(AccessToken("testtoken".into()))),
+            config: NodeConfig::builder(vec![MessageVersion("v1".into())]).build(),
+            deleted: Arc::default(),
+        };
+        let server = Server::new(
+            ServerConfig {
+                base_url: "localhost".into(),
+                endpoint_description: None,
+            },
+            store.clone(),
+        );
+
+        let response = server
+            .get_router()
+            .oneshot(
+                http::Request::post("/v1/unpair")
+                    .header(http::header::AUTHORIZATION, "Bearer testtoken")
+                    .header(http::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&UnpairRequest {
+                            client_node_id: UUID_B.into(),
+                            server_node_id: UUID_A.into(),
+                        })
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+        assert!(!*store.deleted.lock().unwrap());
+    }
+
+    #[tokio::test]
+    async fn unpair_invalid_token() {
+        let store = TestStore {
+            token: Arc::new(Mutex::new(AccessToken("testtoken".into()))),
+            config: NodeConfig::builder(vec![MessageVersion("v1".into())]).build(),
+            deleted: Arc::default(),
+        };
+        let server = Server::new(
+            ServerConfig {
+                base_url: "localhost".into(),
+                endpoint_description: None,
+            },
+            store.clone(),
+        );
+
+        let response = server
+            .get_router()
+            .oneshot(
+                http::Request::post("/v1/unpair")
+                    .header(http::header::AUTHORIZATION, "Bearer invalidtoken")
+                    .header(http::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&UnpairRequest {
+                            client_node_id: UUID_A.into(),
+                            server_node_id: UUID_B.into(),
+                        })
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+        assert!(!*store.deleted.lock().unwrap());
+    }
+
+    #[tokio::test]
     async fn initiate_communication() {
         let server = Server::new(
             ServerConfig {
@@ -535,6 +688,7 @@ mod tests {
             TestStore {
                 token: Arc::new(Mutex::new(AccessToken("testtoken".into()))),
                 config: NodeConfig::builder(vec![MessageVersion("v1".into())]).build(),
+                deleted: Arc::default(),
             },
         );
 
@@ -649,6 +803,7 @@ mod tests {
             TestStore {
                 token: Arc::new(Mutex::new(AccessToken("testtoken".into()))),
                 config: NodeConfig::builder(vec![MessageVersion("v1".into())]).build(),
+                deleted: Arc::default(),
             },
         );
 
@@ -686,6 +841,7 @@ mod tests {
             TestStore {
                 token: Arc::new(Mutex::new(AccessToken("testtoken".into()))),
                 config: NodeConfig::builder(vec![MessageVersion("v1".into())]).build(),
+                deleted: Arc::default(),
             },
         );
 
@@ -726,6 +882,7 @@ mod tests {
             TestStore {
                 token: Arc::new(Mutex::new(AccessToken("testtoken".into()))),
                 config: NodeConfig::builder(vec![MessageVersion("v1".into())]).build(),
+                deleted: Arc::default(),
             },
         );
 
@@ -761,6 +918,7 @@ mod tests {
         let store = TestStore {
             token: Arc::new(Mutex::new(AccessToken("testtoken".into()))),
             config: NodeConfig::builder(vec![MessageVersion("v1".into())]).build(),
+            deleted: Arc::default(),
         };
         let server = Server::new(
             ServerConfig {
@@ -815,6 +973,7 @@ mod tests {
             TestStore {
                 token: Arc::new(Mutex::new(AccessToken("testtoken".into()))),
                 config: NodeConfig::builder(vec![MessageVersion("v1".into())]).build(),
+                deleted: Arc::default(),
             },
         );
         server.app_state.pending_tokens.lock().unwrap().insert(
@@ -869,6 +1028,10 @@ mod tests {
 
             async fn set_access_token(&mut self, _token: AccessToken) -> Result<(), Self::Error> {
                 Err(std::io::ErrorKind::Other.into())
+            }
+
+            async fn unpair(self) -> Result<(), Self::Error> {
+                unimplemented!()
             }
         }
 
@@ -943,6 +1106,7 @@ mod tests {
             TestStore {
                 token: Arc::new(Mutex::new(AccessToken("testtoken".into()))),
                 config: NodeConfig::builder(vec![MessageVersion("v1".into())]).build(),
+                deleted: Arc::default(),
             },
         );
         server.app_state.pending_websockets.lock().unwrap().insert(
@@ -1018,6 +1182,7 @@ mod tests {
             TestStore {
                 token: Arc::new(Mutex::new(AccessToken("testtoken".into()))),
                 config: NodeConfig::builder(vec![MessageVersion("v1".into())]).build(),
+                deleted: Arc::default(),
             },
         );
         server.app_state.pending_websockets.lock().unwrap().insert(

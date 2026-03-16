@@ -301,6 +301,10 @@ mod tests {
             *self.token.lock().unwrap() = dbg!(token);
             Ok(())
         }
+
+        async fn unpair(self) -> Result<(), Self::Error> {
+            unimplemented!()
+        }
     }
 
     struct TestPairing {

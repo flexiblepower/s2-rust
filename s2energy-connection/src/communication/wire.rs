@@ -63,6 +63,14 @@ pub(crate) struct InitiateConnectionResponse {
     pub(crate) endpoint_description: Option<S2EndpointDescription>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct UnpairRequest {
+    #[serde(rename = "clientS2NodeId")]
+    pub(crate) client_node_id: S2NodeId,
+    #[serde(rename = "serverS2NodeId")]
+    pub(crate) server_node_id: S2NodeId,
+}
+
 /// One-time access token for secure access to the S2 message communication channel. It must be renewed every time a client wants to access
 /// the S2 message communication channel by calling the requestToken endpoint. This token is valid for one time login, with a maximum 5
 /// years, and should have a minimum length of 32 bytes.
