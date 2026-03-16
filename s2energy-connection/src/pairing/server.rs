@@ -94,8 +94,8 @@ impl PairingToken {
 /// Server for handling S2 pairing transactions.
 ///
 /// Responsible for providing the HTTP endpoints needed for handling
-pub struct Server {
-    state: AppState,
+pub struct Server<H> {
+    state: AppState<H>,
 }
 
 /// Configuration for the S2 pairing server.
@@ -133,7 +133,61 @@ impl RepeatedPairing {
     }
 }
 
-impl Server {
+/// Description of what response to
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PrePairingResponse {
+    /// Indicate willingness to pair
+    Accept,
+    /// Indicate unwillingness because we currently don't manage any nodes.
+    RejectNoS2Node,
+    /// Indicate unwillingness because we have the same role as the remote.
+    RejectUnwantedRole,
+}
+
+/// Handler for pre-pairing requests.
+///
+/// This allows notification of other components when a prepairing request
+/// comes in. The methods of this trait are called during request handling,
+/// and should thus return rapidly.
+//
+// Note: As these methods are called during request handling, we conciously
+// make them not async to encourage not doing long-lasting operations.
+pub trait PrePairingHandler: Send + Sync + 'static {
+    /// Handle a request for prepairing, and indicate our willingness.
+    fn prepairing_requested(
+        &self,
+        endpoint: S2EndpointDescription,
+        node: S2NodeDescription,
+        target_node: Option<S2NodeId>,
+    ) -> PrePairingResponse;
+    /// Handle a cancel event for prepairing. Note that not every pre-pairing
+    /// request will result in a cancel or a pairing interaction, so timeouts
+    /// may be needed.
+    fn prepairing_cancelled(&self, id: S2NodeId, target_node: Option<S2NodeId>);
+}
+
+/// A pre-pairing handler that does nothing on receiving a prepairing request.
+///
+/// The requests will always indicate willingness to pair to the client.
+pub struct NoopPrePairingHandler;
+
+impl PrePairingHandler for NoopPrePairingHandler {
+    fn prepairing_requested(
+        &self,
+        _endpoint: S2EndpointDescription,
+        _node: S2NodeDescription,
+        _target_node: Option<S2NodeId>,
+    ) -> PrePairingResponse {
+        // no reason not to accept
+        PrePairingResponse::Accept
+    }
+
+    fn prepairing_cancelled(&self, _id: S2NodeId, _target_node: Option<S2NodeId>) {
+        // noop
+    }
+}
+
+impl Server<NoopPrePairingHandler> {
     /// Create a new server using the given configuration.
     pub fn new(server_config: ServerConfig) -> Self {
         let state = AppStateInner {
@@ -146,11 +200,35 @@ impl Server {
             permanent_pairings: Mutex::new(HashMap::new()),
             open_pairings: Mutex::new(HashMap::new()),
             attempts: Mutex::new(HashMap::default()),
+            prepairing_handler: Arc::new(NoopPrePairingHandler),
         };
 
         Self { state: Arc::new(state) }
     }
+}
 
+impl<H: PrePairingHandler> Server<H> {
+    /// Create a new server using the given configuration, with a prepairing
+    /// handler.
+    pub fn new_with_prepairing(server_config: ServerConfig, handler: H) -> Self {
+        let state = AppStateInner {
+            network: server_config
+                .root_certificate
+                .map(|v| Network::Lan {
+                    fingerprint: sha2::Sha256::digest(v).into(),
+                })
+                .unwrap_or(Network::Wan),
+            permanent_pairings: Mutex::new(HashMap::new()),
+            open_pairings: Mutex::new(HashMap::new()),
+            attempts: Mutex::new(HashMap::default()),
+            prepairing_handler: Arc::new(handler),
+        };
+
+        Self { state: Arc::new(state) }
+    }
+}
+
+impl<H: PrePairingHandler> Server<H> {
     /// Get an [`axum::Router`] handling the endpoints for the pairing protocol.
     ///
     /// Incomming http requests can be handled by this router through the [axum-server](https://docs.rs/axum-server/0.8.0/axum_server/) crate.
@@ -309,18 +387,20 @@ impl ExpiringPairingState {
     }
 }
 
-type AppState = Arc<AppStateInner>;
+type AppState<H> = Arc<AppStateInner<H>>;
 
-struct AppStateInner {
-    // rng: ThreadRng,
+struct AppStateInner<H> {
     network: Network,
     permanent_pairings: Mutex<HashMap<PairingS2NodeId, PermanentPairingRequest>>,
     open_pairings: Mutex<HashMap<PairingS2NodeId, PairingRequest>>,
     attempts: Mutex<HashMap<PairingAttemptId, ExpiringPairingState>>,
+    prepairing_handler: Arc<H>,
 }
 
-fn v1_router() -> Router<AppState> {
+fn v1_router<H: PrePairingHandler>() -> Router<AppState<H>> {
     Router::new()
+        .route("/preparePairing", post(v1_prepare_pairing))
+        .route("/cancelPreparePairing", post(v1_cancel_prepare_pairing))
         .route("/requestPairing", post(v1_request_pairing))
         .route("/requestConnectionDetails", post(v1_request_connection_details))
         .route("/postConnectionDetails", post(v1_post_connection_details))
@@ -328,8 +408,33 @@ fn v1_router() -> Router<AppState> {
 }
 
 #[tracing::instrument(skip_all, level = tracing::Level::INFO)]
-async fn v1_request_pairing(
-    State(state): State<AppState>,
+async fn v1_prepare_pairing<H: PrePairingHandler>(
+    State(state): State<AppState<H>>,
+    Json(request): Json<PrePairingRequest>,
+) -> Result<StatusCode, PairingResponseErrorMessage> {
+    match state.prepairing_handler.prepairing_requested(
+        request.client_s2_endpoint_description,
+        request.client_s2_node_description,
+        request.server_id,
+    ) {
+        PrePairingResponse::Accept => Ok(StatusCode::NO_CONTENT),
+        PrePairingResponse::RejectNoS2Node => Err(PairingResponseErrorMessage::S2NodeNotFound),
+        PrePairingResponse::RejectUnwantedRole => Err(PairingResponseErrorMessage::InvalidCombinationOfRoles),
+    }
+}
+
+#[tracing::instrument(skip_all, level = tracing::Level::INFO)]
+async fn v1_cancel_prepare_pairing<H: PrePairingHandler>(
+    State(state): State<AppState<H>>,
+    Json(request): Json<CancelPrePairingRequest>,
+) -> StatusCode {
+    state.prepairing_handler.prepairing_cancelled(request.client_id, request.server_id);
+    StatusCode::NO_CONTENT
+}
+
+#[tracing::instrument(skip_all, level = tracing::Level::INFO)]
+async fn v1_request_pairing<H>(
+    State(state): State<AppState<H>>,
     Json(request_pairing): Json<RequestPairing>,
 ) -> Result<Json<RequestPairingResponse>, PairingResponseErrorMessage> {
     trace!("Received pairing request.");
@@ -447,8 +552,8 @@ async fn v1_request_pairing(
 }
 
 #[tracing::instrument(skip_all, level = tracing::Level::INFO)]
-async fn v1_request_connection_details(
-    State(app_state): State<AppState>,
+async fn v1_request_connection_details<H>(
+    State(app_state): State<AppState<H>>,
     pairing_attempt_id: PairingAttemptId,
     Json(req): Json<RequestConnectionDetailsRequest>,
 ) -> Result<Json<ConnectionDetails>, StatusCode> {
@@ -518,8 +623,8 @@ async fn v1_request_connection_details(
 }
 
 #[tracing::instrument(skip_all, level = tracing::Level::INFO)]
-async fn v1_post_connection_details(
-    State(app_state): State<AppState>,
+async fn v1_post_connection_details<H>(
+    State(app_state): State<AppState<H>>,
     pairing_attempt_id: PairingAttemptId,
     Json(req): Json<PostConnectionDetailsRequest>,
 ) -> StatusCode {
@@ -580,7 +685,11 @@ async fn v1_post_connection_details(
 }
 
 #[tracing::instrument(skip_all, level = tracing::Level::INFO)]
-async fn v1_finalize_pairing(State(state): State<AppState>, pairing_attempt_id: PairingAttemptId, Json(success): Json<bool>) -> StatusCode {
+async fn v1_finalize_pairing<H>(
+    State(state): State<AppState<H>>,
+    pairing_attempt_id: PairingAttemptId,
+    Json(success): Json<bool>,
+) -> StatusCode {
     trace!("Received request to finalize pairing session.");
 
     let Some(state) = ({
@@ -640,7 +749,7 @@ async fn v1_finalize_pairing(State(state): State<AppState>, pairing_attempt_id: 
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex, OnceLock};
 
     use axum::body::Body;
     use http::StatusCode;
@@ -650,14 +759,16 @@ mod tests {
     use tracing::{Level, span};
 
     use crate::{
-        AccessToken, CommunicationProtocol, MessageVersion, S2EndpointDescription, S2NodeDescription, S2Role,
+        AccessToken, CommunicationProtocol, MessageVersion, S2EndpointDescription, S2NodeDescription, S2NodeId, S2Role,
         common::wire::test::{UUID_A, UUID_B, basic_node_description, pairing_s2_node_id},
         pairing::{
-            ErrorKind, Network, NodeConfig, PairingRole, PairingS2NodeId, PairingToken, Server, ServerConfig,
+            ErrorKind, Network, NodeConfig, PairingRole, PairingS2NodeId, PairingToken, PrePairingHandler, PrePairingResponse, Server,
+            ServerConfig,
             server::{CompletePairingState, ExpiringPairingState, InitialPairingState, PairingRequest, PairingState, ResultSender},
             wire::{
-                ConnectionDetails, HmacChallenge, HmacHashingAlgorithm, PairingAttemptId, PairingResponseErrorMessage,
-                PostConnectionDetailsRequest, RequestConnectionDetailsRequest, RequestPairing, RequestPairingResponse,
+                CancelPrePairingRequest, ConnectionDetails, HmacChallenge, HmacHashingAlgorithm, PairingAttemptId,
+                PairingResponseErrorMessage, PostConnectionDetailsRequest, PrePairingRequest, RequestConnectionDetailsRequest,
+                RequestPairing, RequestPairingResponse,
             },
         },
     };
@@ -681,6 +792,176 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let body = response.into_body().collect().await.unwrap().to_bytes();
         assert_eq!(body, b"[\"v1\"]".as_slice());
+    }
+
+    #[derive(Debug, Clone)]
+    struct TestPrePairingHandler {
+        endpoint: Arc<Mutex<Option<S2EndpointDescription>>>,
+        node: Arc<Mutex<Option<S2NodeDescription>>>,
+        client_id: Arc<Mutex<Option<S2NodeId>>>,
+        target_node: Arc<Mutex<Option<Option<S2NodeId>>>>,
+        response: PrePairingResponse,
+    }
+
+    impl TestPrePairingHandler {
+        fn new(response: PrePairingResponse) -> Self {
+            Self {
+                endpoint: Arc::default(),
+                node: Arc::default(),
+                client_id: Arc::default(),
+                target_node: Arc::default(),
+                response,
+            }
+        }
+    }
+
+    impl PrePairingHandler for TestPrePairingHandler {
+        fn prepairing_requested(
+            &self,
+            endpoint: S2EndpointDescription,
+            node: S2NodeDescription,
+            target_node: Option<S2NodeId>,
+        ) -> super::PrePairingResponse {
+            *self.endpoint.lock().unwrap() = Some(endpoint);
+            *self.node.lock().unwrap() = Some(node);
+            *self.target_node.lock().unwrap() = Some(target_node);
+            self.response
+        }
+
+        fn prepairing_cancelled(&self, id: crate::S2NodeId, target_node: Option<S2NodeId>) {
+            *self.client_id.lock().unwrap() = Some(id);
+            *self.target_node.lock().unwrap() = Some(target_node);
+        }
+    }
+
+    #[tokio::test]
+    async fn prepairing_accept() {
+        let test_handler = TestPrePairingHandler::new(PrePairingResponse::Accept);
+        let server = Server::new_with_prepairing(ServerConfig { root_certificate: None }, test_handler.clone());
+        let response = server
+            .get_router()
+            .oneshot(
+                http::Request::post("/v1/preparePairing")
+                    .header(http::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&PrePairingRequest {
+                            client_s2_endpoint_description: S2EndpointDescription::default(),
+                            client_s2_node_description: basic_node_description(UUID_A, S2Role::Cem),
+                            server_id: None,
+                        })
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+        let endpoint = test_handler.endpoint.lock().unwrap().take().unwrap();
+        let node = test_handler.node.lock().unwrap().take().unwrap();
+        let target_node = test_handler.target_node.lock().unwrap().take().unwrap();
+        assert_eq!(endpoint.deployment, None);
+        assert_eq!(node.role, S2Role::Cem);
+        assert_eq!(node.id, UUID_A.into());
+        assert_eq!(target_node, None);
+    }
+
+    #[tokio::test]
+    async fn prepairing_reject_no_node() {
+        let test_handler = TestPrePairingHandler::new(PrePairingResponse::RejectNoS2Node);
+        let server = Server::new_with_prepairing(ServerConfig { root_certificate: None }, test_handler.clone());
+        let response = server
+            .get_router()
+            .oneshot(
+                http::Request::post("/v1/preparePairing")
+                    .header(http::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&PrePairingRequest {
+                            client_s2_endpoint_description: S2EndpointDescription::default(),
+                            client_s2_node_description: basic_node_description(UUID_A, S2Role::Cem),
+                            server_id: None,
+                        })
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let response_data: PairingResponseErrorMessage = serde_json::from_slice(&body).unwrap();
+        assert_eq!(response_data, PairingResponseErrorMessage::S2NodeNotFound);
+
+        let endpoint = test_handler.endpoint.lock().unwrap().take().unwrap();
+        let node = test_handler.node.lock().unwrap().take().unwrap();
+        let target_node = test_handler.target_node.lock().unwrap().take().unwrap();
+        assert_eq!(endpoint.deployment, None);
+        assert_eq!(node.role, S2Role::Cem);
+        assert_eq!(node.id, UUID_A.into());
+        assert_eq!(target_node, None);
+    }
+
+    #[tokio::test]
+    async fn prepairing_reject_role() {
+        let test_handler = TestPrePairingHandler::new(PrePairingResponse::RejectUnwantedRole);
+        let server = Server::new_with_prepairing(ServerConfig { root_certificate: None }, test_handler.clone());
+        let response = server
+            .get_router()
+            .oneshot(
+                http::Request::post("/v1/preparePairing")
+                    .header(http::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&PrePairingRequest {
+                            client_s2_endpoint_description: S2EndpointDescription::default(),
+                            client_s2_node_description: basic_node_description(UUID_A, S2Role::Cem),
+                            server_id: None,
+                        })
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let response_data: PairingResponseErrorMessage = serde_json::from_slice(&body).unwrap();
+        assert_eq!(response_data, PairingResponseErrorMessage::InvalidCombinationOfRoles);
+
+        let endpoint = test_handler.endpoint.lock().unwrap().take().unwrap();
+        let node = test_handler.node.lock().unwrap().take().unwrap();
+        let target_node = test_handler.target_node.lock().unwrap().take().unwrap();
+        assert_eq!(endpoint.deployment, None);
+        assert_eq!(node.role, S2Role::Cem);
+        assert_eq!(node.id, UUID_A.into());
+        assert_eq!(target_node, None);
+    }
+
+    #[tokio::test]
+    async fn cancel_prepairing() {
+        let test_handler = TestPrePairingHandler::new(PrePairingResponse::Accept);
+        let server = Server::new_with_prepairing(ServerConfig { root_certificate: None }, test_handler.clone());
+        let response = server
+            .get_router()
+            .oneshot(
+                http::Request::post("/v1/cancelPreparePairing")
+                    .header(http::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&CancelPrePairingRequest {
+                            client_id: UUID_B.into(),
+                            server_id: None,
+                        })
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+        let client_id = test_handler.client_id.lock().unwrap().take().unwrap();
+        let target_node = test_handler.target_node.lock().unwrap().take().unwrap();
+        assert_eq!(client_id, UUID_B.into());
+        assert_eq!(target_node, None);
     }
 
     #[tokio::test]
