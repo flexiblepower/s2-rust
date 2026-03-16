@@ -7,7 +7,10 @@ use subtle::ConstantTimeEq;
 use thiserror::Error;
 use tracing::info;
 
-use crate::common::wire::{AccessToken, CommunicationProtocol, MessageVersion, S2EndpointDescription, S2NodeDescription};
+use crate::{
+    S2NodeId,
+    common::wire::{AccessToken, CommunicationProtocol, MessageVersion, S2EndpointDescription, S2NodeDescription},
+};
 
 #[derive(Error, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub(crate) enum PairingResponseErrorMessage {
@@ -179,6 +182,25 @@ pub(crate) struct RequestPairingResponse {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RequestConnectionDetailsRequest {
     pub server_hmac_challenge_response: HmacChallengeResponse,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PrePairingRequest {
+    pub client_s2_endpoint_description: S2EndpointDescription,
+    pub client_s2_node_description: S2NodeDescription,
+    // TODO: Update to Pairing S2 Node ID
+    #[serde(rename = "serverS2PairingNodeId")]
+    pub server_id: Option<S2NodeId>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub(crate) struct CancelPrePairingRequest {
+    #[serde(rename = "clientS2NodeId")]
+    pub client_id: S2NodeId,
+    // TODO: Update to Pairing S2 Node ID
+    #[serde(rename = "serverS2PairingNodeId")]
+    pub server_id: Option<S2NodeId>,
 }
 
 /// Details the Connection client needs to set up an S2 session.
