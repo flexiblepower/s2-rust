@@ -56,7 +56,7 @@ async fn main() {
             .unwrap();
     });
 
-    let pairing_node_id = PairingS2NodeId::from_bytes(b"ninechars");
+    let pairing_node_id = PairingS2NodeId("ninechars".into());
 
     let pairing = server
         .pair_once(

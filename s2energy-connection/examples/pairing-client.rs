@@ -48,7 +48,7 @@ async fn main() {
         .pair(
             PairingRemote {
                 url: "https://localhost:8005".into(),
-                id: PairingS2NodeId::from_bytes(b"ninechars"),
+                id: PairingS2NodeId("ninechars".into()),
             },
             PAIRING_TOKEN,
         )
