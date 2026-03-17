@@ -201,18 +201,7 @@ impl<'a> V1Session<'a> {
 
         if response.status() == StatusCode::BAD_REQUEST {
             let response_error: PairingResponseErrorMessage = response.json().await.map_err(|e| Error::new(ErrorKind::ProtocolError, e))?;
-            return Err(Error::new(
-                match response_error {
-                    PairingResponseErrorMessage::InvalidCombinationOfRoles => ErrorKind::RemoteOfSameType,
-                    PairingResponseErrorMessage::IncompatibleS2MessageVersions
-                    | PairingResponseErrorMessage::IncompatibleHMACHashingAlgorithms
-                    | PairingResponseErrorMessage::IncompatibleCommunicationProtocols => ErrorKind::NoSupportedVersion,
-                    PairingResponseErrorMessage::S2NodeNotFound | PairingResponseErrorMessage::S2NodeNotProvided => ErrorKind::UnknownNode,
-                    PairingResponseErrorMessage::InvalidPairingToken => ErrorKind::InvalidToken,
-                    PairingResponseErrorMessage::ParsingError | PairingResponseErrorMessage::Other => ErrorKind::ProtocolError,
-                },
-                response_error,
-            ));
+            return Err(Error::from(response_error));
         }
         if response.status() != StatusCode::NO_CONTENT {
             return Err(ErrorKind::ProtocolError.into());
@@ -434,23 +423,7 @@ impl<'a> V1Session<'a> {
                 .json::<PairingResponseErrorMessage>()
                 .await
                 .map_err(|e| Error::new(ErrorKind::ProtocolError, e))?;
-            match error_response {
-                PairingResponseErrorMessage::InvalidCombinationOfRoles => {
-                    return Err(Error::new(ErrorKind::RemoteOfSameType, error_response));
-                }
-                PairingResponseErrorMessage::IncompatibleS2MessageVersions
-                | PairingResponseErrorMessage::IncompatibleHMACHashingAlgorithms
-                | PairingResponseErrorMessage::IncompatibleCommunicationProtocols => {
-                    return Err(Error::new(ErrorKind::NoSupportedVersion, error_response));
-                }
-                PairingResponseErrorMessage::S2NodeNotFound | PairingResponseErrorMessage::S2NodeNotProvided => {
-                    return Err(Error::new(ErrorKind::UnknownNode, error_response));
-                }
-                PairingResponseErrorMessage::InvalidPairingToken => return Err(Error::new(ErrorKind::InvalidToken, error_response)),
-                PairingResponseErrorMessage::ParsingError | PairingResponseErrorMessage::Other => {
-                    return Err(Error::new(ErrorKind::ProtocolError, error_response));
-                }
-            }
+            return Err(Error::from(error_response));
         }
         if response.status() != StatusCode::OK {
             debug!(status = ?response.status(), "Unexpected status code in response to requestPairing.");
