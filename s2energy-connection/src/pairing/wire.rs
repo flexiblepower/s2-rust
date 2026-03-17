@@ -1,6 +1,7 @@
 use axum::{Json, extract::FromRequestParts, response::IntoResponse};
 use axum_extra::{TypedHeader, headers};
 use http::StatusCode;
+use rand::distr::{Alphanumeric, SampleString};
 use serde::*;
 use subtle::ConstantTimeEq;
 use thiserror::Error;
@@ -77,27 +78,18 @@ impl PartialEq for HmacChallengeResponse {
 /// It is used as a short identifier (since the user might have to type it in manually)
 /// for the S2Node, which can be used to lookup the actual [`S2NodeId`].
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct PairingS2NodeId(#[serde(serialize_with = "base64_bytes::serialize", deserialize_with = "base64_bytes::deserialize")] Vec<u8>);
+pub struct PairingS2NodeId(pub String);
 
 impl PairingS2NodeId {
     /// Create a new id.
     pub fn new(rng: &mut impl rand::CryptoRng) -> Self {
-        let mut bytes = vec![0u8; 12];
-        rng.fill_bytes(&mut bytes);
-
-        Self(bytes)
-    }
-
-    /// Create an ID from bytes.
-    pub fn from_bytes(bytes: &[u8]) -> Self {
-        Self(bytes.to_vec())
+        Self(Alphanumeric.sample_string(rng, 12))
     }
 }
 
 impl std::fmt::Display for PairingS2NodeId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        use base64::{Engine as _, engine::general_purpose::STANDARD};
-        f.write_str(&STANDARD.encode(&self.0))
+        self.0.fmt(f)
     }
 }
 
