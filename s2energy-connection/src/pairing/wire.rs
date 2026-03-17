@@ -12,7 +12,7 @@ use crate::{
     common::wire::{AccessToken, CommunicationProtocol, MessageVersion, S2EndpointDescription, S2NodeDescription},
 };
 
-#[derive(Error, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Error, Debug, Serialize, Deserialize, PartialEq, Eq, Hash, Clone, Copy)]
 pub(crate) enum PairingResponseErrorMessage {
     #[error("Invalid combination of roles")]
     InvalidCombinationOfRoles,
@@ -32,6 +32,25 @@ pub(crate) enum PairingResponseErrorMessage {
     ParsingError,
     #[error("Other")]
     Other,
+}
+
+impl From<PairingResponseErrorMessage> for super::Error {
+    fn from(value: PairingResponseErrorMessage) -> Self {
+        use super::ErrorKind;
+        use PairingResponseErrorMessage::*;
+
+        let error_kind = match value {
+            InvalidCombinationOfRoles => ErrorKind::RemoteOfSameType,
+            IncompatibleS2MessageVersions | IncompatibleHMACHashingAlgorithms | IncompatibleCommunicationProtocols => {
+                ErrorKind::NoSupportedVersion
+            }
+            S2NodeNotFound | S2NodeNotProvided => ErrorKind::UnknownNode,
+            InvalidPairingToken => ErrorKind::InvalidToken,
+            ParsingError | PairingResponseErrorMessage::Other => ErrorKind::ProtocolError,
+        };
+
+        super::Error::new(error_kind, value)
+    }
 }
 
 impl IntoResponse for PairingResponseErrorMessage {
