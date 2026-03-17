@@ -151,27 +151,27 @@ pub enum PrePairingResponse {
 
 /// Handler for pre-pairing requests.
 ///
-/// This allows notification of other components when a prepairing request
+/// This allows notification of other components when a pre-pairing request
 /// comes in. The methods of this trait are called during request handling,
 /// and should thus return rapidly.
-//
-// Note: As these methods are called during request handling, we conciously
-// make them not async to encourage not doing long-lasting operations.
+// Note: Because these methods are called during request handling, we
+// deliberately make them not async to encourage not doing long-lasting
+// operations.
 pub trait PrePairingHandler: Send + Sync + 'static {
-    /// Handle a request for prepairing, and indicate our willingness.
+    /// Handle a request for pre-pairing, and indicate our willingness.
     fn prepairing_requested(
         &self,
         endpoint: S2EndpointDescription,
         node: S2NodeDescription,
         target_node: Option<S2NodeId>,
     ) -> PrePairingResponse;
-    /// Handle a cancel event for prepairing. Note that not every pre-pairing
+    /// Handle a cancel event for pre-pairing. Note that not every pre-pairing
     /// request will result in a cancel or a pairing interaction, so timeouts
     /// may be needed.
     fn prepairing_cancelled(&self, id: S2NodeId, target_node: Option<S2NodeId>);
 }
 
-/// A pre-pairing handler that does nothing on receiving a prepairing request.
+/// A pre-pairing handler that does nothing on receiving a pre-pairing request.
 ///
 /// The requests will always indicate willingness to pair to the client.
 pub struct NoopPrePairingHandler;
