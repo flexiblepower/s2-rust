@@ -59,6 +59,12 @@ impl IntoResponse for PairingResponseErrorMessage {
     }
 }
 
+#[derive(Error, Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub(crate) enum WaitForPairingErrorMessage {
+    #[error("No valid token available on remote.")]
+    NoValidTokenOnPairingClient,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash)]
 #[serde(rename_all = "UPPERCASE")]
 pub(crate) enum HmacHashingAlgorithm {
@@ -235,6 +241,31 @@ pub(crate) struct ConnectionDetails {
 pub(crate) struct PostConnectionDetailsRequest {
     pub server_hmac_challenge_response: HmacChallengeResponse,
     pub connection_details: ConnectionDetails,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WaitForPairingRequest {
+    pub client_s2_node_id: S2NodeId,
+    pub client_s2_node_description: Option<S2NodeDescription>,
+    pub client_s2_endpoint_description: Option<S2EndpointDescription>,
+    pub error_message: Option<WaitForPairingErrorMessage>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum WaitForPairingAction {
+    SendS2NodeDescription,
+    PreparePairing,
+    CancelPreparePairing,
+    RequestPairing,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WaitForPairingResponse {
+    pub client_s2_node_id: S2NodeId,
+    pub action: WaitForPairingAction,
 }
 
 mod base64_bytes {

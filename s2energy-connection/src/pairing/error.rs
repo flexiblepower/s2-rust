@@ -2,7 +2,7 @@ use thiserror::Error;
 
 use crate::{
     common::{BaseError, BaseErrorKind, BaseWrappedError},
-    pairing::wire::PairingResponseErrorMessage,
+    pairing::wire::{PairingResponseErrorMessage, WaitForPairingErrorMessage},
 };
 
 /// An error that occured during the pairing process.
@@ -71,6 +71,7 @@ enum WrappedError {
     UrlParse(url::ParseError),
     Rustls(rustls::Error),
     Remote(PairingResponseErrorMessage),
+    Longpolling(WaitForPairingErrorMessage),
 }
 
 impl WrappedError {
@@ -81,6 +82,7 @@ impl WrappedError {
             Self::UrlParse(error) => Some(error),
             Self::Rustls(error) => Some(error),
             Self::Remote(error) => Some(error),
+            Self::Longpolling(error) => Some(error),
         }
     }
 }
@@ -115,6 +117,12 @@ impl From<rustls::Error> for WrappedError {
 impl From<PairingResponseErrorMessage> for WrappedError {
     fn from(value: PairingResponseErrorMessage) -> Self {
         Self::Remote(value)
+    }
+}
+
+impl From<WaitForPairingErrorMessage> for WrappedError {
+    fn from(value: WaitForPairingErrorMessage) -> Self {
+        Self::Longpolling(value)
     }
 }
 
