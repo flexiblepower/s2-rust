@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use reqwest::{StatusCode, Url};
 use rustls::pki_types::CertificateDer;
 use tracing::{Instrument, Span, debug, span, trace};
@@ -87,6 +89,134 @@ impl PrePairing<'_> {
     }
 }
 
+/// A handler for longpolling to a specific remote endpoint, from our local endpoint.
+#[derive(Clone)]
+pub struct Longpoller(Arc<LongpollerInner>);
+
+struct LongpollerInner {
+    span: Span,
+    nodes: std::sync::Mutex<Vec<NodeConfig>>,
+    endpoint_description: S2EndpointDescription,
+    // Client is held by the runner longterm, hence we use a tokio mutex.
+    client: tokio::sync::Mutex<reqwest::Client>,
+    base_url: Url,
+}
+
+/// Handler for requests received during longpolling.
+pub trait LongpollHandler {
+    /// Remote requests pairing
+    ///
+    /// Return value indicates whether we are able to start pairing with the remote.
+    fn request_pairing(&mut self, node: S2NodeId) -> impl Future<Output = bool> + Send;
+    /// Remote requests us to prepare for pairing.
+    fn prepare_pairing(&mut self, node: S2NodeId) -> impl Future<Output = ()> + Send;
+    /// Remote cancels a previous request to prepare for pairing.
+    fn cancel_prepare_pairing(&mut self, node: S2NodeId) -> impl Future<Output = ()> + Send;
+}
+
+impl Longpoller {
+    /// Do longpolling for the current set of nodes.
+    ///
+    /// Returns succesfully once there are no longer any nodes to longpoll for.
+    ///
+    /// The longpoller should not be reused when this returns an error.
+    pub async fn run(&self, handler: &mut impl LongpollHandler) -> PairingResult<()> {
+        async move {
+            let client = self.0.client.lock().await;
+
+            #[derive(Clone, Copy, PartialEq, Eq)]
+            enum Action {
+                None,
+                ProvideDescription(S2NodeId),
+                ReturnError(S2NodeId, WaitForPairingErrorMessage),
+            }
+
+            let mut action = Action::None;
+            loop {
+                let request: Vec<_> = self
+                    .0
+                    .nodes
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .map(|node| match action {
+                        Action::ProvideDescription(id) if id == node.node_description.id => WaitForPairingRequest {
+                            client_s2_node_id: node.node_description.id,
+                            client_s2_node_description: Some(node.node_description.clone()),
+                            client_s2_endpoint_description: Some(self.0.endpoint_description.clone()),
+                            error_message: None,
+                        },
+                        Action::ReturnError(id, error_message) if id == node.node_description.id => WaitForPairingRequest {
+                            client_s2_node_id: node.node_description.id,
+                            client_s2_node_description: None,
+                            client_s2_endpoint_description: None,
+                            error_message: Some(error_message),
+                        },
+                        _ => WaitForPairingRequest {
+                            client_s2_node_id: node.node_description.id,
+                            client_s2_node_description: None,
+                            client_s2_endpoint_description: None,
+                            error_message: None,
+                        },
+                    })
+                    .collect();
+
+                action = Action::None;
+
+                if request.is_empty() {
+                    return Ok(());
+                }
+
+                let response = client
+                    .post(self.0.base_url.join("waitForPairing").unwrap())
+                    .json(&request)
+                    .send()
+                    .await
+                    .map_err(|e| Error::new(ErrorKind::TransportFailed, e))?;
+                if response.status() == StatusCode::BAD_REQUEST {
+                    return Err(ErrorKind::Cancelled.into());
+                }
+                if response.status() == StatusCode::UNAUTHORIZED {
+                    return Err(ErrorKind::Rejected.into());
+                }
+                if response.status() == StatusCode::NO_CONTENT {
+                    continue;
+                }
+
+                let response: WaitForPairingResponse = response.json().await.map_err(|e| Error::new(ErrorKind::ProtocolError, e))?;
+                match response.action {
+                    WaitForPairingAction::SendS2NodeDescription => action = Action::ProvideDescription(response.client_s2_node_id),
+                    WaitForPairingAction::PreparePairing => handler.prepare_pairing(response.client_s2_node_id).await,
+                    WaitForPairingAction::CancelPreparePairing => handler.cancel_prepare_pairing(response.client_s2_node_id).await,
+                    WaitForPairingAction::RequestPairing => {
+                        if !handler.request_pairing(response.client_s2_node_id).await {
+                            action =
+                                Action::ReturnError(response.client_s2_node_id, WaitForPairingErrorMessage::NoValidTokenOnPairingClient)
+                        }
+                    }
+                }
+            }
+        }
+        .instrument(self.0.span.clone())
+        .await
+    }
+
+    /// Start longpolling for the given local node.
+    pub fn add_node(&self, new_node: NodeConfig) -> PairingResult<()> {
+        let mut nodes = self.0.nodes.lock().unwrap();
+        if nodes.iter().any(|node| node.node_description.id == new_node.node_description.id) {
+            return Err(ErrorKind::AlreadyPending.into());
+        }
+        nodes.push(new_node);
+        Ok(())
+    }
+
+    /// Stop longpolling for the local node with the given id.
+    pub fn remove_node(&self, id: S2NodeId) {
+        self.0.nodes.lock().unwrap().retain(|node| node.node_description.id != id);
+    }
+}
+
 impl Client {
     /// Create a new client for pairing on an node with the given configuration.
     pub fn new(client_config: ClientConfig) -> PairingResult<Self> {
@@ -95,6 +225,34 @@ impl Client {
             additional_certificates: client_config.additional_certificates,
             pairing_deployment: client_config.pairing_deployment,
         })
+    }
+
+    /// Create a longpoller for
+    pub async fn longpoller(&self, remote: String) -> PairingResult<Longpoller> {
+        let span = span!(tracing::Level::ERROR, "longpolling", remote);
+        let span_clone = span.clone();
+        async move {
+            trace!("Preparing long polling with remote");
+            let url = Url::try_from(remote.as_str()).map_err(|e| Error::new(ErrorKind::InvalidUrl, e))?;
+
+            let (client, _) = self.prepare_reqwest_client(&url)?;
+
+            trace!("Prepared reqwest client.");
+
+            let pairing_version = negotiate_version(&client, url.clone()).await?;
+
+            match pairing_version {
+                PairingVersion::V1 => Ok(Longpoller(Arc::new(LongpollerInner {
+                    span,
+                    endpoint_description: self.endpoint_description.clone(),
+                    nodes: std::sync::Mutex::new(vec![]),
+                    client: tokio::sync::Mutex::new(client),
+                    base_url: url.join("v1/").unwrap(),
+                }))),
+            }
+        }
+        .instrument(span_clone)
+        .await
     }
 
     /// Start a pre-pairing session with the remote. This can be used to trigger the remote to provide the user with a pairing code and such.
@@ -475,8 +633,8 @@ mod tests {
         Deployment, MessageVersion, S2EndpointDescription, S2NodeDescription, S2NodeId, S2Role,
         common::wire::test::{UUID_A, UUID_B, basic_node_description, pairing_s2_node_id},
         pairing::{
-            Client, ClientConfig, ErrorKind, Network, NodeConfig, NoopPrePairingHandler, Pairing, PairingRemote, PairingRole, PairingToken,
-            PrePairingHandler, PrePairingResponse, Server, ServerConfig,
+            Client, ClientConfig, ErrorKind, LongpollHandler, Longpoller, Network, NodeConfig, NoopPrePairingHandler, Pairing,
+            PairingRemote, PairingRole, PairingToken, PrePairingHandler, PrePairingResponse, Server, ServerConfig,
             client::PrePairingRemote,
             wire::{
                 HmacChallenge, HmacChallengeResponse, PairingAttemptId, PairingResponseErrorMessage, RequestPairing, RequestPairingResponse,
@@ -488,14 +646,14 @@ mod tests {
     use axum_server::{Handle, tls_rustls::RustlsConfig};
     use http::StatusCode;
     use rustls::pki_types::{CertificateDer, pem::PemObject};
-    use tokio::task::JoinHandle;
+    use tokio::{join, task::JoinHandle};
 
     async fn setup_server_with_prepairing(
         config: NodeConfig,
         handler: impl PrePairingHandler,
         overrides: Router<()>,
-    ) -> (Handle<SocketAddr>, JoinHandle<Pairing>) {
-        let server = Server::new_with_prepairing(
+    ) -> (Handle<SocketAddr>, JoinHandle<Pairing>, Server<impl PrePairingHandler>) {
+        let mut server = Server::new_with_prepairing(
             ServerConfig {
                 root_certificate: None,
                 endpoint_description: S2EndpointDescription::default(),
@@ -503,6 +661,7 @@ mod tests {
             },
             handler,
         );
+        server.enable_longpolling().await;
         let rustls_config = RustlsConfig::from_pem(
             include_bytes!("../../testdata/localhost.chain.pem").into(),
             include_bytes!("../../testdata/localhost.key").into(),
@@ -519,6 +678,7 @@ mod tests {
                 .await
                 .unwrap();
         });
+        let server_clone = server.clone();
         let server_pair_handle = tokio::spawn(async move {
             server
                 .pair_once(Arc::new(config), pairing_s2_node_id(), PairingToken(b"testtoken".as_slice().into()))
@@ -528,10 +688,13 @@ mod tests {
                 .unwrap()
         });
 
-        (https_server_handle, server_pair_handle)
+        (https_server_handle, server_pair_handle, server_clone)
     }
 
-    async fn setup_server(config: NodeConfig, overrides: Router<()>) -> (Handle<SocketAddr>, JoinHandle<Pairing>) {
+    async fn setup_server(
+        config: NodeConfig,
+        overrides: Router<()>,
+    ) -> (Handle<SocketAddr>, JoinHandle<Pairing>, Server<impl PrePairingHandler>) {
         setup_server_with_prepairing(config, NoopPrePairingHandler, overrides).await
     }
 
@@ -547,7 +710,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let (server_handle, server_pairing) = setup_server(server_config, Router::new()).await;
+        let (server_handle, server_pairing, _) = setup_server(server_config, Router::new()).await;
 
         let addr = server_handle.listening().await.unwrap();
         let remote = PairingRemote {
@@ -583,7 +746,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let (server_handle, server_pairing) = setup_server(server_config, Router::new()).await;
+        let (server_handle, server_pairing, _) = setup_server(server_config, Router::new()).await;
 
         let addr = server_handle.listening().await.unwrap();
         let remote = PairingRemote {
@@ -660,7 +823,7 @@ mod tests {
             .unwrap();
 
         let test_handler = TestPrePairingHandler::new(PrePairingResponse::Accept);
-        let (server_handle, server_pairing) = setup_server_with_prepairing(server_config, test_handler.clone(), Router::new()).await;
+        let (server_handle, server_pairing, _) = setup_server_with_prepairing(server_config, test_handler.clone(), Router::new()).await;
 
         let addr = server_handle.listening().await.unwrap();
         let remote = PrePairingRemote {
@@ -705,7 +868,7 @@ mod tests {
             .unwrap();
 
         let test_handler = TestPrePairingHandler::new(PrePairingResponse::Accept);
-        let (server_handle, _) = setup_server_with_prepairing(server_config, test_handler.clone(), Router::new()).await;
+        let (server_handle, _, _) = setup_server_with_prepairing(server_config, test_handler.clone(), Router::new()).await;
 
         let addr = server_handle.listening().await.unwrap();
         let remote = PrePairingRemote {
@@ -752,7 +915,7 @@ mod tests {
             .unwrap();
 
         let test_handler = TestPrePairingHandler::new(PrePairingResponse::RejectUnwantedRole);
-        let (server_handle, _) = setup_server_with_prepairing(server_config, test_handler.clone(), Router::new()).await;
+        let (server_handle, _, _) = setup_server_with_prepairing(server_config, test_handler.clone(), Router::new()).await;
 
         let addr = server_handle.listening().await.unwrap();
         let remote = PrePairingRemote {
@@ -788,7 +951,7 @@ mod tests {
 
         let finalize_result = Arc::new(Mutex::new(None));
         let finalize_result_clone = finalize_result.clone();
-        let (server_handle, _) = setup_server(
+        let (server_handle, _, _) = setup_server(
             server_config,
             Router::new()
                 .route(
@@ -848,7 +1011,7 @@ mod tests {
 
         let finalize_result = Arc::new(Mutex::new(None));
         let finalize_result_clone = finalize_result.clone();
-        let (server_handle, _) = setup_server(
+        let (server_handle, _, _) = setup_server(
             server_config,
             Router::new()
                 .route(
@@ -908,7 +1071,7 @@ mod tests {
 
         let finalize_result = Arc::new(Mutex::new(None));
         let finalize_result_clone = finalize_result.clone();
-        let (server_handle, _) = setup_server(
+        let (server_handle, _, _) = setup_server(
             server_config,
             Router::new()
                 .route(
@@ -964,7 +1127,7 @@ mod tests {
 
         let finalize_result = Arc::new(Mutex::new(None));
         let finalize_result_clone = finalize_result.clone();
-        let (server_handle, _) = setup_server(
+        let (server_handle, _, _) = setup_server(
             server_config,
             Router::new()
                 .route("/v1/requestConnectionDetails", post(|| async { StatusCode::BAD_GATEWAY }))
@@ -1011,7 +1174,7 @@ mod tests {
 
         let finalize_result = Arc::new(Mutex::new(None));
         let finalize_result_clone = finalize_result.clone();
-        let (server_handle, _) = setup_server(
+        let (server_handle, _, _) = setup_server(
             server_config,
             Router::new()
                 .route("/v1/postConnectionDetails", post(|| async { StatusCode::BAD_GATEWAY }))
@@ -1040,6 +1203,263 @@ mod tests {
         let client_pairing = client.pair(&client_config, remote, b"testtoken").await.unwrap_err();
         assert_eq!(client_pairing.kind(), ErrorKind::ProtocolError);
         assert_eq!(*finalize_result.lock().unwrap(), Some(false));
+
+        server_handle.shutdown();
+    }
+
+    #[tokio::test]
+    async fn longpolling() {
+        let server_config = NodeConfig::builder(basic_node_description(UUID_A, S2Role::Cem), vec![MessageVersion("v1".into())])
+            .with_connection_initiate_url("test.example.com".into())
+            .build()
+            .unwrap();
+
+        let (server_handle, server_pairing, server) = setup_server(server_config, Router::new()).await;
+
+        let addr = server_handle.listening().await.unwrap();
+
+        let client_task = async move {
+            let client_config = NodeConfig::builder(basic_node_description(UUID_B, S2Role::Rm), vec![MessageVersion("v1".into())])
+                .with_connection_initiate_url("client.example.com".into())
+                .build()
+                .unwrap();
+
+            let client = Client::new(ClientConfig {
+                additional_certificates: vec![CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()],
+                endpoint_description: S2EndpointDescription::default(),
+                pairing_deployment: Deployment::Wan,
+            })
+            .unwrap();
+
+            let longpoller = client.longpoller(format!("https://localhost:{}", addr.port())).await.unwrap();
+
+            struct TestHandler<'a> {
+                have_prepare: bool,
+                have_cancel: bool,
+                poller: &'a Longpoller,
+            }
+
+            impl LongpollHandler for TestHandler<'_> {
+                async fn request_pairing(&mut self, node: S2NodeId) -> bool {
+                    assert!(self.have_cancel);
+                    assert_eq!(node, UUID_B.into());
+                    self.poller.remove_node(node);
+                    true
+                }
+
+                async fn prepare_pairing(&mut self, node: S2NodeId) {
+                    assert_eq!(node, UUID_B.into());
+                    self.have_prepare = true;
+                }
+
+                async fn cancel_prepare_pairing(&mut self, node: S2NodeId) {
+                    assert_eq!(node, UUID_B.into());
+                    assert!(self.have_prepare);
+                    self.have_cancel = true;
+                }
+            }
+
+            assert!(longpoller.add_node(client_config.clone()).is_ok());
+
+            assert!(
+                longpoller
+                    .run(&mut TestHandler {
+                        have_prepare: false,
+                        have_cancel: false,
+                        poller: &longpoller
+                    })
+                    .await
+                    .is_ok()
+            );
+
+            let remote = PairingRemote {
+                url: format!("https://localhost:{}/", addr.port()),
+                id: pairing_s2_node_id(),
+            };
+
+            client.pair(&client_config, remote, b"testtoken").await.unwrap()
+        };
+
+        let server_task = async move {
+            let mut longpoll_session = server.get_longpolling().await;
+            assert_eq!(longpoll_session.client_id(), UUID_B.into());
+            let node_description = longpoll_session.node_description().await.unwrap();
+            assert_eq!(node_description.id, UUID_B.into());
+            assert_eq!(node_description.role, S2Role::Rm);
+
+            assert!(longpoll_session.prepare_pairing().await.is_ok());
+            assert!(longpoll_session.cancel_prepare_pairing().await.is_ok());
+            assert!(longpoll_session.request_pairing().await.is_ok());
+
+            server_pairing.await.unwrap()
+        };
+
+        let (client_pairing, server_pairing) = join!(client_task, server_task);
+        assert_eq!(client_pairing.token, server_pairing.token);
+        assert_ne!(client_pairing.role, server_pairing.role);
+        assert!(matches!(client_pairing.role, PairingRole::CommunicationClient { .. }));
+
+        server_handle.shutdown();
+    }
+
+    #[tokio::test]
+    async fn longpolling_request_pairing_not_ready() {
+        let server_config = NodeConfig::builder(basic_node_description(UUID_A, S2Role::Cem), vec![MessageVersion("v1".into())])
+            .with_connection_initiate_url("test.example.com".into())
+            .build()
+            .unwrap();
+
+        let (server_handle, _, server) = setup_server(server_config, Router::new()).await;
+
+        let addr = server_handle.listening().await.unwrap();
+
+        let client_task = tokio::spawn(async move {
+            let client_config = NodeConfig::builder(basic_node_description(UUID_B, S2Role::Rm), vec![MessageVersion("v1".into())])
+                .with_connection_initiate_url("client.example.com".into())
+                .build()
+                .unwrap();
+
+            let client = Client::new(ClientConfig {
+                additional_certificates: vec![CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()],
+                endpoint_description: S2EndpointDescription::default(),
+                pairing_deployment: Deployment::Wan,
+            })
+            .unwrap();
+
+            let longpoller = client.longpoller(format!("https://localhost:{}", addr.port())).await.unwrap();
+
+            struct TestHandler;
+
+            impl LongpollHandler for TestHandler {
+                async fn request_pairing(&mut self, node: S2NodeId) -> bool {
+                    assert_eq!(node, UUID_B.into());
+                    false
+                }
+
+                async fn prepare_pairing(&mut self, _node: S2NodeId) {
+                    unimplemented!()
+                }
+
+                async fn cancel_prepare_pairing(&mut self, _node: S2NodeId) {
+                    unimplemented!()
+                }
+            }
+
+            assert!(longpoller.add_node(client_config.clone()).is_ok());
+
+            longpoller.run(&mut TestHandler).await.ok();
+        });
+
+        let mut longpoll_session = server.get_longpolling().await;
+        assert!(longpoll_session.request_pairing().await.is_err());
+
+        client_task.abort();
+
+        server_handle.shutdown();
+    }
+
+    #[tokio::test]
+    async fn longpolling_cancelled() {
+        let server_config = NodeConfig::builder(basic_node_description(UUID_A, S2Role::Cem), vec![MessageVersion("v1".into())])
+            .with_connection_initiate_url("test.example.com".into())
+            .build()
+            .unwrap();
+
+        let client_config = NodeConfig::builder(basic_node_description(UUID_B, S2Role::Rm), vec![MessageVersion("v1".into())])
+            .with_connection_initiate_url("client.example.com".into())
+            .build()
+            .unwrap();
+
+        let (server_handle, _, _) = setup_server(
+            server_config,
+            Router::new().route("/v1/waitForPairing", post(|| async { StatusCode::BAD_REQUEST })),
+        )
+        .await;
+
+        let client = Client::new(ClientConfig {
+            additional_certificates: vec![CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()],
+            endpoint_description: S2EndpointDescription::default(),
+            pairing_deployment: Deployment::Wan,
+        })
+        .unwrap();
+
+        let longpoller = client
+            .longpoller(format!("https://localhost:{}", server_handle.listening().await.unwrap().port()))
+            .await
+            .unwrap();
+
+        assert!(longpoller.add_node(client_config).is_ok());
+
+        struct TestHandler;
+
+        impl LongpollHandler for TestHandler {
+            async fn request_pairing(&mut self, _node: S2NodeId) -> bool {
+                unimplemented!()
+            }
+
+            async fn prepare_pairing(&mut self, _node: S2NodeId) {
+                unimplemented!()
+            }
+
+            async fn cancel_prepare_pairing(&mut self, _node: S2NodeId) {
+                unimplemented!()
+            }
+        }
+
+        assert_eq!(longpoller.run(&mut TestHandler).await.unwrap_err().kind(), ErrorKind::Cancelled);
+
+        server_handle.shutdown();
+    }
+
+    #[tokio::test]
+    async fn longpolling_rejected() {
+        let server_config = NodeConfig::builder(basic_node_description(UUID_A, S2Role::Cem), vec![MessageVersion("v1".into())])
+            .with_connection_initiate_url("test.example.com".into())
+            .build()
+            .unwrap();
+
+        let client_config = NodeConfig::builder(basic_node_description(UUID_B, S2Role::Rm), vec![MessageVersion("v1".into())])
+            .with_connection_initiate_url("client.example.com".into())
+            .build()
+            .unwrap();
+
+        let (server_handle, _, _) = setup_server(
+            server_config,
+            Router::new().route("/v1/waitForPairing", post(|| async { StatusCode::UNAUTHORIZED })),
+        )
+        .await;
+
+        let client = Client::new(ClientConfig {
+            additional_certificates: vec![CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()],
+            endpoint_description: S2EndpointDescription::default(),
+            pairing_deployment: Deployment::Wan,
+        })
+        .unwrap();
+
+        let longpoller = client
+            .longpoller(format!("https://localhost:{}", server_handle.listening().await.unwrap().port()))
+            .await
+            .unwrap();
+
+        assert!(longpoller.add_node(client_config).is_ok());
+
+        struct TestHandler;
+
+        impl LongpollHandler for TestHandler {
+            async fn request_pairing(&mut self, _node: S2NodeId) -> bool {
+                unimplemented!()
+            }
+
+            async fn prepare_pairing(&mut self, _node: S2NodeId) {
+                unimplemented!()
+            }
+
+            async fn cancel_prepare_pairing(&mut self, _node: S2NodeId) {
+                unimplemented!()
+            }
+        }
+
+        assert_eq!(longpoller.run(&mut TestHandler).await.unwrap_err().kind(), ErrorKind::Rejected);
 
         server_handle.shutdown();
     }
