@@ -1,8 +1,10 @@
 #![allow(unused)]
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
+    future::poll_fn,
     str::FromStr,
     sync::{Arc, Mutex},
+    task::Poll,
     time::Duration,
 };
 
@@ -17,7 +19,10 @@ use rand::RngCore;
 use reqwest::StatusCode;
 use rustls::pki_types::CertificateDer;
 use sha2::Digest;
-use tokio::time::Instant;
+use tokio::{
+    net::unix::pipe::Receiver,
+    time::{Instant, timeout},
+};
 use tracing::{Instrument, info, trace};
 
 use crate::{
@@ -25,12 +30,16 @@ use crate::{
         root,
         wire::{AccessToken, PairingVersion, S2EndpointDescription, S2NodeDescription, S2NodeId},
     },
-    pairing::PairingRole,
+    pairing::{Error, PairingRole},
 };
 
 use super::{ErrorKind, Network, NodeConfig, Pairing, PairingResult, wire::*};
 
 const PERMANENT_PAIRING_BUFFER_SIZE: usize = 1;
+const LONGPOLLING_HANDLE_BUFFER_SIZE: usize = 16;
+const LONGPOLLING_COMMAND_BUFFER_SIZE: usize = 1;
+
+const LONGPOLLING_RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Token known to both S2 nodes trying to pair.
 ///
@@ -96,6 +105,24 @@ impl PairingToken {
 /// Responsible for providing the HTTP endpoints needed for handling
 pub struct Server<H> {
     state: AppState<H>,
+    longpolling_enabled: tokio::sync::watch::Sender<bool>,
+    // used to allow waiting for the end of all longpolling request.
+    //
+    // each request will hold a read lock on this for its duration.
+    // the enable/disable logic will keep a write lock.
+    longpolling_sessions_active: Arc<tokio::sync::RwLock<()>>,
+    pending_longpolling_handles: Arc<tokio::sync::Mutex<tokio::sync::mpsc::Receiver<LongpollingHandle>>>,
+}
+
+impl<H> Clone for Server<H> {
+    fn clone(&self) -> Self {
+        Self {
+            state: self.state.clone(),
+            longpolling_enabled: self.longpolling_enabled.clone(),
+            longpolling_sessions_active: self.longpolling_sessions_active.clone(),
+            pending_longpolling_handles: self.pending_longpolling_handles.clone(),
+        }
+    }
 }
 
 /// Configuration for the S2 pairing server.
@@ -195,22 +222,7 @@ impl PrePairingHandler for NoopPrePairingHandler {
 impl Server<NoopPrePairingHandler> {
     /// Create a new server using the given configuration.
     pub fn new(server_config: ServerConfig) -> Self {
-        let state = AppStateInner {
-            network: server_config
-                .root_certificate
-                .map(|v| Network::Lan {
-                    fingerprint: sha2::Sha256::digest(v).into(),
-                })
-                .unwrap_or(Network::Wan),
-            advertised_nodes: Mutex::new(server_config.advertised_nodes),
-            endpoint_description: server_config.endpoint_description,
-            permanent_pairings: Mutex::new(HashMap::new()),
-            open_pairings: Mutex::new(HashMap::new()),
-            attempts: Mutex::new(HashMap::default()),
-            prepairing_handler: Arc::new(NoopPrePairingHandler),
-        };
-
-        Self { state: Arc::new(state) }
+        Self::new_with_prepairing(server_config, NoopPrePairingHandler)
     }
 }
 
@@ -218,6 +230,10 @@ impl<H: PrePairingHandler> Server<H> {
     /// Create a new server using the given configuration, with a prepairing
     /// handler.
     pub fn new_with_prepairing(server_config: ServerConfig, handler: H) -> Self {
+        let (longpolling_handle_sender, pending_longpolling_handles) = tokio::sync::mpsc::channel(LONGPOLLING_HANDLE_BUFFER_SIZE);
+        let (longpolling_enabled_sender, longpolling_enabled_receiver) = tokio::sync::watch::channel(false);
+        let longpolling_sessions_active = Arc::new(tokio::sync::RwLock::new(()));
+
         let state = AppStateInner {
             network: server_config
                 .root_certificate
@@ -231,9 +247,18 @@ impl<H: PrePairingHandler> Server<H> {
             open_pairings: Mutex::new(HashMap::new()),
             attempts: Mutex::new(HashMap::default()),
             prepairing_handler: Arc::new(handler),
+            longpolling_enabled: longpolling_enabled_receiver,
+            longpolling_sessions_active: longpolling_sessions_active.clone(),
+            longpolling_sessions: Mutex::new(HashMap::new()),
+            longpolling_handle_sender,
         };
 
-        Self { state: Arc::new(state) }
+        Self {
+            state: Arc::new(state),
+            longpolling_enabled: longpolling_enabled_sender,
+            longpolling_sessions_active,
+            pending_longpolling_handles: Arc::new(tokio::sync::Mutex::new(pending_longpolling_handles)),
+        }
     }
 }
 
@@ -253,6 +278,29 @@ impl<H: PrePairingHandler> Server<H> {
     /// These are only used when the server is on a LAN.
     pub fn update_advertised_nodes(&self, advertised_nodes: Vec<S2NodeDescription>) {
         *self.state.advertised_nodes.lock().unwrap() = advertised_nodes;
+    }
+
+    /// Enable longpolling
+    pub async fn enable_longpolling(&mut self) {
+        self.longpolling_enabled.send_replace(true);
+    }
+
+    /// Disable longpolling
+    pub async fn disable_longpolling(&mut self) {
+        self.longpolling_enabled.send_replace(false);
+        let mut receiver = self.pending_longpolling_handles.lock().await;
+        let lock = tokio::select! {
+            _ = async { loop { receiver.recv().await; } } => unreachable!(),
+            lock = self.longpolling_sessions_active.write() => lock
+        };
+        while receiver.try_recv().is_ok() {}
+        self.state.longpolling_sessions.lock().unwrap().clear();
+    }
+
+    /// Get a pending longpolling handle.
+    pub async fn get_longpolling(&self) -> LongpollingHandle {
+        // This unwrap can never fail, as self keeps the appstate, and therefore the sender, live.
+        self.pending_longpolling_handles.lock().await.recv().await.unwrap()
     }
 
     /// Start a one-time pairing session for the given node using the given token.
@@ -314,6 +362,138 @@ impl<H: PrePairingHandler> Server<H> {
         );
         Ok(RepeatedPairing { receiver })
     }
+}
+
+/// Handle for a longpolling connection with a client S2 Node.
+pub struct LongpollingHandle {
+    commands: tokio::sync::mpsc::Sender<WaitForPairingAction>,
+    endpoint: tokio::sync::watch::Receiver<Option<S2EndpointDescription>>,
+    node: tokio::sync::watch::Receiver<Option<S2NodeDescription>>,
+    last_pairing_response: tokio::sync::watch::Receiver<Option<Result<(), WaitForPairingErrorMessage>>>,
+    client_id: S2NodeId,
+}
+
+impl LongpollingHandle {
+    /// Client S2NodeId of the remote.
+    pub fn client_id(&self) -> S2NodeId {
+        self.client_id
+    }
+
+    /// Node description of the remote.
+    ///
+    /// This is fallible as it is not send by default, so we need to ask the remote.
+    pub async fn node_description(&mut self) -> Result<S2NodeDescription, Error> {
+        if self.node.borrow().is_none() {
+            self.commands
+                .send(WaitForPairingAction::SendS2NodeDescription)
+                .await
+                .map_err(|_| ErrorKind::Cancelled)?;
+        }
+        // The unwrap below doesn't ever fail because we wait for the option to have a value.
+        Ok(timeout(LONGPOLLING_RESPONSE_TIMEOUT, self.node.wait_for(|v| v.is_some()))
+            .await
+            .map_err(|_| ErrorKind::Timeout)?
+            .map_err(|_| ErrorKind::Cancelled)?
+            .clone()
+            .unwrap())
+    }
+
+    /// Endpoint description of the remote.
+    ///
+    /// This is fallible as it is not send by default, so we need to ask the remote.
+    pub async fn endpoint_description(&mut self) -> Result<S2EndpointDescription, Error> {
+        if self.endpoint.borrow().is_none() {
+            self.commands
+                .send(WaitForPairingAction::SendS2NodeDescription)
+                .await
+                .map_err(|_| ErrorKind::Cancelled)?;
+        }
+        // The unwrap below doesn't ever fail because we wait for the option to have a value.
+        Ok(timeout(LONGPOLLING_RESPONSE_TIMEOUT, self.endpoint.wait_for(|v| v.is_some()))
+            .await
+            .map_err(|_| ErrorKind::Timeout)?
+            .map_err(|_| ErrorKind::Cancelled)?
+            .clone()
+            .unwrap())
+    }
+
+    /// Request the remote to start pairing.
+    pub async fn request_pairing(&mut self) -> Result<(), Error> {
+        self.commands
+            .send(WaitForPairingAction::RequestPairing)
+            .await
+            .map_err(|_| ErrorKind::Cancelled)?;
+        // The unwrap below doesn't ever fail because we wait for the option to have a value.
+        timeout(LONGPOLLING_RESPONSE_TIMEOUT, self.last_pairing_response.wait_for(|v| v.is_some()))
+            .await
+            .map_err(|_| ErrorKind::Timeout)?
+            .map_err(|_| ErrorKind::Cancelled)?
+            .unwrap()
+            .map_err(|e| Error::new(ErrorKind::InvalidToken, e))
+    }
+
+    /// Request the remote to prepare for pairing.
+    pub async fn prepare_pairing(&mut self) -> Result<(), Error> {
+        self.commands
+            .send(WaitForPairingAction::PreparePairing)
+            .await
+            .map_err(|_| ErrorKind::Cancelled.into())
+    }
+
+    /// Request the remote to cancel prepare for pairing.
+    pub async fn cancel_prepare_pairing(&mut self) -> Result<(), Error> {
+        self.commands
+            .send(WaitForPairingAction::CancelPreparePairing)
+            .await
+            .map_err(|_| ErrorKind::Cancelled.into())
+    }
+}
+
+enum LongpollingState {
+    Disconnected {
+        since: Instant,
+        state: LongpollingStateInner,
+    },
+    Running {
+        since: Instant,
+        last_pairing_response: tokio::sync::watch::Sender<Option<Result<(), WaitForPairingErrorMessage>>>,
+    },
+}
+
+impl LongpollingState {
+    fn take(&mut self) -> Option<LongpollingStateInner> {
+        match self {
+            LongpollingState::Disconnected { state, .. } => {
+                let mut swap_target = LongpollingState::Running {
+                    since: Instant::now(),
+                    last_pairing_response: state.last_pairing_response.clone(),
+                };
+                std::mem::swap(&mut swap_target, self);
+                let LongpollingState::Disconnected { state, .. } = swap_target else {
+                    unreachable!()
+                };
+                Some(state)
+            }
+            LongpollingState::Running { .. } => None,
+        }
+    }
+
+    fn signal_pairing_request(&self) {
+        match self {
+            LongpollingState::Disconnected { state, .. } => state.last_pairing_response.send_replace(Some(Ok(()))),
+            LongpollingState::Running {
+                since,
+                last_pairing_response,
+            } => last_pairing_response.send_replace(Some(Ok(()))),
+        };
+    }
+}
+
+struct LongpollingStateInner {
+    commands: tokio::sync::mpsc::Receiver<WaitForPairingAction>,
+    endpoint: tokio::sync::watch::Sender<Option<S2EndpointDescription>>,
+    node: tokio::sync::watch::Sender<Option<S2NodeDescription>>,
+    last_pairing_response: tokio::sync::watch::Sender<Option<Result<(), WaitForPairingErrorMessage>>>,
 }
 
 enum ResultSender {
@@ -413,6 +593,59 @@ struct AppStateInner<H> {
     open_pairings: Mutex<HashMap<PairingS2NodeId, PairingRequest>>,
     attempts: Mutex<HashMap<PairingAttemptId, ExpiringPairingState>>,
     prepairing_handler: Arc<H>,
+    longpolling_enabled: tokio::sync::watch::Receiver<bool>,
+    // used to allow waiting for the end of all longpolling request.
+    //
+    // each request will hold a read lock on this for its duration.
+    // the enable/disable logic will keep a write lock.
+    longpolling_sessions_active: Arc<tokio::sync::RwLock<()>>,
+    longpolling_sessions: Mutex<HashMap<S2NodeId, LongpollingState>>,
+    longpolling_handle_sender: tokio::sync::mpsc::Sender<LongpollingHandle>,
+}
+
+// Holder for longpolling sessions during a session. Returns
+// them to the appstate on drop.
+struct LocalLongpollingCache<H> {
+    sessions: HashMap<S2NodeId, LongpollingStateInner>,
+    state: AppState<H>,
+}
+
+impl<H> LocalLongpollingCache<H> {
+    fn new(state: AppState<H>) -> Self {
+        Self {
+            sessions: HashMap::new(),
+            state,
+        }
+    }
+}
+
+impl<H> std::ops::Deref for LocalLongpollingCache<H> {
+    type Target = HashMap<S2NodeId, LongpollingStateInner>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.sessions
+    }
+}
+
+impl<H> std::ops::DerefMut for LocalLongpollingCache<H> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.sessions
+    }
+}
+
+impl<H> Drop for LocalLongpollingCache<H> {
+    fn drop(&mut self) {
+        let mut longpolling_sessions = self.state.longpolling_sessions.lock().unwrap();
+        for (id, state) in self.sessions.drain() {
+            longpolling_sessions.insert(
+                id,
+                LongpollingState::Disconnected {
+                    since: Instant::now(),
+                    state,
+                },
+            );
+        }
+    }
 }
 
 fn v1_router<H: PrePairingHandler>() -> Router<AppState<H>> {
@@ -421,10 +654,107 @@ fn v1_router<H: PrePairingHandler>() -> Router<AppState<H>> {
         .route("/s2nodes", get(v1_s2nodes))
         .route("/preparePairing", post(v1_prepare_pairing))
         .route("/cancelPreparePairing", post(v1_cancel_prepare_pairing))
+        .route("/waitForPairing", post(v1_wait_for_pairing))
         .route("/requestPairing", post(v1_request_pairing))
         .route("/requestConnectionDetails", post(v1_request_connection_details))
         .route("/postConnectionDetails", post(v1_post_connection_details))
         .route("/finalizePairing", post(v1_finalize_pairing))
+}
+
+#[tracing::instrument(skip_all, level = tracing::Level::INFO)]
+async fn v1_wait_for_pairing<H>(
+    State(state): State<AppState<H>>,
+    Json(requests): Json<Vec<WaitForPairingRequest>>,
+) -> Result<Json<WaitForPairingResponse>, StatusCode> {
+    let _request_active = state.longpolling_sessions_active.read().await;
+
+    let mut enabled = state.longpolling_enabled.clone();
+    if !*enabled.borrow_and_update() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    // Collect all involved longpolling sessions
+    let mut states = LocalLongpollingCache::new(state.clone());
+    let mut pending_handles = vec![];
+    {
+        let mut longpolling_sessions = state.longpolling_sessions.lock().unwrap();
+        for request in &requests {
+            let state = match longpolling_sessions.entry(request.client_s2_node_id) {
+                std::collections::hash_map::Entry::Occupied(mut occupied_entry) => match occupied_entry.get_mut().take() {
+                    Some(state) => state,
+                    None => {
+                        return Err(StatusCode::BAD_REQUEST);
+                    }
+                },
+                std::collections::hash_map::Entry::Vacant(vacant_entry) => {
+                    let (commands_sender, commands_receiver) = tokio::sync::mpsc::channel(LONGPOLLING_COMMAND_BUFFER_SIZE);
+                    let (endpoint_sender, endpoint_receiver) = tokio::sync::watch::channel(None);
+                    let (node_sender, node_receiver) = tokio::sync::watch::channel(None);
+                    let (last_pairing_sender, last_pairing_receiver) = tokio::sync::watch::channel(None);
+                    pending_handles.push(LongpollingHandle {
+                        commands: commands_sender,
+                        endpoint: endpoint_receiver,
+                        node: node_receiver,
+                        last_pairing_response: last_pairing_receiver,
+                        client_id: request.client_s2_node_id,
+                    });
+                    vacant_entry.insert(LongpollingState::Running {
+                        since: Instant::now(),
+                        last_pairing_response: last_pairing_sender.clone(),
+                    });
+                    LongpollingStateInner {
+                        commands: commands_receiver,
+                        endpoint: endpoint_sender,
+                        node: node_sender,
+                        last_pairing_response: last_pairing_sender,
+                    }
+                }
+            };
+            states.insert(request.client_s2_node_id, state);
+        }
+    }
+
+    // Update sessions based on request data
+    for request in requests {
+        // Guaranteed to be present because of previous loop
+        let state = states.get_mut(&request.client_s2_node_id).unwrap();
+        if let Some(endpoint) = request.client_s2_endpoint_description {
+            state.endpoint.send_replace(Some(endpoint));
+        }
+        if let Some(node) = request.client_s2_node_description {
+            state.node.send_replace(Some(node));
+        }
+        if let Some(error_message) = request.error_message {
+            state.last_pairing_response.send_replace(Some(Err(error_message)));
+        }
+    }
+
+    // Send out any pending handles now we no longer hold the lock
+    for handle in pending_handles {
+        state.longpolling_handle_sender.send(handle).await.ok();
+    }
+
+    // Wait for something to communicate back to client
+    tokio::select! {
+        outcome = timeout(
+            Duration::from_secs(25),
+            poll_fn(|cx| {
+                for (k, v) in states.iter_mut() {
+                    if let Poll::Ready(message) = v.commands.poll_recv(cx) {
+                        return match message {
+                            Some(action) => Poll::Ready(Some((*k, action))),
+                            None => Poll::Ready(None),
+                        };
+                    }
+                }
+                std::task::Poll::Pending
+            }),
+        ) => return match outcome {
+            Ok(Some((client_s2_node_id, action))) => Ok(Json(WaitForPairingResponse { client_s2_node_id, action })),
+            Ok(None) | Err(_) => Err(StatusCode::NO_CONTENT),
+        },
+        _ = enabled.wait_for(|v| !*v) => return Err(StatusCode::BAD_REQUEST),
+    }
 }
 
 #[tracing::instrument(skip_all, level = tracing::Level::INFO)]
@@ -476,6 +806,10 @@ async fn v1_request_pairing<H>(
     Json(request_pairing): Json<RequestPairing>,
 ) -> Result<Json<RequestPairingResponse>, PairingResponseErrorMessage> {
     trace!("Received pairing request.");
+    if let Some(session) = state.longpolling_sessions.lock().unwrap().get(&request_pairing.node_description.id) {
+        session.signal_pairing_request();
+    }
+
     if !request_pairing.supported_hashing_algorithms.contains(&HmacHashingAlgorithm::Sha256) {
         info!(remote_hashing_algorithms = ?request_pairing.supported_hashing_algorithms, "No shared hashing algorithm with remote");
         return Err(PairingResponseErrorMessage::IncompatibleHMACHashingAlgorithms);
@@ -787,13 +1121,19 @@ async fn v1_finalize_pairing<H>(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex, OnceLock};
+    use std::{
+        sync::{Arc, Mutex, OnceLock},
+        time::Duration,
+    };
 
     use axum::body::Body;
     use http::StatusCode;
     use http_body_util::BodyExt;
     use rustls::pki_types::{CertificateDer, pem::PemObject};
-    use tokio::time::Instant;
+    use tokio::{
+        join,
+        time::{Instant, sleep, timeout},
+    };
     use tower::ServiceExt;
     use tracing::{Level, span};
 
@@ -807,7 +1147,8 @@ mod tests {
             wire::{
                 CancelPrePairingRequest, ConnectionDetails, HmacChallenge, HmacHashingAlgorithm, PairingAttemptId,
                 PairingResponseErrorMessage, PostConnectionDetailsRequest, PrePairingRequest, RequestConnectionDetailsRequest,
-                RequestPairing, RequestPairingResponse,
+                RequestPairing, RequestPairingResponse, WaitForPairingAction, WaitForPairingErrorMessage, WaitForPairingRequest,
+                WaitForPairingResponse,
             },
         },
     };
@@ -1920,5 +2261,523 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn longpolling_timeout() {
+        let mut server = Server::new(ServerConfig {
+            root_certificate: None,
+            endpoint_description: S2EndpointDescription::default(),
+            advertised_nodes: vec![],
+        });
+
+        server.enable_longpolling().await;
+
+        let response = server
+            .get_router()
+            .oneshot(
+                http::Request::post("/v1/waitForPairing")
+                    .header(http::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&vec![WaitForPairingRequest {
+                            client_s2_node_id: UUID_A.into(),
+                            client_s2_node_description: None,
+                            client_s2_endpoint_description: None,
+                            error_message: None,
+                        }])
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    }
+
+    #[tokio::test]
+    async fn longpolling_descriptions() {
+        let mut server = Server::new(ServerConfig {
+            root_certificate: None,
+            endpoint_description: S2EndpointDescription::default(),
+            advertised_nodes: vec![],
+        });
+
+        server.enable_longpolling().await;
+
+        let server_clone = server.clone();
+
+        let client_task = async move {
+            let response = server_clone
+                .get_router()
+                .oneshot(
+                    http::Request::post("/v1/waitForPairing")
+                        .header(http::header::CONTENT_TYPE, "application/json")
+                        .body(Body::from(
+                            serde_json::to_vec(&vec![WaitForPairingRequest {
+                                client_s2_node_id: UUID_A.into(),
+                                client_s2_node_description: None,
+                                client_s2_endpoint_description: None,
+                                error_message: None,
+                            }])
+                            .unwrap(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = response.into_body().collect().await.unwrap().to_bytes();
+            let response_data: WaitForPairingResponse = serde_json::from_slice(&body).unwrap();
+            assert_eq!(response_data.client_s2_node_id, UUID_A.into());
+            assert_eq!(response_data.action, WaitForPairingAction::SendS2NodeDescription);
+
+            server_clone
+                .get_router()
+                .oneshot(
+                    http::Request::post("/v1/waitForPairing")
+                        .header(http::header::CONTENT_TYPE, "application/json")
+                        .body(Body::from(
+                            serde_json::to_vec(&vec![WaitForPairingRequest {
+                                client_s2_node_id: UUID_A.into(),
+                                client_s2_node_description: Some(basic_node_description(UUID_A, S2Role::Cem)),
+                                client_s2_endpoint_description: Some(S2EndpointDescription::default()),
+                                error_message: None,
+                            }])
+                            .unwrap(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+        };
+
+        let server_task = async move {
+            let mut longpolling_handle = server.get_longpolling().await;
+            assert_eq!(
+                longpolling_handle.node_description().await.unwrap(),
+                basic_node_description(UUID_A, S2Role::Cem)
+            );
+            assert_eq!(
+                longpolling_handle.endpoint_description().await.unwrap(),
+                S2EndpointDescription::default()
+            );
+        };
+
+        join!(client_task, server_task);
+    }
+
+    #[tokio::test]
+    async fn longpolling_prepare_pairing() {
+        let mut server = Server::new(ServerConfig {
+            root_certificate: None,
+            endpoint_description: S2EndpointDescription::default(),
+            advertised_nodes: vec![],
+        });
+
+        server.enable_longpolling().await;
+
+        let server_clone = server.clone();
+
+        let client_task = async move {
+            let response = server_clone
+                .get_router()
+                .oneshot(
+                    http::Request::post("/v1/waitForPairing")
+                        .header(http::header::CONTENT_TYPE, "application/json")
+                        .body(Body::from(
+                            serde_json::to_vec(&vec![WaitForPairingRequest {
+                                client_s2_node_id: UUID_A.into(),
+                                client_s2_node_description: None,
+                                client_s2_endpoint_description: None,
+                                error_message: None,
+                            }])
+                            .unwrap(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = response.into_body().collect().await.unwrap().to_bytes();
+            let response_data: WaitForPairingResponse = serde_json::from_slice(&body).unwrap();
+            assert_eq!(response_data.client_s2_node_id, UUID_A.into());
+            assert_eq!(response_data.action, WaitForPairingAction::PreparePairing);
+
+            server_clone
+                .get_router()
+                .oneshot(
+                    http::Request::post("/v1/waitForPairing")
+                        .header(http::header::CONTENT_TYPE, "application/json")
+                        .body(Body::from(
+                            serde_json::to_vec(&vec![WaitForPairingRequest {
+                                client_s2_node_id: UUID_A.into(),
+                                client_s2_node_description: None,
+                                client_s2_endpoint_description: None,
+                                error_message: None,
+                            }])
+                            .unwrap(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+        };
+
+        let server_task = async move {
+            let mut longpolling_handle = server.get_longpolling().await;
+            assert!(longpolling_handle.prepare_pairing().await.is_ok());
+        };
+
+        join!(client_task, server_task);
+    }
+
+    #[tokio::test]
+    async fn longpolling_cancel_prepare_pairing() {
+        let mut server = Server::new(ServerConfig {
+            root_certificate: None,
+            endpoint_description: S2EndpointDescription::default(),
+            advertised_nodes: vec![],
+        });
+
+        server.enable_longpolling().await;
+
+        let server_clone = server.clone();
+
+        let client_task = async move {
+            let response = server_clone
+                .get_router()
+                .oneshot(
+                    http::Request::post("/v1/waitForPairing")
+                        .header(http::header::CONTENT_TYPE, "application/json")
+                        .body(Body::from(
+                            serde_json::to_vec(&vec![WaitForPairingRequest {
+                                client_s2_node_id: UUID_A.into(),
+                                client_s2_node_description: None,
+                                client_s2_endpoint_description: None,
+                                error_message: None,
+                            }])
+                            .unwrap(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = response.into_body().collect().await.unwrap().to_bytes();
+            let response_data: WaitForPairingResponse = serde_json::from_slice(&body).unwrap();
+            assert_eq!(response_data.client_s2_node_id, UUID_A.into());
+            assert_eq!(response_data.action, WaitForPairingAction::CancelPreparePairing);
+
+            server_clone
+                .get_router()
+                .oneshot(
+                    http::Request::post("/v1/waitForPairing")
+                        .header(http::header::CONTENT_TYPE, "application/json")
+                        .body(Body::from(
+                            serde_json::to_vec(&vec![WaitForPairingRequest {
+                                client_s2_node_id: UUID_A.into(),
+                                client_s2_node_description: None,
+                                client_s2_endpoint_description: None,
+                                error_message: None,
+                            }])
+                            .unwrap(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+        };
+
+        let server_task = async move {
+            let mut longpolling_handle = server.get_longpolling().await;
+            assert!(longpolling_handle.cancel_prepare_pairing().await.is_ok());
+        };
+
+        join!(client_task, server_task);
+    }
+
+    #[tokio::test]
+    async fn longpolling_request_pairing_success() {
+        let mut server = Server::new(ServerConfig {
+            root_certificate: None,
+            endpoint_description: S2EndpointDescription::default(),
+            advertised_nodes: vec![],
+        });
+
+        server.enable_longpolling().await;
+
+        let server_clone = server.clone();
+
+        let client_task = async move {
+            let response = server_clone
+                .get_router()
+                .oneshot(
+                    http::Request::post("/v1/waitForPairing")
+                        .header(http::header::CONTENT_TYPE, "application/json")
+                        .body(Body::from(
+                            serde_json::to_vec(&vec![WaitForPairingRequest {
+                                client_s2_node_id: UUID_A.into(),
+                                client_s2_node_description: None,
+                                client_s2_endpoint_description: None,
+                                error_message: None,
+                            }])
+                            .unwrap(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = response.into_body().collect().await.unwrap().to_bytes();
+            let response_data: WaitForPairingResponse = serde_json::from_slice(&body).unwrap();
+            assert_eq!(response_data.client_s2_node_id, UUID_A.into());
+            assert_eq!(response_data.action, WaitForPairingAction::RequestPairing);
+
+            let poll_req = server_clone.get_router().oneshot(
+                http::Request::post("/v1/waitForPairing")
+                    .header(http::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&vec![WaitForPairingRequest {
+                            client_s2_node_id: UUID_A.into(),
+                            client_s2_node_description: None,
+                            client_s2_endpoint_description: None,
+                            error_message: None,
+                        }])
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            );
+            let pair_req = server_clone.get_router().oneshot(
+                http::Request::post("/v1/requestPairing")
+                    .header(http::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&RequestPairing {
+                            node_description: basic_node_description(UUID_A, S2Role::Cem),
+                            endpoint_description: S2EndpointDescription::default(),
+                            id: Some(pairing_s2_node_id()),
+                            supported_protocols: vec![CommunicationProtocol("WebSocket".into())],
+                            supported_versions: vec![MessageVersion("v1".into())],
+                            supported_hashing_algorithms: vec![HmacHashingAlgorithm::Sha256],
+                            client_hmac_challenge: HmacChallenge::new(&mut rand::rng(), 64),
+                            force_pairing: false,
+                        })
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            );
+
+            join!(poll_req, pair_req);
+        };
+
+        let server_task = async move {
+            let mut longpolling_handle = server.get_longpolling().await;
+            assert!(longpolling_handle.request_pairing().await.is_ok());
+        };
+
+        join!(client_task, server_task);
+    }
+
+    #[tokio::test]
+    async fn longpolling_request_pairing_failure() {
+        let mut server = Server::new(ServerConfig {
+            root_certificate: None,
+            endpoint_description: S2EndpointDescription::default(),
+            advertised_nodes: vec![],
+        });
+
+        server.enable_longpolling().await;
+
+        let server_clone = server.clone();
+
+        let client_task = async move {
+            let response = server_clone
+                .get_router()
+                .oneshot(
+                    http::Request::post("/v1/waitForPairing")
+                        .header(http::header::CONTENT_TYPE, "application/json")
+                        .body(Body::from(
+                            serde_json::to_vec(&vec![WaitForPairingRequest {
+                                client_s2_node_id: UUID_A.into(),
+                                client_s2_node_description: None,
+                                client_s2_endpoint_description: None,
+                                error_message: None,
+                            }])
+                            .unwrap(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = response.into_body().collect().await.unwrap().to_bytes();
+            let response_data: WaitForPairingResponse = serde_json::from_slice(&body).unwrap();
+            assert_eq!(response_data.client_s2_node_id, UUID_A.into());
+            assert_eq!(response_data.action, WaitForPairingAction::RequestPairing);
+
+            server_clone
+                .get_router()
+                .oneshot(
+                    http::Request::post("/v1/waitForPairing")
+                        .header(http::header::CONTENT_TYPE, "application/json")
+                        .body(Body::from(
+                            serde_json::to_vec(&vec![WaitForPairingRequest {
+                                client_s2_node_id: UUID_A.into(),
+                                client_s2_node_description: None,
+                                client_s2_endpoint_description: None,
+                                error_message: Some(WaitForPairingErrorMessage::NoValidTokenOnPairingClient),
+                            }])
+                            .unwrap(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+        };
+
+        let server_task = async move {
+            let mut longpolling_handle = server.get_longpolling().await;
+            assert_eq!(
+                longpolling_handle.request_pairing().await.unwrap_err().kind(),
+                ErrorKind::InvalidToken
+            );
+        };
+
+        join!(client_task, server_task);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn longpolling_aborted_request_keeps_session_alive() {
+        let mut server = Server::new(ServerConfig {
+            root_certificate: None,
+            endpoint_description: S2EndpointDescription::default(),
+            advertised_nodes: vec![],
+        });
+
+        server.enable_longpolling().await;
+
+        let server_clone = server.clone();
+
+        let client_task = async move {
+            assert!(
+                timeout(
+                    Duration::from_secs(5),
+                    server_clone.get_router().oneshot(
+                        http::Request::post("/v1/waitForPairing")
+                            .header(http::header::CONTENT_TYPE, "application/json")
+                            .body(Body::from(
+                                serde_json::to_vec(&vec![WaitForPairingRequest {
+                                    client_s2_node_id: UUID_A.into(),
+                                    client_s2_node_description: None,
+                                    client_s2_endpoint_description: None,
+                                    error_message: None,
+                                }])
+                                .unwrap(),
+                            ))
+                            .unwrap(),
+                    )
+                )
+                .await
+                .is_err()
+            );
+            let response = server_clone
+                .get_router()
+                .oneshot(
+                    http::Request::post("/v1/waitForPairing")
+                        .header(http::header::CONTENT_TYPE, "application/json")
+                        .body(Body::from(
+                            serde_json::to_vec(&vec![WaitForPairingRequest {
+                                client_s2_node_id: UUID_A.into(),
+                                client_s2_node_description: None,
+                                client_s2_endpoint_description: None,
+                                error_message: None,
+                            }])
+                            .unwrap(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = response.into_body().collect().await.unwrap().to_bytes();
+            let response_data: WaitForPairingResponse = serde_json::from_slice(&body).unwrap();
+            assert_eq!(response_data.client_s2_node_id, UUID_A.into());
+            assert_eq!(response_data.action, WaitForPairingAction::SendS2NodeDescription);
+
+            server_clone
+                .get_router()
+                .oneshot(
+                    http::Request::post("/v1/waitForPairing")
+                        .header(http::header::CONTENT_TYPE, "application/json")
+                        .body(Body::from(
+                            serde_json::to_vec(&vec![WaitForPairingRequest {
+                                client_s2_node_id: UUID_A.into(),
+                                client_s2_node_description: Some(basic_node_description(UUID_A, S2Role::Cem)),
+                                client_s2_endpoint_description: Some(S2EndpointDescription::default()),
+                                error_message: None,
+                            }])
+                            .unwrap(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+        };
+
+        let server_task = async move {
+            let mut longpolling_handle = server.get_longpolling().await;
+            sleep(Duration::from_secs(10)).await;
+            assert_eq!(
+                longpolling_handle.node_description().await.unwrap(),
+                basic_node_description(UUID_A, S2Role::Cem)
+            );
+            assert_eq!(
+                longpolling_handle.endpoint_description().await.unwrap(),
+                S2EndpointDescription::default()
+            );
+        };
+
+        join!(client_task, server_task);
+    }
+
+    async fn longpolling_disable_during_request() {
+        let mut server = Server::new(ServerConfig {
+            root_certificate: None,
+            endpoint_description: S2EndpointDescription::default(),
+            advertised_nodes: vec![],
+        });
+
+        server.enable_longpolling().await;
+
+        let server_clone = server.clone();
+
+        let client_task = async move {
+            let response = server_clone
+                .get_router()
+                .oneshot(
+                    http::Request::post("/v1/waitForPairing")
+                        .header(http::header::CONTENT_TYPE, "application/json")
+                        .body(Body::from(
+                            serde_json::to_vec(&vec![WaitForPairingRequest {
+                                client_s2_node_id: UUID_A.into(),
+                                client_s2_node_description: None,
+                                client_s2_endpoint_description: None,
+                                error_message: None,
+                            }])
+                            .unwrap(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        };
+
+        let server_task = async move {
+            let mut longpolling_handle = server.get_longpolling().await;
+            sleep(Duration::from_secs(5)).await;
+            server.disable_longpolling().await;
+        };
+
+        join!(client_task, server_task);
     }
 }
