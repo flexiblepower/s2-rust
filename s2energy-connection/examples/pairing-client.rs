@@ -1,9 +1,9 @@
 use rustls::pki_types::{CertificateDer, pem::PemObject};
-use std::{path::PathBuf, sync::Arc};
+use std::path::PathBuf;
 use uuid::uuid;
 
 use s2energy_connection::{
-    Deployment, MessageVersion, S2NodeDescription, S2Role,
+    Deployment, MessageVersion, S2EndpointDescription, S2NodeDescription, S2Role,
     pairing::{Client, ClientConfig, NodeConfig, PairingRemote, PairingS2NodeId},
 };
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
@@ -33,19 +33,18 @@ async fn main() {
     .build()
     .unwrap();
 
-    let client = Client::new(
-        Arc::new(config),
-        ClientConfig {
-            additional_certificates: vec![
-                CertificateDer::from_pem_file(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("testdata").join("root.pem")).unwrap(),
-            ],
-            pairing_deployment: Deployment::Lan,
-        },
-    )
+    let client = Client::new(ClientConfig {
+        additional_certificates: vec![
+            CertificateDer::from_pem_file(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("testdata").join("root.pem")).unwrap(),
+        ],
+        endpoint_description: S2EndpointDescription::default(),
+        pairing_deployment: Deployment::Lan,
+    })
     .unwrap();
 
     let pair_result = client
         .pair(
+            &config,
             PairingRemote {
                 url: "https://localhost:8005".into(),
                 id: PairingS2NodeId("ninechars".into()),

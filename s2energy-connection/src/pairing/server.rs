@@ -104,7 +104,7 @@ pub struct ServerConfig {
     /// Presence of this field indicates we are deployed on LAN.
     pub root_certificate: Option<CertificateDer<'static>>,
     /// Endpoint description of the server
-    pub advertised_endpoint: S2EndpointDescription,
+    pub endpoint_description: S2EndpointDescription,
     /// Initial set of nodes to advertise. This is only used if the server
     /// is deployed on LAN.
     pub advertised_nodes: Vec<S2NodeDescription>,
@@ -203,7 +203,7 @@ impl Server<NoopPrePairingHandler> {
                 })
                 .unwrap_or(Network::Wan),
             advertised_nodes: Mutex::new(server_config.advertised_nodes),
-            advertised_endpoint: server_config.advertised_endpoint,
+            endpoint_description: server_config.endpoint_description,
             permanent_pairings: Mutex::new(HashMap::new()),
             open_pairings: Mutex::new(HashMap::new()),
             attempts: Mutex::new(HashMap::default()),
@@ -226,7 +226,7 @@ impl<H: PrePairingHandler> Server<H> {
                 })
                 .unwrap_or(Network::Wan),
             advertised_nodes: Mutex::new(server_config.advertised_nodes),
-            advertised_endpoint: server_config.advertised_endpoint,
+            endpoint_description: server_config.endpoint_description,
             permanent_pairings: Mutex::new(HashMap::new()),
             open_pairings: Mutex::new(HashMap::new()),
             attempts: Mutex::new(HashMap::default()),
@@ -407,7 +407,7 @@ type AppState<H> = Arc<AppStateInner<H>>;
 
 struct AppStateInner<H> {
     network: Network,
-    advertised_endpoint: S2EndpointDescription,
+    endpoint_description: S2EndpointDescription,
     advertised_nodes: Mutex<Vec<S2NodeDescription>>,
     permanent_pairings: Mutex<HashMap<PairingS2NodeId, PermanentPairingRequest>>,
     open_pairings: Mutex<HashMap<PairingS2NodeId, PairingRequest>>,
@@ -430,7 +430,7 @@ fn v1_router<H: PrePairingHandler>() -> Router<AppState<H>> {
 #[tracing::instrument(skip_all, level = tracing::Level::INFO)]
 async fn v1_s2endpoint<H>(State(state): State<AppState<H>>) -> Result<Json<S2EndpointDescription>, StatusCode> {
     if state.network.is_lan() {
-        Ok(Json(state.advertised_endpoint.clone()))
+        Ok(Json(state.endpoint_description.clone()))
     } else {
         Err(StatusCode::UNAUTHORIZED)
     }
@@ -577,7 +577,7 @@ async fn v1_request_pairing<H>(
         let resp = RequestPairingResponse {
             pairing_attempt_id,
             server_s2_node_description: open_pairing.config.node_description.clone(),
-            server_s2_endpoint_description: open_pairing.config.endpoint_description.clone(),
+            server_s2_endpoint_description: state.endpoint_description.clone(),
             selected_hmac_hashing_algorithm: HmacHashingAlgorithm::Sha256,
             client_hmac_challenge_response,
             server_hmac_challenge,
@@ -823,7 +823,7 @@ mod tests {
     async fn version_negotiation() {
         let server = Server::new(ServerConfig {
             root_certificate: None,
-            advertised_endpoint: S2EndpointDescription::default(),
+            endpoint_description: S2EndpointDescription::default(),
             advertised_nodes: vec![],
         });
 
@@ -841,7 +841,7 @@ mod tests {
     async fn advertised_endpoint() {
         let server = Server::new(ServerConfig {
             root_certificate: Some(CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()),
-            advertised_endpoint: S2EndpointDescription {
+            endpoint_description: S2EndpointDescription {
                 name: Some("Testendpoint".into()),
                 logo_uri: None,
                 deployment: None,
@@ -864,7 +864,7 @@ mod tests {
     async fn advertised_endpoint_wan() {
         let server = Server::new(ServerConfig {
             root_certificate: None,
-            advertised_endpoint: S2EndpointDescription {
+            endpoint_description: S2EndpointDescription {
                 name: Some("Testendpoint".into()),
                 logo_uri: None,
                 deployment: None,
@@ -884,7 +884,7 @@ mod tests {
     async fn advertised_nodes() {
         let server = Server::new(ServerConfig {
             root_certificate: Some(CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()),
-            advertised_endpoint: S2EndpointDescription {
+            endpoint_description: S2EndpointDescription {
                 name: Some("Testendpoint".into()),
                 logo_uri: None,
                 deployment: None,
@@ -907,7 +907,7 @@ mod tests {
     async fn advertised_nodes_wan() {
         let server = Server::new(ServerConfig {
             root_certificate: None,
-            advertised_endpoint: S2EndpointDescription {
+            endpoint_description: S2EndpointDescription {
                 name: Some("Testendpoint".into()),
                 logo_uri: None,
                 deployment: None,
@@ -969,7 +969,7 @@ mod tests {
         let server = Server::new_with_prepairing(
             ServerConfig {
                 root_certificate: None,
-                advertised_endpoint: S2EndpointDescription::default(),
+                endpoint_description: S2EndpointDescription::default(),
                 advertised_nodes: vec![],
             },
             test_handler.clone(),
@@ -1008,7 +1008,7 @@ mod tests {
         let server = Server::new_with_prepairing(
             ServerConfig {
                 root_certificate: None,
-                advertised_endpoint: S2EndpointDescription::default(),
+                endpoint_description: S2EndpointDescription::default(),
                 advertised_nodes: vec![],
             },
             test_handler.clone(),
@@ -1050,7 +1050,7 @@ mod tests {
         let server = Server::new_with_prepairing(
             ServerConfig {
                 root_certificate: None,
-                advertised_endpoint: S2EndpointDescription::default(),
+                endpoint_description: S2EndpointDescription::default(),
                 advertised_nodes: vec![],
             },
             test_handler.clone(),
@@ -1092,7 +1092,7 @@ mod tests {
         let server = Server::new_with_prepairing(
             ServerConfig {
                 root_certificate: None,
-                advertised_endpoint: S2EndpointDescription::default(),
+                endpoint_description: S2EndpointDescription::default(),
                 advertised_nodes: vec![],
             },
             test_handler.clone(),
@@ -1125,7 +1125,7 @@ mod tests {
     async fn pair_attempt() {
         let server = Server::new(ServerConfig {
             root_certificate: None,
-            advertised_endpoint: S2EndpointDescription::default(),
+            endpoint_description: S2EndpointDescription::default(),
             advertised_nodes: vec![],
         });
         let pairing_waiter = server
@@ -1176,7 +1176,7 @@ mod tests {
     async fn pair_attempt_no_common_communication() {
         let server = Server::new(ServerConfig {
             root_certificate: None,
-            advertised_endpoint: S2EndpointDescription::default(),
+            endpoint_description: S2EndpointDescription::default(),
             advertised_nodes: vec![],
         });
         let pairing_waiter = server
@@ -1226,7 +1226,7 @@ mod tests {
     async fn pair_attempt_no_common_messages() {
         let server = Server::new(ServerConfig {
             root_certificate: None,
-            advertised_endpoint: S2EndpointDescription::default(),
+            endpoint_description: S2EndpointDescription::default(),
             advertised_nodes: vec![],
         });
         let pairing_waiter = server
@@ -1276,7 +1276,7 @@ mod tests {
     async fn pair_attempt_forced() {
         let server = Server::new(ServerConfig {
             root_certificate: None,
-            advertised_endpoint: S2EndpointDescription::default(),
+            endpoint_description: S2EndpointDescription::default(),
             advertised_nodes: vec![],
         });
         let pairing_waiter = server
@@ -1327,7 +1327,7 @@ mod tests {
     async fn pair_attempt_with_unknown_node() {
         let server = Server::new(ServerConfig {
             root_certificate: None,
-            advertised_endpoint: S2EndpointDescription::default(),
+            endpoint_description: S2EndpointDescription::default(),
             advertised_nodes: vec![],
         });
 
@@ -1364,7 +1364,7 @@ mod tests {
     async fn pair_attempt_same_role() {
         let server = Server::new(ServerConfig {
             root_certificate: None,
-            advertised_endpoint: S2EndpointDescription::default(),
+            endpoint_description: S2EndpointDescription::default(),
             advertised_nodes: vec![],
         });
         let pairing_waiter = server
@@ -1414,7 +1414,7 @@ mod tests {
     async fn request_connection_details() {
         let server = Server::new(ServerConfig {
             root_certificate: None,
-            advertised_endpoint: S2EndpointDescription::default(),
+            endpoint_description: S2EndpointDescription::default(),
             advertised_nodes: vec![],
         });
         let mut attempts = server.state.attempts.lock().unwrap();
@@ -1469,7 +1469,7 @@ mod tests {
     async fn request_connection_details_invalid_response() {
         let server = Server::new(ServerConfig {
             root_certificate: None,
-            advertised_endpoint: S2EndpointDescription::default(),
+            endpoint_description: S2EndpointDescription::default(),
             advertised_nodes: vec![],
         });
         let mut attempts = server.state.attempts.lock().unwrap();
@@ -1521,7 +1521,7 @@ mod tests {
     async fn request_connection_details_too_late() {
         let server = Server::new(ServerConfig {
             root_certificate: None,
-            advertised_endpoint: S2EndpointDescription::default(),
+            endpoint_description: S2EndpointDescription::default(),
             advertised_nodes: vec![],
         });
         let mut attempts = server.state.attempts.lock().unwrap();
@@ -1575,7 +1575,7 @@ mod tests {
     async fn post_connection_details() {
         let server = Server::new(ServerConfig {
             root_certificate: None,
-            advertised_endpoint: S2EndpointDescription::default(),
+            endpoint_description: S2EndpointDescription::default(),
             advertised_nodes: vec![],
         });
         let mut attempts = server.state.attempts.lock().unwrap();
@@ -1631,7 +1631,7 @@ mod tests {
     async fn post_connection_details_invalid_response() {
         let server = Server::new(ServerConfig {
             root_certificate: None,
-            advertised_endpoint: S2EndpointDescription::default(),
+            endpoint_description: S2EndpointDescription::default(),
             advertised_nodes: vec![],
         });
         let mut attempts = server.state.attempts.lock().unwrap();
@@ -1687,7 +1687,7 @@ mod tests {
     async fn post_connection_details_too_late() {
         let server = Server::new(ServerConfig {
             root_certificate: None,
-            advertised_endpoint: S2EndpointDescription::default(),
+            endpoint_description: S2EndpointDescription::default(),
             advertised_nodes: vec![],
         });
         let mut attempts = server.state.attempts.lock().unwrap();
@@ -1745,7 +1745,7 @@ mod tests {
     async fn finalize() {
         let server = Server::new(ServerConfig {
             root_certificate: None,
-            advertised_endpoint: S2EndpointDescription::default(),
+            endpoint_description: S2EndpointDescription::default(),
             advertised_nodes: vec![],
         });
         let mut attempts = server.state.attempts.lock().unwrap();
@@ -1788,7 +1788,7 @@ mod tests {
     async fn finalize_cancel() {
         let server = Server::new(ServerConfig {
             root_certificate: None,
-            advertised_endpoint: S2EndpointDescription::default(),
+            endpoint_description: S2EndpointDescription::default(),
             advertised_nodes: vec![],
         });
         let mut attempts = server.state.attempts.lock().unwrap();
@@ -1831,7 +1831,7 @@ mod tests {
     async fn finalize_cancel_at_intermediate() {
         let server = Server::new(ServerConfig {
             root_certificate: None,
-            advertised_endpoint: S2EndpointDescription::default(),
+            endpoint_description: S2EndpointDescription::default(),
             advertised_nodes: vec![],
         });
         let mut attempts = server.state.attempts.lock().unwrap();
@@ -1880,7 +1880,7 @@ mod tests {
     async fn finalize_unknown_session() {
         let server = Server::new(ServerConfig {
             root_certificate: None,
-            advertised_endpoint: S2EndpointDescription::default(),
+            endpoint_description: S2EndpointDescription::default(),
             advertised_nodes: vec![],
         });
 
@@ -1903,7 +1903,7 @@ mod tests {
     async fn finalize_cancel_unknown_session() {
         let server = Server::new(ServerConfig {
             root_certificate: None,
-            advertised_endpoint: S2EndpointDescription::default(),
+            endpoint_description: S2EndpointDescription::default(),
             advertised_nodes: vec![],
         });
 
