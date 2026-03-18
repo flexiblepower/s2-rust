@@ -1,14 +1,12 @@
-use std::sync::Arc;
-
 use reqwest::{StatusCode, Url};
 use rustls::pki_types::CertificateDer;
 use tracing::{Instrument, Span, debug, span, trace};
 
-use crate::S2NodeId;
 use crate::common::negotiate_version;
 use crate::common::wire::{AccessToken, Deployment, PairingVersion, S2Role};
 use crate::pairing::transport::{HashProvider, hash_providing_https_client};
 use crate::pairing::{Error, Pairing, PairingRole};
+use crate::{S2EndpointDescription, S2NodeId};
 
 use super::NodeConfig;
 use super::wire::*;
@@ -38,6 +36,8 @@ pub struct ClientConfig {
     ///
     /// When the remote is on the LAN, this is not used.
     pub additional_certificates: Vec<CertificateDer<'static>>,
+    /// Description of our endpoint.
+    pub endpoint_description: S2EndpointDescription,
     /// Where the pairing is deployed.
     pub pairing_deployment: Deployment,
 }
@@ -46,7 +46,7 @@ pub struct ClientConfig {
 ///
 /// Used as the client end of a pairing interaction.
 pub struct Client {
-    config: Arc<NodeConfig>,
+    endpoint_description: S2EndpointDescription,
     additional_certificates: Vec<CertificateDer<'static>>,
     pairing_deployment: Deployment,
 }
@@ -89,17 +89,17 @@ impl PrePairing<'_> {
 
 impl Client {
     /// Create a new client for pairing on an node with the given configuration.
-    pub fn new(config: Arc<NodeConfig>, client_config: ClientConfig) -> PairingResult<Self> {
+    pub fn new(client_config: ClientConfig) -> PairingResult<Self> {
         Ok(Self {
-            config,
+            endpoint_description: client_config.endpoint_description,
             additional_certificates: client_config.additional_certificates,
             pairing_deployment: client_config.pairing_deployment,
         })
     }
 
     /// Start a pre-pairing session with the remote. This can be used to trigger the remote to provide the user with a pairing code and such.
-    pub async fn prepair(&self, remote: PrePairingRemote) -> PairingResult<PrePairing<'_>> {
-        let span = span!(tracing::Level::ERROR, "prepair", local = %self.config.node_description.id, remote = ?remote);
+    pub async fn prepair<'a>(&self, local_node: &'a NodeConfig, remote: PrePairingRemote) -> PairingResult<PrePairing<'a>> {
+        let span = span!(tracing::Level::ERROR, "prepair", local = %local_node.node_description.id, remote = ?remote);
         let span_clone = span.clone();
         async move {
             trace!("Start pre-pairing with new remote.");
@@ -113,7 +113,7 @@ impl Client {
 
             match pairing_version {
                 PairingVersion::V1 => {
-                    V1Session::new(client, url, &self.config)
+                    V1Session::new(client, url, local_node, self.endpoint_description.clone())
                         .prepair(certhash, self.pairing_deployment, remote.id, span)
                         .await
                 }
@@ -124,8 +124,8 @@ impl Client {
     }
 
     /// Pair with a given remote S2 node, using the provided token.
-    #[tracing::instrument(skip_all, fields(local = %self.config.node_description.id, remote = ?remote), level = tracing::Level::ERROR)]
-    pub async fn pair(&self, remote: PairingRemote, pairing_token: &[u8]) -> PairingResult<Pairing> {
+    #[tracing::instrument(skip_all, fields(local = %local_node.node_description.id, remote = ?remote), level = tracing::Level::ERROR)]
+    pub async fn pair(&self, local_node: &NodeConfig, remote: PairingRemote, pairing_token: &[u8]) -> PairingResult<Pairing> {
         trace!("Start pairing with new remote.");
         let url = Url::try_from(remote.url.as_str()).map_err(|e| Error::new(ErrorKind::InvalidUrl, e))?;
 
@@ -137,7 +137,7 @@ impl Client {
 
         match pairing_version {
             PairingVersion::V1 => {
-                V1Session::new(client, url, &self.config)
+                V1Session::new(client, url, local_node, self.endpoint_description.clone())
                     .pair(certhash, self.pairing_deployment, remote.id, pairing_token)
                     .await
             }
@@ -167,14 +167,16 @@ impl Client {
 
 struct V1Session<'a> {
     client: reqwest::Client,
+    endpoint_description: S2EndpointDescription,
     base_url: Url,
     config: &'a NodeConfig,
 }
 
 impl<'a> V1Session<'a> {
-    fn new(client: reqwest::Client, url: Url, config: &'a NodeConfig) -> Self {
+    fn new(client: reqwest::Client, url: Url, config: &'a NodeConfig, endpoint_description: S2EndpointDescription) -> Self {
         V1Session {
             client,
+            endpoint_description,
             base_url: url.join("v1/").unwrap(),
             config,
         }
@@ -191,7 +193,7 @@ impl<'a> V1Session<'a> {
             .client
             .post(self.base_url.join("preparePairing").unwrap())
             .json(&PrePairingRequest {
-                client_s2_endpoint_description: self.config.endpoint_description.clone(),
+                client_s2_endpoint_description: self.endpoint_description.clone(),
                 client_s2_node_description: self.config.node_description.clone(),
                 server_id: Some(id),
             })
@@ -223,7 +225,7 @@ impl<'a> V1Session<'a> {
         id: PairingS2NodeId,
         pairing_token: &[u8],
     ) -> PairingResult<Pairing> {
-        let our_deployment = self.config.endpoint_description.deployment.unwrap_or(local_deployment);
+        let our_deployment = self.endpoint_description.deployment.unwrap_or(local_deployment);
         let our_role = self.config.node_description.role;
 
         let network = if self.base_url.domain().map(|v| v.ends_with(".local")).unwrap_or_default() {
@@ -403,7 +405,7 @@ impl<'a> V1Session<'a> {
     async fn request_pairing(&self, id: PairingS2NodeId, client_hmac_challenge: &HmacChallenge) -> PairingResult<RequestPairingResponse> {
         let request = RequestPairing {
             node_description: self.config.node_description.clone(),
-            endpoint_description: self.config.endpoint_description.clone(),
+            endpoint_description: self.endpoint_description.clone(),
             id: Some(id),
             supported_protocols: self.config.supported_communication_protocols.clone(),
             supported_versions: self.config.supported_message_versions.clone(),
@@ -488,7 +490,7 @@ mod tests {
         let server = Server::new_with_prepairing(
             ServerConfig {
                 root_certificate: None,
-                advertised_endpoint: S2EndpointDescription::default(),
+                endpoint_description: S2EndpointDescription::default(),
                 advertised_nodes: vec![],
             },
             handler,
@@ -545,16 +547,14 @@ mod tests {
             id: pairing_s2_node_id(),
         };
 
-        let client = Client::new(
-            Arc::new(client_config),
-            ClientConfig {
-                additional_certificates: vec![CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()],
-                pairing_deployment: Deployment::Wan,
-            },
-        )
+        let client = Client::new(ClientConfig {
+            additional_certificates: vec![CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()],
+            endpoint_description: S2EndpointDescription::default(),
+            pairing_deployment: Deployment::Wan,
+        })
         .unwrap();
 
-        let client_pairing = client.pair(remote, b"testtoken").await.unwrap();
+        let client_pairing = client.pair(&client_config, remote, b"testtoken").await.unwrap();
         let server_pairing = server_pairing.await.unwrap();
         assert_eq!(client_pairing.token, server_pairing.token);
         assert_ne!(client_pairing.role, server_pairing.role);
@@ -583,16 +583,14 @@ mod tests {
             id: pairing_s2_node_id(),
         };
 
-        let client = Client::new(
-            Arc::new(client_config),
-            ClientConfig {
-                additional_certificates: vec![CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()],
-                pairing_deployment: Deployment::Wan,
-            },
-        )
+        let client = Client::new(ClientConfig {
+            additional_certificates: vec![CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()],
+            endpoint_description: S2EndpointDescription::default(),
+            pairing_deployment: Deployment::Wan,
+        })
         .unwrap();
 
-        let client_pairing = client.pair(remote, b"testtoken").await.unwrap();
+        let client_pairing = client.pair(&client_config, remote, b"testtoken").await.unwrap();
         let server_pairing = server_pairing.await.unwrap();
         assert_eq!(client_pairing.token, server_pairing.token);
         assert_ne!(client_pairing.role, server_pairing.role);
@@ -662,16 +660,14 @@ mod tests {
             id: UUID_A.into(),
         };
 
-        let client = Client::new(
-            Arc::new(client_config),
-            ClientConfig {
-                additional_certificates: vec![CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()],
-                pairing_deployment: Deployment::Wan,
-            },
-        )
+        let client = Client::new(ClientConfig {
+            additional_certificates: vec![CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()],
+            endpoint_description: S2EndpointDescription::default(),
+            pairing_deployment: Deployment::Wan,
+        })
         .unwrap();
 
-        let client_prepair = client.prepair(remote).await.unwrap();
+        let client_prepair = client.prepair(&client_config, remote).await.unwrap();
         let client_pairing = client_prepair.pair(pairing_s2_node_id(), b"testtoken").await.unwrap();
         let server_pairing = server_pairing.await.unwrap();
         assert_eq!(client_pairing.token, server_pairing.token);
@@ -709,16 +705,14 @@ mod tests {
             id: UUID_A.into(),
         };
 
-        let client = Client::new(
-            Arc::new(client_config),
-            ClientConfig {
-                additional_certificates: vec![CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()],
-                pairing_deployment: Deployment::Wan,
-            },
-        )
+        let client = Client::new(ClientConfig {
+            additional_certificates: vec![CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()],
+            endpoint_description: S2EndpointDescription::default(),
+            pairing_deployment: Deployment::Wan,
+        })
         .unwrap();
 
-        let client_prepair = client.prepair(remote).await.unwrap();
+        let client_prepair = client.prepair(&client_config, remote).await.unwrap();
 
         let endpoint = test_handler.endpoint.lock().unwrap().take().unwrap();
         let node = test_handler.node.lock().unwrap().take().unwrap();
@@ -758,16 +752,14 @@ mod tests {
             id: UUID_A.into(),
         };
 
-        let client = Client::new(
-            Arc::new(client_config),
-            ClientConfig {
-                additional_certificates: vec![CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()],
-                pairing_deployment: Deployment::Wan,
-            },
-        )
+        let client = Client::new(ClientConfig {
+            additional_certificates: vec![CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()],
+            endpoint_description: S2EndpointDescription::default(),
+            pairing_deployment: Deployment::Wan,
+        })
         .unwrap();
 
-        let Err(client_prepair) = client.prepair(remote).await else {
+        let Err(client_prepair) = client.prepair(&client_config, remote).await else {
             panic!("Unexpected successfull prepairing");
         };
 
@@ -820,16 +812,14 @@ mod tests {
             id: pairing_s2_node_id(),
         };
 
-        let client = Client::new(
-            Arc::new(client_config),
-            ClientConfig {
-                additional_certificates: vec![CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()],
-                pairing_deployment: Deployment::Wan,
-            },
-        )
+        let client = Client::new(ClientConfig {
+            additional_certificates: vec![CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()],
+            endpoint_description: S2EndpointDescription::default(),
+            pairing_deployment: Deployment::Wan,
+        })
         .unwrap();
 
-        let client_pairing = client.pair(remote, b"testtoken").await.unwrap_err();
+        let client_pairing = client.pair(&client_config, remote, b"testtoken").await.unwrap_err();
         assert_eq!(client_pairing.kind(), ErrorKind::InvalidToken);
         assert_eq!(*finalize_result.lock().unwrap(), Some(false));
 
@@ -882,16 +872,14 @@ mod tests {
             id: pairing_s2_node_id(),
         };
 
-        let client = Client::new(
-            Arc::new(client_config),
-            ClientConfig {
-                additional_certificates: vec![CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()],
-                pairing_deployment: Deployment::Wan,
-            },
-        )
+        let client = Client::new(ClientConfig {
+            additional_certificates: vec![CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()],
+            endpoint_description: S2EndpointDescription::default(),
+            pairing_deployment: Deployment::Wan,
+        })
         .unwrap();
 
-        let client_pairing = client.pair(remote, b"testtoken").await.unwrap_err();
+        let client_pairing = client.pair(&client_config, remote, b"testtoken").await.unwrap_err();
         assert_eq!(client_pairing.kind(), ErrorKind::RemoteOfSameType);
         assert_eq!(*finalize_result.lock().unwrap(), Some(false));
 
@@ -940,16 +928,14 @@ mod tests {
             id: pairing_s2_node_id(),
         };
 
-        let client = Client::new(
-            Arc::new(client_config),
-            ClientConfig {
-                additional_certificates: vec![CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()],
-                pairing_deployment: Deployment::Wan,
-            },
-        )
+        let client = Client::new(ClientConfig {
+            additional_certificates: vec![CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()],
+            endpoint_description: S2EndpointDescription::default(),
+            pairing_deployment: Deployment::Wan,
+        })
         .unwrap();
 
-        let client_pairing = client.pair(remote, b"testtoken").await.unwrap_err();
+        let client_pairing = client.pair(&client_config, remote, b"testtoken").await.unwrap_err();
         assert_eq!(client_pairing.kind(), ErrorKind::RemoteOfSameType);
         assert_eq!(*finalize_result.lock().unwrap(), None);
 
@@ -989,16 +975,14 @@ mod tests {
             id: pairing_s2_node_id(),
         };
 
-        let client = Client::new(
-            Arc::new(client_config),
-            ClientConfig {
-                additional_certificates: vec![CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()],
-                pairing_deployment: Deployment::Wan,
-            },
-        )
+        let client = Client::new(ClientConfig {
+            additional_certificates: vec![CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()],
+            endpoint_description: S2EndpointDescription::default(),
+            pairing_deployment: Deployment::Wan,
+        })
         .unwrap();
 
-        let client_pairing = client.pair(remote, b"testtoken").await.unwrap_err();
+        let client_pairing = client.pair(&client_config, remote, b"testtoken").await.unwrap_err();
         assert_eq!(client_pairing.kind(), ErrorKind::ProtocolError);
         assert_eq!(*finalize_result.lock().unwrap(), Some(false));
 
@@ -1038,16 +1022,14 @@ mod tests {
             id: pairing_s2_node_id(),
         };
 
-        let client = Client::new(
-            Arc::new(client_config),
-            ClientConfig {
-                additional_certificates: vec![CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()],
-                pairing_deployment: Deployment::Wan,
-            },
-        )
+        let client = Client::new(ClientConfig {
+            additional_certificates: vec![CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()],
+            endpoint_description: S2EndpointDescription::default(),
+            pairing_deployment: Deployment::Wan,
+        })
         .unwrap();
 
-        let client_pairing = client.pair(remote, b"testtoken").await.unwrap_err();
+        let client_pairing = client.pair(&client_config, remote, b"testtoken").await.unwrap_err();
         assert_eq!(client_pairing.kind(), ErrorKind::ProtocolError);
         assert_eq!(*finalize_result.lock().unwrap(), Some(false));
 

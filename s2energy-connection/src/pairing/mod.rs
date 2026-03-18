@@ -47,8 +47,8 @@
 //! ```rust
 //! # use std::sync::Arc;
 //! # use s2energy_connection::pairing::{Client, ClientConfig, NodeConfig, PairingRemote, PairingS2NodeId};
-//! # use s2energy_connection::{Deployment, MessageVersion, S2NodeDescription, S2NodeId, S2Role};
-//! # let config = NodeConfig::builder(S2NodeDescription {
+//! # use s2energy_connection::{Deployment, MessageVersion, S2NodeDescription, S2EndpointDescription, S2NodeId, S2Role};
+//! # let local_node = NodeConfig::builder(S2NodeDescription {
 //! #     id: S2NodeId::new(),
 //! #     brand: String::from("super-reliable-corp"),
 //! #     logo_uri: None,
@@ -61,12 +61,13 @@
 //! # .build()
 //! # .unwrap();
 //!
-//! let client = Client::new(Arc::new(config), ClientConfig {
+//! let client = Client::new(ClientConfig {
 //!     pairing_deployment: Deployment::Lan,
+//!     endpoint_description: S2EndpointDescription::default(),
 //!     additional_certificates: vec![],
 //! }).unwrap();
 //!
-//! let pairing_result = client.pair(PairingRemote {
+//! let pairing_result = client.pair(&local_node, PairingRemote {
 //!     url: "https://remote.example.com".into(),
 //!     id: PairingS2NodeId("test_pairing_id".into()),
 //! }, b"ABCDEF0123456");
@@ -93,7 +94,7 @@
 //! # let addr = SocketAddr::from(([127, 0, 0, 1], 8005));
 //! let server = Server::new(ServerConfig {
 //!     root_certificate: None,
-//!     advertised_endpoint: S2EndpointDescription::default(),
+//!     endpoint_description: S2EndpointDescription::default(),
 //!     advertised_nodes: vec![],
 //! });
 //! tokio::spawn(async move {
@@ -123,7 +124,7 @@
 //! # let addr = SocketAddr::from(([127, 0, 0, 1], 8005));
 //! # let server = Server::new(ServerConfig {
 //! #     root_certificate: None,
-//! #     advertised_endpoint: S2EndpointDescription::default(),
+//! #     endpoint_description: S2EndpointDescription::default(),
 //! #     advertised_nodes: vec![],
 //! # });
 //! # let config = Arc::new(NodeConfig::builder(S2NodeDescription {
@@ -161,7 +162,7 @@
 //! # let addr = SocketAddr::from(([127, 0, 0, 1], 8005));
 //! # let server = Server::new(ServerConfig {
 //! #     root_certificate: None,
-//! #     advertised_endpoint: S2EndpointDescription::default(),
+//! #     endpoint_description: S2EndpointDescription::default(),
 //! #     advertised_nodes: vec![],
 //! # });
 //! # let config = Arc::new(NodeConfig::builder(S2NodeDescription {
@@ -214,7 +215,6 @@ use crate::{
 #[derive(Debug, Clone)]
 pub struct NodeConfig {
     node_description: S2NodeDescription,
-    endpoint_description: S2EndpointDescription,
     supported_message_versions: Vec<MessageVersion>,
     supported_communication_protocols: Vec<CommunicationProtocol>,
     connection_initiate_url: Option<String>,
@@ -224,11 +224,6 @@ impl NodeConfig {
     /// Description of the S2 node.
     pub fn node_description(&self) -> &S2NodeDescription {
         &self.node_description
-    }
-
-    /// Description of the endpoint hosting the node.
-    pub fn endpoint_description(&self) -> &S2EndpointDescription {
-        &self.endpoint_description
     }
 
     /// Message versions supported by this node.
@@ -253,7 +248,6 @@ impl NodeConfig {
     pub fn builder(node_description: S2NodeDescription, supported_message_versions: Vec<MessageVersion>) -> ConfigBuilder {
         ConfigBuilder {
             node_description,
-            endpoint_description: S2EndpointDescription::default(),
             supported_message_versions,
             supported_communication_protocols: vec![CommunicationProtocol("WebSocket".into())],
             connection_initiate_url: None,
@@ -264,7 +258,6 @@ impl NodeConfig {
 /// Builder for an [`NodeConfig`].
 pub struct ConfigBuilder {
     node_description: S2NodeDescription,
-    endpoint_description: S2EndpointDescription,
     supported_message_versions: Vec<MessageVersion>,
     supported_communication_protocols: Vec<CommunicationProtocol>,
     connection_initiate_url: Option<String>,
@@ -285,24 +278,13 @@ impl ConfigBuilder {
         self
     }
 
-    /// Set the endpoint description explicitly.
-    ///
-    /// By default, all fields in the endpoint description are unset. Note that this replaces any previous endpoint descriptions passed.
-    pub fn with_endpoint_description(mut self, endpoint_description: S2EndpointDescription) -> Self {
-        self.endpoint_description = endpoint_description;
-        self
-    }
-
     /// Create the actual [`NodeConfig`], validating that it is reasonable.
     pub fn build(self) -> Result<NodeConfig, ConfigError> {
-        if (self.node_description.role == S2Role::Cem || self.endpoint_description.deployment == Some(Deployment::Wan))
-            && self.connection_initiate_url.is_none()
-        {
+        if self.node_description.role == S2Role::Cem && self.connection_initiate_url.is_none() {
             return Err(ConfigError::MissingInitiateUrl);
         }
         Ok(NodeConfig {
             node_description: self.node_description,
-            endpoint_description: self.endpoint_description,
             supported_message_versions: self.supported_message_versions,
             supported_communication_protocols: self.supported_communication_protocols,
             connection_initiate_url: self.connection_initiate_url,
