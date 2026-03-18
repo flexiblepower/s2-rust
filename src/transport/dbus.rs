@@ -188,6 +188,7 @@ impl S2Transport for DBusConnection {
     }
 
     async fn receive(&mut self) -> Result<crate::common::Message, Self::TransportError> {
+        tracing::info!("Waiting on message stream now...");
         let serialized_contents = self.message_stream.next().await.ok_or(S2DBusError::EndOfStream)?.args()?.message;
         tracing::trace!("Received message over D-Bus: {serialized_contents:?}");
         let msg: crate::common::Message = serde_json::from_str(&serialized_contents)?;
