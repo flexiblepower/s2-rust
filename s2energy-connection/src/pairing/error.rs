@@ -141,11 +141,13 @@ pub enum ErrorKind {
     UnknownNode,
     /// Session timed out.
     Timeout,
-    /// Already a pending pairing session with that node id.
+    /// Already have a pending pairing or longpolling session with that node id.
     AlreadyPending,
     /// Provided token was invalid.
     InvalidToken,
-    /// The pairing session was cancelled.
+    /// Remote permanently rejects longpolling
+    Rejected,
+    /// The pairing or longpolling session was cancelled.
     Cancelled,
     /// The remote is of the same type.
     RemoteOfSameType,
@@ -162,9 +164,10 @@ impl std::fmt::Display for ErrorKind {
             Self::NoSupportedVersion => f.write_str("No overlap in versions"),
             Self::UnknownNode => f.write_str("Requested S2 Node not known to remote"),
             Self::Timeout => f.write_str("Timed out"),
-            Self::AlreadyPending => f.write_str("A pairing session for this node is already pending"),
+            Self::AlreadyPending => f.write_str("A pairing or longpolling session for this node is already pending"),
             Self::InvalidToken => f.write_str("The token used does not match with that of the remote"),
-            Self::Cancelled => f.write_str("Pairing was cancelled by remote"),
+            Self::Rejected => f.write_str("Longpolling was permanently rejected by remote"),
+            Self::Cancelled => f.write_str("Pairing or longpolling was cancelled by remote"),
             Self::RemoteOfSameType => f.write_str("Remote is of same type of us"),
             Self::InvalidConfig(config_error) => config_error.fmt(f),
         }

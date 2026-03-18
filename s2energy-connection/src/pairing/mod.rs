@@ -199,7 +199,7 @@ use rand::CryptoRng;
 
 use wire::{HmacChallenge, HmacChallengeResponse};
 
-pub use client::{Client, ClientConfig, PairingRemote};
+pub use client::{Client, ClientConfig, LongpollHandler, Longpoller, PairingRemote};
 pub use error::{ConfigError, Error, ErrorKind};
 pub use server::{
     LongpollingHandle, NoopPrePairingHandler, PairingToken, PairingTokenError, PendingPairing, PrePairingHandler, PrePairingResponse,
