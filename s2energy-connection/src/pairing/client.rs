@@ -53,6 +53,7 @@ pub struct Client {
     pairing_deployment: Deployment,
 }
 
+/// A currently active pre-pairing session with a remote.
 pub struct PrePairing<'a> {
     span: tracing::Span,
     remote_id: S2NodeId,
@@ -62,6 +63,7 @@ pub struct PrePairing<'a> {
 }
 
 impl PrePairing<'_> {
+    /// Indicate to the remote that we will not move towards actually pairing.
     pub async fn cancel(self) -> PairingResult<()> {
         self.session
             .client
@@ -77,11 +79,23 @@ impl PrePairing<'_> {
         Ok(())
     }
 
-    pub async fn pair(self, remote_id: Option<PairingS2NodeId>, pairing_token: &[u8]) -> PairingResult<Pairing> {
+    /// Actually pair with the remote using the given information.
+    ///
+    /// The callback will receive the result of the pairing attempt. If the client
+    /// S2 node becomes server for the communication, it must ensure it is ready to
+    /// handle the communication requests before returning Ok(()) from the callback.
+    ///
+    /// When the callback returns an error, the client will be notified of the error.
+    pub async fn pair<E: std::error::Error + Send + 'static>(
+        self,
+        remote_id: Option<PairingS2NodeId>,
+        pairing_token: &[u8],
+        callback: impl AsyncFnOnce(Pairing) -> Result<(), E>,
+    ) -> PairingResult<()> {
         async move {
             trace!("Start pairing after pre-pairing.");
             self.session
-                .pair(self.certhash, self.local_deployment, remote_id, pairing_token)
+                .pair(self.certhash, self.local_deployment, remote_id, pairing_token, callback)
                 .await
         }
         .instrument(self.span)
@@ -227,7 +241,7 @@ impl Client {
         })
     }
 
-    /// Create a longpoller for
+    /// Create a longpoller for a given remote.
     pub async fn longpoller(&self, remote: String) -> PairingResult<Longpoller> {
         let span = span!(tracing::Level::ERROR, "longpolling", remote);
         let span_clone = span.clone();
@@ -255,7 +269,8 @@ impl Client {
         .await
     }
 
-    /// Start a pre-pairing session with the remote. This can be used to trigger the remote to provide the user with a pairing code and such.
+    /// Start a pre-pairing session with the remote. This can be used to trigger the remote to
+    /// provide the user with a pairing code and such.
     pub async fn prepair<'a>(&self, local_node: &'a NodeConfig, remote: PrePairingRemote) -> PairingResult<PrePairing<'a>> {
         let span = span!(tracing::Level::ERROR, "prepair", local = %local_node.node_description.id, remote = ?remote);
         let span_clone = span.clone();
@@ -286,8 +301,20 @@ impl Client {
     }
 
     /// Pair with a given remote S2 node, using the provided token.
+    ///
+    /// The callback will receive the result of the pairing attempt. If the client
+    /// S2 node becomes server for the communication, it must ensure it is ready to
+    /// handle the communication requests before returning Ok(()) from the callback.
+    ///
+    /// When the callback returns an error, the client will be notified of the error.
     #[tracing::instrument(skip_all, fields(local = %local_node.node_description.id, remote = ?remote), level = tracing::Level::ERROR)]
-    pub async fn pair(&self, local_node: &NodeConfig, remote: PairingRemote, pairing_token: &[u8]) -> PairingResult<Pairing> {
+    pub async fn pair<E: std::error::Error + Send + 'static>(
+        &self,
+        local_node: &NodeConfig,
+        remote: PairingRemote,
+        pairing_token: &[u8],
+        callback: impl AsyncFnOnce(Pairing) -> Result<(), E>,
+    ) -> PairingResult<()> {
         if self.endpoint_description.deployment == Some(Deployment::Wan) && local_node.connection_initiate_url.is_none() {
             return Err(ErrorKind::InvalidConfig(ConfigError::MissingInitiateUrl).into());
         }
@@ -304,7 +331,7 @@ impl Client {
         match pairing_version {
             PairingVersion::V1 => {
                 V1Session::new(client, url, local_node, self.endpoint_description.clone())
-                    .pair(certhash, self.pairing_deployment, remote.id, pairing_token)
+                    .pair(certhash, self.pairing_deployment, remote.id, pairing_token, callback)
                     .await
             }
         }
@@ -384,13 +411,14 @@ impl<'a> V1Session<'a> {
         })
     }
 
-    async fn pair(
+    async fn pair<E: std::error::Error + Send + 'static>(
         self,
         certhash: Option<HashProvider>,
         local_deployment: Deployment,
         id: Option<PairingS2NodeId>,
         pairing_token: &[u8],
-    ) -> PairingResult<Pairing> {
+        callback: impl AsyncFnOnce(Pairing) -> Result<(), E>,
+    ) -> PairingResult<()> {
         let our_deployment = self.endpoint_description.deployment.unwrap_or(local_deployment);
         let our_role = self.config.node_description.role;
 
@@ -504,11 +532,29 @@ impl<'a> V1Session<'a> {
 
         trace!("Exchanged communication details.");
 
-        self.finalize(&attempt_id, true).await?;
+        if matches!(pairing.role, PairingRole::CommunicationServer) {
+            if let Err(e) = callback(pairing).await {
+                let _ = self.finalize(&attempt_id, false).await;
+                return Err(Error::new(
+                    ErrorKind::CallbackFailed,
+                    Box::new(e) as Box<dyn std::error::Error + Send + 'static>,
+                ));
+            }
+            self.finalize(&attempt_id, true).await?;
+        } else {
+            self.finalize(&attempt_id, true).await?;
+
+            callback(pairing).await.map_err(|e| {
+                Error::new(
+                    ErrorKind::CallbackFailed,
+                    Box::new(e) as Box<dyn std::error::Error + Send + 'static>,
+                )
+            })?;
+        }
 
         trace!("Confirmed pairing with remote.");
 
-        Ok(pairing)
+        Ok(())
     }
 
     async fn get_connection_details(
@@ -736,7 +782,15 @@ mod tests {
         })
         .unwrap();
 
-        let client_pairing = client.pair(&client_config, remote, b"testtoken").await.unwrap();
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        client
+            .pair(&client_config, remote, b"testtoken", async |pairing| {
+                tx.send(pairing).unwrap();
+                Ok::<_, std::io::Error>(())
+            })
+            .await
+            .unwrap();
+        let client_pairing = rx.await.unwrap();
         let server_pairing = server_pairing.await.unwrap();
         assert_eq!(client_pairing.token, server_pairing.token);
         assert_ne!(client_pairing.role, server_pairing.role);
@@ -772,7 +826,15 @@ mod tests {
         })
         .unwrap();
 
-        let client_pairing = client.pair(&client_config, remote, b"testtoken").await.unwrap();
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        client
+            .pair(&client_config, remote, b"testtoken", async |pairing| {
+                tx.send(pairing).unwrap();
+                Ok::<_, std::io::Error>(())
+            })
+            .await
+            .unwrap();
+        let client_pairing = rx.await.unwrap();
         let server_pairing = server_pairing.await.unwrap();
         assert_eq!(client_pairing.token, server_pairing.token);
         assert_ne!(client_pairing.role, server_pairing.role);
@@ -850,7 +912,15 @@ mod tests {
         .unwrap();
 
         let client_prepair = client.prepair(&client_config, remote).await.unwrap();
-        let client_pairing = client_prepair.pair(Some(pairing_s2_node_id()), b"testtoken").await.unwrap();
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        client_prepair
+            .pair(Some(pairing_s2_node_id()), b"testtoken", async |pairing| {
+                tx.send(pairing).unwrap();
+                Ok::<_, std::io::Error>(())
+            })
+            .await
+            .unwrap();
+        let client_pairing = rx.await.unwrap();
         let server_pairing = server_pairing.await.unwrap();
         assert_eq!(client_pairing.token, server_pairing.token);
         assert_ne!(client_pairing.role, server_pairing.role);
@@ -1001,7 +1071,12 @@ mod tests {
         })
         .unwrap();
 
-        let client_pairing = client.pair(&client_config, remote, b"testtoken").await.unwrap_err();
+        let client_pairing = client
+            .pair(&client_config, remote, b"testtoken", async |_| -> Result<(), std::io::Error> {
+                panic!("Should not be called on failure");
+            })
+            .await
+            .unwrap_err();
         assert_eq!(client_pairing.kind(), ErrorKind::InvalidToken);
         assert_eq!(*finalize_result.lock().unwrap(), Some(false));
 
@@ -1061,7 +1136,12 @@ mod tests {
         })
         .unwrap();
 
-        let client_pairing = client.pair(&client_config, remote, b"testtoken").await.unwrap_err();
+        let client_pairing = client
+            .pair(&client_config, remote, b"testtoken", async |_| -> Result<(), std::io::Error> {
+                panic!("Should not be called on failure");
+            })
+            .await
+            .unwrap_err();
         assert_eq!(client_pairing.kind(), ErrorKind::RemoteOfSameType);
         assert_eq!(*finalize_result.lock().unwrap(), Some(false));
 
@@ -1117,7 +1197,12 @@ mod tests {
         })
         .unwrap();
 
-        let client_pairing = client.pair(&client_config, remote, b"testtoken").await.unwrap_err();
+        let client_pairing = client
+            .pair(&client_config, remote, b"testtoken", async |_| -> Result<(), std::io::Error> {
+                panic!("Should not be called on failure");
+            })
+            .await
+            .unwrap_err();
         assert_eq!(client_pairing.kind(), ErrorKind::RemoteOfSameType);
         assert_eq!(*finalize_result.lock().unwrap(), None);
 
@@ -1164,7 +1249,12 @@ mod tests {
         })
         .unwrap();
 
-        let client_pairing = client.pair(&client_config, remote, b"testtoken").await.unwrap_err();
+        let client_pairing = client
+            .pair(&client_config, remote, b"testtoken", async |_| -> Result<(), std::io::Error> {
+                panic!("Should not be called on failure");
+            })
+            .await
+            .unwrap_err();
         assert_eq!(client_pairing.kind(), ErrorKind::ProtocolError);
         assert_eq!(*finalize_result.lock().unwrap(), Some(false));
 
@@ -1211,8 +1301,63 @@ mod tests {
         })
         .unwrap();
 
-        let client_pairing = client.pair(&client_config, remote, b"testtoken").await.unwrap_err();
+        let client_pairing = client
+            .pair(&client_config, remote, b"testtoken", async |_| -> Result<(), std::io::Error> {
+                panic!("Should not be called on failure");
+            })
+            .await
+            .unwrap_err();
         assert_eq!(client_pairing.kind(), ErrorKind::ProtocolError);
+        assert_eq!(*finalize_result.lock().unwrap(), Some(false));
+
+        server_handle.shutdown();
+    }
+
+    #[tokio::test]
+    async fn pairing_invokes_finalize_on_callback_failure() {
+        let server_config = NodeConfig::builder(basic_node_description(UUID_A, S2Role::Rm), vec![MessageVersion("v1".into())])
+            .with_connection_initiate_url("test.example.com".into())
+            .build()
+            .unwrap();
+
+        let client_config = NodeConfig::builder(basic_node_description(UUID_B, S2Role::Cem), vec![MessageVersion("v1".into())])
+            .with_connection_initiate_url("client.example.com".into())
+            .build()
+            .unwrap();
+
+        let finalize_result = Arc::new(Mutex::new(None));
+        let finalize_result_clone = finalize_result.clone();
+        let (server_handle, _, _) = setup_server(
+            server_config,
+            Router::new().route(
+                "/v1/finalizePairing",
+                post(|Json(success): Json<bool>| async move {
+                    *finalize_result_clone.lock().unwrap() = Some(success);
+                }),
+            ),
+        )
+        .await;
+
+        let addr = server_handle.listening().await.unwrap();
+        let remote = PairingRemote {
+            url: format!("https://localhost:{}/", addr.port()),
+            id: Some(pairing_s2_node_id()),
+        };
+
+        let client = Client::new(ClientConfig {
+            additional_certificates: vec![CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()],
+            endpoint_description: S2EndpointDescription::default(),
+            pairing_deployment: Deployment::Wan,
+        })
+        .unwrap();
+
+        let client_pairing = client
+            .pair(&client_config, remote, b"testtoken", async |_| -> Result<(), std::io::Error> {
+                Err(std::io::ErrorKind::Other.into())
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(client_pairing.kind(), ErrorKind::CallbackFailed);
         assert_eq!(*finalize_result.lock().unwrap(), Some(false));
 
         server_handle.shutdown();
@@ -1288,7 +1433,15 @@ mod tests {
                 id: Some(pairing_s2_node_id()),
             };
 
-            client.pair(&client_config, remote, b"testtoken").await.unwrap()
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            client
+                .pair(&client_config, remote, b"testtoken", async |pairing| {
+                    tx.send(pairing).unwrap();
+                    Ok::<_, std::io::Error>(())
+                })
+                .await
+                .unwrap();
+            rx.await.unwrap()
         };
 
         let server_task = async move {
