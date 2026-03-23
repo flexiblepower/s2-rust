@@ -69,7 +69,7 @@
 //!
 //! let pairing_result = client.pair(&local_node, PairingRemote {
 //!     url: "https://remote.example.com".into(),
-//!     id: PairingS2NodeId("test_pairing_id".into()),
+//!     id: Some(PairingS2NodeId("test_pairing_id".into())),
 //! }, b"ABCDEF0123456");
 //! ```
 //!
@@ -139,7 +139,7 @@
 //! # .with_connection_initiate_url("https://example.com/".into())
 //! # .build()
 //! # .unwrap());
-//! let pairing_result = server.pair_once(config, PairingS2NodeId("XYZ".into()), PairingToken(b"ABCDEF0123456".as_slice().into())).unwrap().result().await;
+//! let pairing_result = server.pair_once(config, Some(PairingS2NodeId("XYZ".into())), PairingToken(b"ABCDEF0123456".as_slice().into())).unwrap().result().await;
 //! # }
 //! ```
 //!
@@ -177,7 +177,7 @@
 //! # .with_connection_initiate_url("https://example.com/".into())
 //! # .build()
 //! # .unwrap());
-//! let mut pairing_results = server.pair_repeated(config, PairingS2NodeId("XYZ".into()), PairingToken(b"ABCDEF0123456".as_slice().into())).unwrap();
+//! let mut pairing_results = server.pair_repeated(config, Some(PairingS2NodeId("XYZ".into())), PairingToken(b"ABCDEF0123456".as_slice().into())).unwrap();
 //! while let Some(pairing_result) = pairing_results.next().await {
 //!     /* do something with the pairing result */
 //! }
