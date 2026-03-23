@@ -19,7 +19,7 @@ async fn main() {
         .init();
 
     let server = Server::new(ServerConfig {
-        root_certificate: None,
+        leaf_certificate: None,
         endpoint_description: S2EndpointDescription::default(),
         advertised_nodes: vec![],
     });

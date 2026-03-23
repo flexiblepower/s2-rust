@@ -655,7 +655,7 @@ mod tests {
     ) -> (Handle<SocketAddr>, JoinHandle<Pairing>, Server<impl PrePairingHandler>) {
         let mut server = Server::new_with_prepairing(
             ServerConfig {
-                root_certificate: None,
+                leaf_certificate: None,
                 endpoint_description: S2EndpointDescription::default(),
                 advertised_nodes: vec![],
             },
