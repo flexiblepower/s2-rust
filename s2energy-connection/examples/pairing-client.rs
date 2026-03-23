@@ -42,7 +42,8 @@ async fn main() {
     })
     .unwrap();
 
-    let pair_result = client
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    client
         .pair(
             &config,
             PairingRemote {
@@ -50,9 +51,14 @@ async fn main() {
                 id: Some(PairingS2NodeId("ninechars".into())),
             },
             PAIRING_TOKEN,
+            async |pairing| {
+                tx.send(pairing).unwrap();
+                Ok::<_, std::convert::Infallible>(())
+            },
         )
         .await
         .unwrap();
+    let pair_result = rx.await.unwrap();
 
     match pair_result.role {
         s2energy_connection::pairing::PairingRole::CommunicationClient { initiate_url } => {

@@ -70,7 +70,7 @@
 //! let pairing_result = client.pair(&local_node, PairingRemote {
 //!     url: "https://remote.example.com".into(),
 //!     id: Some(PairingS2NodeId("test_pairing_id".into())),
-//! }, b"ABCDEF0123456");
+//! }, b"ABCDEF0123456", async |pairing| { /* do something with pairing */ Ok::<_, std::convert::Infallible>(())});
 //! ```
 //!
 //! # Server usage
@@ -212,7 +212,7 @@ use rand::CryptoRng;
 
 use wire::{HmacChallenge, HmacChallengeResponse};
 
-pub use client::{Client, ClientConfig, LongpollHandler, Longpoller, PairingRemote};
+pub use client::{Client, ClientConfig, LongpollHandler, Longpoller, PairingRemote, PrePairing};
 pub use error::{ConfigError, Error, ErrorKind};
 pub use server::{
     LongpollingHandle, NoopPrePairingHandler, PairingToken, PairingTokenError, PrePairingHandler, PrePairingResponse, Server, ServerConfig,

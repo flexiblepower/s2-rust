@@ -72,6 +72,7 @@ enum WrappedError {
     Rustls(rustls::Error),
     Remote(PairingResponseErrorMessage),
     Longpolling(WaitForPairingErrorMessage),
+    Boxed(Box<dyn std::error::Error + Send + 'static>),
 }
 
 impl WrappedError {
@@ -83,6 +84,7 @@ impl WrappedError {
             Self::Rustls(error) => Some(error),
             Self::Remote(error) => Some(error),
             Self::Longpolling(error) => Some(error),
+            Self::Boxed(error) => Some(error.as_ref()),
         }
     }
 }
@@ -126,6 +128,12 @@ impl From<WaitForPairingErrorMessage> for WrappedError {
     }
 }
 
+impl From<Box<dyn std::error::Error + Send + 'static>> for WrappedError {
+    fn from(value: Box<dyn std::error::Error + Send + 'static>) -> Self {
+        Self::Boxed(value)
+    }
+}
+
 /// Kind of error that occured during the pairing process.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ErrorKind {
@@ -151,6 +159,8 @@ pub enum ErrorKind {
     Cancelled,
     /// The remote is of the same type.
     RemoteOfSameType,
+    /// The provided callback returned an error
+    CallbackFailed,
     /// The configuration was invalid.
     InvalidConfig(ConfigError),
 }
@@ -169,6 +179,7 @@ impl std::fmt::Display for ErrorKind {
             Self::Rejected => f.write_str("Longpolling was permanently rejected by remote"),
             Self::Cancelled => f.write_str("Pairing or longpolling was cancelled by remote"),
             Self::RemoteOfSameType => f.write_str("Remote is of same type of us"),
+            Self::CallbackFailed => f.write_str("Pairing could not be handled by callback"),
             Self::InvalidConfig(config_error) => config_error.fmt(f),
         }
     }
