@@ -5,7 +5,7 @@ use tracing::{Instrument, Span, debug, span, trace};
 use crate::common::negotiate_version;
 use crate::common::wire::{AccessToken, Deployment, PairingVersion, S2Role};
 use crate::pairing::transport::{HashProvider, hash_providing_https_client};
-use crate::pairing::{Error, Pairing, PairingRole};
+use crate::pairing::{ConfigError, Error, Pairing, PairingRole};
 use crate::{S2EndpointDescription, S2NodeId};
 
 use super::NodeConfig;
@@ -102,6 +102,10 @@ impl Client {
         let span = span!(tracing::Level::ERROR, "prepair", local = %local_node.node_description.id, remote = ?remote);
         let span_clone = span.clone();
         async move {
+            if self.endpoint_description.deployment == Some(Deployment::Wan) && local_node.connection_initiate_url.is_none() {
+                return Err(ErrorKind::InvalidConfig(ConfigError::MissingInitiateUrl).into());
+            }
+
             trace!("Start pre-pairing with new remote.");
             let url = Url::try_from(remote.url.as_str()).map_err(|e| Error::new(ErrorKind::InvalidUrl, e))?;
 
@@ -126,6 +130,10 @@ impl Client {
     /// Pair with a given remote S2 node, using the provided token.
     #[tracing::instrument(skip_all, fields(local = %local_node.node_description.id, remote = ?remote), level = tracing::Level::ERROR)]
     pub async fn pair(&self, local_node: &NodeConfig, remote: PairingRemote, pairing_token: &[u8]) -> PairingResult<Pairing> {
+        if self.endpoint_description.deployment == Some(Deployment::Wan) && local_node.connection_initiate_url.is_none() {
+            return Err(ErrorKind::InvalidConfig(ConfigError::MissingInitiateUrl).into());
+        }
+
         trace!("Start pairing with new remote.");
         let url = Url::try_from(remote.url.as_str()).map_err(|e| Error::new(ErrorKind::InvalidUrl, e))?;
 
