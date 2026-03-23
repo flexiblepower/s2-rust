@@ -61,23 +61,28 @@ async fn main() {
 
     let pairing_node_id = PairingS2NodeId("ninechars".into());
 
-    let pairing = server
+    let server_clone = server.clone();
+    server
         .pair_once(
             Arc::new(config.clone()),
             Some(pairing_node_id.clone()),
             PairingToken(PAIRING_TOKEN.into()),
+            async move |result| {
+                let pairing = result.unwrap();
+                println!("token: {}", pairing.token.0);
+                server_clone
+                    .pair_repeated(
+                        Arc::new(config),
+                        Some(pairing_node_id),
+                        PairingToken(PAIRING_TOKEN.into()),
+                        async |result| {
+                            println!("token: {}", result.unwrap().token.0);
+                            Ok::<_, std::io::Error>(())
+                        },
+                    )
+                    .unwrap();
+                Ok::<_, std::io::Error>(())
+            },
         )
-        .unwrap()
-        .result()
-        .await
         .unwrap();
-    println!("token: {}", pairing.token.0);
-
-    let mut repeated_pairing = server
-        .pair_repeated(Arc::new(config), Some(pairing_node_id), PairingToken(PAIRING_TOKEN.into()))
-        .unwrap();
-
-    while let Some(result) = repeated_pairing.next().await {
-        println!("token: {}", result.token.0);
-    }
 }

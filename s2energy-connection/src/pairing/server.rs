@@ -2,6 +2,7 @@
 use std::{
     collections::{HashMap, VecDeque},
     future::poll_fn,
+    pin::Pin,
     str::FromStr,
     sync::{Arc, Mutex},
     task::Poll,
@@ -135,34 +136,6 @@ pub struct ServerConfig {
     /// Initial set of nodes to advertise. This is only used if the server
     /// is deployed on LAN.
     pub advertised_nodes: Vec<S2NodeDescription>,
-}
-
-/// A pending one-time pairing transaction.
-pub struct PendingPairing {
-    receiver: tokio::sync::oneshot::Receiver<PairingResult<Pairing>>,
-}
-
-impl PendingPairing {
-    /// Wait for the result of the pairing transaction.
-    pub async fn result(self) -> PairingResult<Pairing> {
-        self.receiver.await.unwrap_or(Err(ErrorKind::Timeout.into()))
-    }
-}
-
-/// A repeated pairing with a fixed token, that can yield multiple pairings.
-pub struct RepeatedPairing {
-    receiver: tokio::sync::mpsc::Receiver<PairingResult<Pairing>>,
-}
-
-impl RepeatedPairing {
-    /// Wait for and return the next pairing result using the token associated with this repeated pairing.
-    pub async fn next(&mut self) -> Option<Pairing> {
-        loop {
-            if let Ok(pairing) = self.receiver.recv().await.transpose() {
-                break pairing;
-            }
-        }
-    }
 }
 
 /// Description of what response to
@@ -308,12 +281,20 @@ impl<H: PrePairingHandler> Server<H> {
     }
 
     /// Start a one-time pairing session for the given node using the given token.
-    pub fn pair_once(
+    ///
+    /// The callback will receive the result of the pairing attempt. If the server
+    /// S2 node also becomes server for the communication, it must ensure it is
+    /// ready to handle the communication requests before returning Ok(()) from
+    /// the callback.
+    ///
+    /// When the callback returns an error, the client will be notified of the error.
+    pub fn pair_once<E, F: Future<Output = Result<(), E>> + Send>(
         &self,
         config: Arc<NodeConfig>,
         pairing_node_id: Option<PairingS2NodeId>,
         pairing_token: PairingToken,
-    ) -> Result<PendingPairing, ErrorKind> {
+        callback: impl (FnOnce(PairingResult<Pairing>) -> F) + Send + 'static,
+    ) -> Result<(), ErrorKind> {
         if config.connection_initiate_url.is_none() {
             return Err(ErrorKind::InvalidConfig(super::ConfigError::MissingInitiateUrl));
         }
@@ -328,25 +309,32 @@ impl<H: PrePairingHandler> Server<H> {
             return Err(ErrorKind::AlreadyPending);
         }
         drop(permanent_pairings);
-        let (sender, receiver) = tokio::sync::oneshot::channel();
         open_pairings.insert(
             pairing_node_id,
             PairingRequest {
                 config,
-                sender: ResultSender::Oneshot(sender),
+                handler: ResultHandler::Oneshot(Box::new(|result| Box::pin(async move { callback(result).await.map_err(|_| ()) }))),
                 token: pairing_token,
             },
         );
-        Ok(PendingPairing { receiver })
+        Ok(())
     }
 
     /// Allow repeated pairing sessions for the given endpoing using the given token.
-    pub fn pair_repeated(
+    ///
+    /// The callback will receive the result of the pairing attempt. If the server
+    /// S2 node also becomes server for the communication, it must ensure it is
+    /// ready to handle the communication requests before returning Ok(()) from
+    /// the callback.
+    ///
+    /// When the callback returns an error, the client will be notified of the error.
+    pub fn pair_repeated<E, F: Future<Output = Result<(), E>> + Send>(
         &self,
         config: Arc<NodeConfig>,
         pairing_node_id: Option<PairingS2NodeId>,
         pairing_token: PairingToken,
-    ) -> Result<RepeatedPairing, ErrorKind> {
+        callback: impl (Fn(PairingResult<Pairing>) -> F) + Send + Sync + 'static,
+    ) -> Result<(), ErrorKind> {
         if config.connection_initiate_url.is_none() {
             return Err(ErrorKind::InvalidConfig(super::ConfigError::MissingInitiateUrl));
         }
@@ -359,16 +347,19 @@ impl<H: PrePairingHandler> Server<H> {
             return Err(ErrorKind::AlreadyPending);
         }
         drop(open_pairings);
-        let (sender, receiver) = tokio::sync::mpsc::channel(PERMANENT_PAIRING_BUFFER_SIZE);
+        let callback = Arc::new(callback);
         permanent_pairings.insert(
             pairing_node_id,
             PermanentPairingRequest {
                 config,
-                sender,
+                handler: Arc::new(move |result| {
+                    let cb = callback.clone();
+                    Box::pin(async move { cb(result).await.map_err(|_| ()) })
+                }),
                 token: pairing_token,
             },
         );
-        Ok(RepeatedPairing { receiver })
+        Ok(())
     }
 }
 
@@ -504,40 +495,40 @@ struct LongpollingStateInner {
     last_pairing_response: tokio::sync::watch::Sender<Option<Result<(), WaitForPairingErrorMessage>>>,
 }
 
-enum ResultSender {
-    Oneshot(tokio::sync::oneshot::Sender<PairingResult<Pairing>>),
-    Multi(tokio::sync::mpsc::Sender<PairingResult<Pairing>>),
+/// These don't keep the original errors in the results to limit the amount of boxing needed here.
+type OneshotHandler = Box<dyn (FnOnce(PairingResult<Pairing>) -> Pin<Box<dyn Future<Output = Result<(), ()>> + Send>>) + Send + 'static>;
+type MultiHandler = Arc<dyn (Fn(PairingResult<Pairing>) -> Pin<Box<dyn Future<Output = Result<(), ()>> + Send>>) + Send + Sync + 'static>;
+
+enum ResultHandler {
+    Oneshot(OneshotHandler),
+    Multi(MultiHandler),
 }
 
-impl ResultSender {
-    async fn send(self, result: PairingResult<Pairing>) {
+impl ResultHandler {
+    async fn handle(self, result: PairingResult<Pairing>) -> Result<(), ()> {
         match self {
-            Self::Oneshot(sender) => {
-                let _ = sender.send(result);
-            }
-            Self::Multi(sender) => {
-                let _ = sender.send(result).await;
-            }
-        };
+            Self::Oneshot(handler) => handler(result).await,
+            Self::Multi(handler) => handler(result).await,
+        }
     }
 }
 
 struct PermanentPairingRequest {
     config: Arc<NodeConfig>,
-    sender: tokio::sync::mpsc::Sender<PairingResult<Pairing>>,
+    handler: MultiHandler,
     token: PairingToken,
 }
 
 struct PairingRequest {
     config: Arc<NodeConfig>,
-    sender: ResultSender,
+    handler: ResultHandler,
     token: PairingToken,
 }
 
 struct InitialPairingState {
     session_span: tracing::Span,
     config: Arc<NodeConfig>,
-    sender: ResultSender,
+    sender: ResultHandler,
     challenge: HmacChallenge,
     token: PairingToken,
     remote_node_description: S2NodeDescription,
@@ -545,7 +536,7 @@ struct InitialPairingState {
 }
 struct CompletePairingState {
     session_span: tracing::Span,
-    sender: ResultSender,
+    sender: ResultHandler,
     remote_node_description: S2NodeDescription,
     remote_endpoint_description: S2EndpointDescription,
     access_token: AccessToken,
@@ -841,7 +832,7 @@ async fn v1_request_pairing<H>(
                 .ok_or(PairingResponseErrorMessage::S2NodeNotFound)?;
             PairingRequest {
                 config: entry.config.clone(),
-                sender: ResultSender::Multi(entry.sender.clone()),
+                handler: ResultHandler::Multi(entry.handler.clone()),
                 token: PairingToken(entry.token.0.clone()),
             }
         }
@@ -899,7 +890,7 @@ async fn v1_request_pairing<H>(
                             state: PairingState::Initial(InitialPairingState {
                                 session_span,
                                 config: open_pairing.config.clone(),
-                                sender: open_pairing.sender,
+                                sender: open_pairing.handler,
                                 challenge: server_hmac_challenge.clone(),
                                 token: open_pairing.token,
                                 remote_node_description: request_pairing.node_description,
@@ -959,7 +950,7 @@ async fn v1_request_connection_details<H>(
                 attempts.remove(&pairing_attempt_id);
                 return (
                     Err(StatusCode::FORBIDDEN),
-                    Some(state.sender.send(Err(ErrorKind::InvalidToken.into()))),
+                    Some(state.sender.handle(Err(ErrorKind::InvalidToken.into()))),
                 );
             }
 
@@ -1028,7 +1019,10 @@ async fn v1_post_connection_details<H>(
             let expected = state.challenge.sha256(&app_state.network, &state.token.0);
             if expected != req.server_hmac_challenge_response {
                 attempts.remove(&pairing_attempt_id);
-                return (StatusCode::FORBIDDEN, Some(state.sender.send(Err(ErrorKind::InvalidToken.into()))));
+                return (
+                    StatusCode::FORBIDDEN,
+                    Some(state.sender.handle(Err(ErrorKind::InvalidToken.into()))),
+                );
             }
 
             trace!("Validated remote's response to pairing token challenge.");
@@ -1083,9 +1077,9 @@ async fn v1_finalize_pairing<H>(
         let completion = async move {
             if success {
                 if let PairingState::Complete(state) = state {
-                    state
+                    let result = state
                         .sender
-                        .send(Ok(Pairing {
+                        .handle(Ok(Pairing {
                             remote_endpoint_description: state.remote_endpoint_description,
                             remote_node_description: state.remote_node_description,
                             token: state.access_token,
@@ -1094,8 +1088,11 @@ async fn v1_finalize_pairing<H>(
                         .await;
 
                     trace!("Finalized pairing session.");
-
-                    StatusCode::NO_CONTENT
+                    if result.is_ok() {
+                        StatusCode::NO_CONTENT
+                    } else {
+                        StatusCode::INTERNAL_SERVER_ERROR
+                    }
                 } else {
                     info!("Remote tried to finalize pairing session that did not yet have all the data exchanged.");
                     StatusCode::BAD_REQUEST
@@ -1105,7 +1102,7 @@ async fn v1_finalize_pairing<H>(
                     PairingState::Empty => { /* should never happen, but fine to ignore */ }
                     PairingState::Initial(InitialPairingState { sender, .. })
                     | PairingState::Complete(CompletePairingState { sender, .. }) => {
-                        sender.send(Err(ErrorKind::Cancelled.into())).await;
+                        sender.handle(Err(ErrorKind::Cancelled.into())).await;
                     }
                 }
 
@@ -1149,7 +1146,7 @@ mod tests {
         pairing::{
             ErrorKind, Network, NodeConfig, PairingRole, PairingS2NodeId, PairingToken, PrePairingHandler, PrePairingResponse, Server,
             ServerConfig,
-            server::{CompletePairingState, ExpiringPairingState, InitialPairingState, PairingRequest, PairingState, ResultSender},
+            server::{CompletePairingState, ExpiringPairingState, InitialPairingState, PairingRequest, PairingState, ResultHandler},
             wire::{
                 CancelPrePairingRequest, ConnectionDetails, HmacChallenge, HmacHashingAlgorithm, PairingAttemptId,
                 PairingResponseErrorMessage, PostConnectionDetailsRequest, PrePairingRequest, RequestConnectionDetailsRequest,
@@ -1475,7 +1472,7 @@ mod tests {
             endpoint_description: S2EndpointDescription::default(),
             advertised_nodes: vec![],
         });
-        let pairing_waiter = server
+        server
             .pair_once(
                 Arc::new(
                     NodeConfig::builder(basic_node_description(UUID_A, S2Role::Rm), vec![MessageVersion("v1".into())])
@@ -1485,6 +1482,7 @@ mod tests {
                 ),
                 Some(pairing_s2_node_id()),
                 PairingToken(b"testtoken".as_slice().into()),
+                async |_| Ok::<_, std::io::Error>(()),
             )
             .unwrap();
 
@@ -1526,7 +1524,7 @@ mod tests {
             endpoint_description: S2EndpointDescription::default(),
             advertised_nodes: vec![],
         });
-        let pairing_waiter = server
+        server
             .pair_once(
                 Arc::new(
                     NodeConfig::builder(basic_node_description(UUID_A, S2Role::Rm), vec![MessageVersion("v1".into())])
@@ -1536,6 +1534,7 @@ mod tests {
                 ),
                 Some(pairing_s2_node_id()),
                 PairingToken(b"testtoken".as_slice().into()),
+                async |_| Ok::<_, std::io::Error>(()),
             )
             .unwrap();
 
@@ -1576,7 +1575,7 @@ mod tests {
             endpoint_description: S2EndpointDescription::default(),
             advertised_nodes: vec![],
         });
-        let pairing_waiter = server
+        server
             .pair_once(
                 Arc::new(
                     NodeConfig::builder(basic_node_description(UUID_A, S2Role::Rm), vec![MessageVersion("v1".into())])
@@ -1586,6 +1585,7 @@ mod tests {
                 ),
                 Some(pairing_s2_node_id()),
                 PairingToken(b"testtoken".as_slice().into()),
+                async |_| Ok::<_, std::io::Error>(()),
             )
             .unwrap();
 
@@ -1626,7 +1626,7 @@ mod tests {
             endpoint_description: S2EndpointDescription::default(),
             advertised_nodes: vec![],
         });
-        let pairing_waiter = server
+        server
             .pair_once(
                 Arc::new(
                     NodeConfig::builder(basic_node_description(UUID_A, S2Role::Rm), vec![MessageVersion("v1".into())])
@@ -1636,6 +1636,7 @@ mod tests {
                 ),
                 Some(pairing_s2_node_id()),
                 PairingToken(b"testtoken".as_slice().into()),
+                async |_| Ok::<_, std::io::Error>(()),
             )
             .unwrap();
 
@@ -1714,7 +1715,7 @@ mod tests {
             endpoint_description: S2EndpointDescription::default(),
             advertised_nodes: vec![],
         });
-        let pairing_waiter = server
+        server
             .pair_once(
                 Arc::new(
                     NodeConfig::builder(basic_node_description(UUID_A, S2Role::Rm), vec![MessageVersion("v1".into())])
@@ -1724,6 +1725,7 @@ mod tests {
                 ),
                 Some(pairing_s2_node_id()),
                 PairingToken(b"testtoken".as_slice().into()),
+                async |_| Ok::<_, std::io::Error>(()),
             )
             .unwrap();
 
@@ -1765,7 +1767,6 @@ mod tests {
             advertised_nodes: vec![],
         });
         let mut attempts = server.state.attempts.lock().unwrap();
-        let (sender, _receiver) = tokio::sync::oneshot::channel();
         let challenge = HmacChallenge::new(&mut rand::rng(), 64);
         attempts.insert(
             PairingAttemptId("testid".into()),
@@ -1779,7 +1780,7 @@ mod tests {
                             .build()
                             .unwrap(),
                     ),
-                    sender: ResultSender::Oneshot(sender),
+                    sender: ResultHandler::Oneshot(Box::new(|_| Box::pin(async { Ok(()) }))),
                     challenge: challenge.clone(),
                     token: PairingToken(b"testtoken".as_slice().into()),
                     remote_node_description: basic_node_description(UUID_B, S2Role::Cem),
@@ -1820,7 +1821,6 @@ mod tests {
             advertised_nodes: vec![],
         });
         let mut attempts = server.state.attempts.lock().unwrap();
-        let (sender, _receiver) = tokio::sync::oneshot::channel();
         let challenge = HmacChallenge::new(&mut rand::rng(), 64);
         attempts.insert(
             PairingAttemptId("testid".into()),
@@ -1834,7 +1834,7 @@ mod tests {
                             .build()
                             .unwrap(),
                     ),
-                    sender: ResultSender::Oneshot(sender),
+                    sender: ResultHandler::Oneshot(Box::new(|_| Box::pin(async { Ok(()) }))),
                     challenge: challenge.clone(),
                     token: PairingToken(b"testtoken".as_slice().into()),
                     remote_node_description: basic_node_description(UUID_B, S2Role::Cem),
@@ -1872,7 +1872,6 @@ mod tests {
             advertised_nodes: vec![],
         });
         let mut attempts = server.state.attempts.lock().unwrap();
-        let (sender, _receiver) = tokio::sync::oneshot::channel();
         let challenge = HmacChallenge::new(&mut rand::rng(), 64);
         attempts.insert(
             PairingAttemptId("testid".into()),
@@ -1886,7 +1885,7 @@ mod tests {
                             .build()
                             .unwrap(),
                     ),
-                    sender: ResultSender::Oneshot(sender),
+                    sender: ResultHandler::Oneshot(Box::new(|_| Box::pin(async { Ok(()) }))),
                     challenge: challenge.clone(),
                     token: PairingToken(b"testtoken".as_slice().into()),
                     remote_node_description: basic_node_description(UUID_B, S2Role::Cem),
@@ -1926,7 +1925,6 @@ mod tests {
             advertised_nodes: vec![],
         });
         let mut attempts = server.state.attempts.lock().unwrap();
-        let (sender, _receiver) = tokio::sync::oneshot::channel();
         let challenge = HmacChallenge::new(&mut rand::rng(), 64);
         attempts.insert(
             PairingAttemptId("testid".into()),
@@ -1940,7 +1938,7 @@ mod tests {
                             .build()
                             .unwrap(),
                     ),
-                    sender: ResultSender::Oneshot(sender),
+                    sender: ResultHandler::Oneshot(Box::new(|_| Box::pin(async { Ok(()) }))),
                     challenge: challenge.clone(),
                     token: PairingToken(b"testtoken".as_slice().into()),
                     remote_node_description: basic_node_description(UUID_B, S2Role::Cem),
@@ -1982,7 +1980,6 @@ mod tests {
             advertised_nodes: vec![],
         });
         let mut attempts = server.state.attempts.lock().unwrap();
-        let (sender, _receiver) = tokio::sync::oneshot::channel();
         let challenge = HmacChallenge::new(&mut rand::rng(), 64);
         attempts.insert(
             PairingAttemptId("testid".into()),
@@ -1996,7 +1993,7 @@ mod tests {
                             .build()
                             .unwrap(),
                     ),
-                    sender: ResultSender::Oneshot(sender),
+                    sender: ResultHandler::Oneshot(Box::new(|_| Box::pin(async { Ok(()) }))),
                     challenge: challenge.clone(),
                     token: PairingToken(b"testtoken".as_slice().into()),
                     remote_node_description: basic_node_description(UUID_B, S2Role::Cem),
@@ -2038,7 +2035,6 @@ mod tests {
             advertised_nodes: vec![],
         });
         let mut attempts = server.state.attempts.lock().unwrap();
-        let (sender, _receiver) = tokio::sync::oneshot::channel();
         let challenge = HmacChallenge::new(&mut rand::rng(), 64);
         attempts.insert(
             PairingAttemptId("testid".into()),
@@ -2052,7 +2048,7 @@ mod tests {
                             .build()
                             .unwrap(),
                     ),
-                    sender: ResultSender::Oneshot(sender),
+                    sender: ResultHandler::Oneshot(Box::new(|_| Box::pin(async { Ok(()) }))),
                     challenge: challenge.clone(),
                     token: PairingToken(b"testtoken".as_slice().into()),
                     remote_node_description: basic_node_description(UUID_B, S2Role::Cem),
@@ -2104,7 +2100,12 @@ mod tests {
                 start_time: Instant::now(),
                 state: PairingState::Complete(CompletePairingState {
                     session_span: span!(Level::TRACE, "testspan"),
-                    sender: ResultSender::Oneshot(sender),
+                    sender: ResultHandler::Oneshot(Box::new(|result| {
+                        Box::pin(async move {
+                            sender.send(result);
+                            Ok(())
+                        })
+                    })),
                     remote_node_description: basic_node_description(UUID_B, S2Role::Cem),
                     remote_endpoint_description: S2EndpointDescription::default(),
                     access_token: AccessToken::new(&mut rand::rng()),
@@ -2147,7 +2148,12 @@ mod tests {
                 start_time: Instant::now(),
                 state: PairingState::Complete(CompletePairingState {
                     session_span: span!(Level::TRACE, "testspan"),
-                    sender: ResultSender::Oneshot(sender),
+                    sender: ResultHandler::Oneshot(Box::new(|result| {
+                        Box::pin(async move {
+                            sender.send(result);
+                            Ok(())
+                        })
+                    })),
                     remote_node_description: basic_node_description(UUID_B, S2Role::Cem),
                     remote_endpoint_description: S2EndpointDescription::default(),
                     access_token: AccessToken::new(&mut rand::rng()),
@@ -2196,7 +2202,12 @@ mod tests {
                             .build()
                             .unwrap(),
                     ),
-                    sender: ResultSender::Oneshot(sender),
+                    sender: ResultHandler::Oneshot(Box::new(|result| {
+                        Box::pin(async move {
+                            sender.send(result);
+                            Ok(())
+                        })
+                    })),
                     challenge: challenge.clone(),
                     token: PairingToken(b"testtoken".as_slice().into()),
                     remote_node_description: basic_node_description(UUID_B, S2Role::Cem),
@@ -2267,6 +2278,54 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn finalize_handler_failed() {
+        let server = Server::new(ServerConfig {
+            leaf_certificate: None,
+            endpoint_description: S2EndpointDescription::default(),
+            advertised_nodes: vec![],
+        });
+        let mut attempts = server.state.attempts.lock().unwrap();
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        let challenge = HmacChallenge::new(&mut rand::rng(), 64);
+        attempts.insert(
+            PairingAttemptId("testid".into()),
+            ExpiringPairingState {
+                start_time: Instant::now(),
+                state: PairingState::Complete(CompletePairingState {
+                    session_span: span!(Level::TRACE, "testspan"),
+                    sender: ResultHandler::Oneshot(Box::new(|result| {
+                        Box::pin(async move {
+                            sender.send(result);
+                            Err(())
+                        })
+                    })),
+                    remote_node_description: basic_node_description(UUID_B, S2Role::Cem),
+                    remote_endpoint_description: S2EndpointDescription::default(),
+                    access_token: AccessToken::new(&mut rand::rng()),
+                    role: PairingRole::CommunicationServer,
+                }),
+            },
+        );
+        drop(attempts);
+
+        let response = server
+            .get_router()
+            .oneshot(
+                http::Request::post("/v1/finalizePairing")
+                    .header(http::header::AUTHORIZATION, "Bearer testid")
+                    .header(http::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(serde_json::to_vec(&true).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let outcome = receiver.await.unwrap().unwrap();
+        assert_eq!(outcome.role, PairingRole::CommunicationServer);
     }
 
     #[tokio::test(start_paused = true)]
