@@ -289,10 +289,14 @@ impl<H: PrePairingHandler> Server<H> {
     pub async fn disable_longpolling(&mut self) {
         self.longpolling_enabled.send_replace(false);
         let mut receiver = self.pending_longpolling_handles.lock().await;
+        // Wait until all existing sessions are stopped. We need to drain any new
+        // handles simultaneously to make sure the futures for these sessions can
+        // make progress.
         let lock = tokio::select! {
             _ = async { loop { receiver.recv().await; } } => unreachable!(),
             lock = self.longpolling_sessions_active.write() => lock
         };
+        // Drain the remaining new longpolling handles.
         while receiver.try_recv().is_ok() {}
         self.state.longpolling_sessions.lock().unwrap().clear();
     }
