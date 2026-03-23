@@ -98,7 +98,7 @@ impl ServerCertVerifier for HashingCertificateVerifier {
                 let state = self.self_signed_state.get_or_init(|| {
                     let fallback = CertificateDer::from_slice(&[]);
                     let root_cert = intermediates.last().unwrap_or(&fallback);
-                    let hash = sha2::Sha256::digest(root_cert);
+                    let hash = sha2::Sha256::digest(end_entity);
                     let mut root_store = RootCertStore::empty();
                     // conciously ignore errors here, we just want to initialize
                     root_store.add(root_cert.clone()).ok();

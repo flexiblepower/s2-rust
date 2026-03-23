@@ -93,7 +93,7 @@
 //! # .unwrap();
 //! # let addr = SocketAddr::from(([127, 0, 0, 1], 8005));
 //! let server = Server::new(ServerConfig {
-//!     root_certificate: None,
+//!     leaf_certificate: None,
 //!     endpoint_description: S2EndpointDescription::default(),
 //!     advertised_nodes: vec![],
 //! });
@@ -123,7 +123,7 @@
 //! # .unwrap();
 //! # let addr = SocketAddr::from(([127, 0, 0, 1], 8005));
 //! # let server = Server::new(ServerConfig {
-//! #     root_certificate: None,
+//! #     leaf_certificate: None,
 //! #     endpoint_description: S2EndpointDescription::default(),
 //! #     advertised_nodes: vec![],
 //! # });
@@ -161,7 +161,7 @@
 //! # .unwrap();
 //! # let addr = SocketAddr::from(([127, 0, 0, 1], 8005));
 //! # let server = Server::new(ServerConfig {
-//! #     root_certificate: None,
+//! #     leaf_certificate: None,
 //! #     endpoint_description: S2EndpointDescription::default(),
 //! #     advertised_nodes: vec![],
 //! # });

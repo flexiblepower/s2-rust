@@ -129,7 +129,7 @@ impl<H> Clone for Server<H> {
 pub struct ServerConfig {
     /// The root certificate of the server, if we are using a self-signed root.
     /// Presence of this field indicates we are deployed on LAN.
-    pub root_certificate: Option<CertificateDer<'static>>,
+    pub leaf_certificate: Option<CertificateDer<'static>>,
     /// Endpoint description of the server
     pub endpoint_description: S2EndpointDescription,
     /// Initial set of nodes to advertise. This is only used if the server
@@ -236,7 +236,7 @@ impl<H: PrePairingHandler> Server<H> {
 
         let state = AppStateInner {
             network: server_config
-                .root_certificate
+                .leaf_certificate
                 .map(|v| Network::Lan {
                     fingerprint: sha2::Sha256::digest(v).into(),
                 })
@@ -1167,7 +1167,7 @@ mod tests {
     #[tokio::test]
     async fn version_negotiation() {
         let server = Server::new(ServerConfig {
-            root_certificate: None,
+            leaf_certificate: None,
             endpoint_description: S2EndpointDescription::default(),
             advertised_nodes: vec![],
         });
@@ -1185,7 +1185,7 @@ mod tests {
     #[tokio::test]
     async fn advertised_endpoint() {
         let server = Server::new(ServerConfig {
-            root_certificate: Some(CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()),
+            leaf_certificate: Some(CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()),
             endpoint_description: S2EndpointDescription {
                 name: Some("Testendpoint".into()),
                 logo_uri: None,
@@ -1208,7 +1208,7 @@ mod tests {
     #[tokio::test]
     async fn advertised_endpoint_wan() {
         let server = Server::new(ServerConfig {
-            root_certificate: None,
+            leaf_certificate: None,
             endpoint_description: S2EndpointDescription {
                 name: Some("Testendpoint".into()),
                 logo_uri: None,
@@ -1228,7 +1228,7 @@ mod tests {
     #[tokio::test]
     async fn advertised_nodes() {
         let server = Server::new(ServerConfig {
-            root_certificate: Some(CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()),
+            leaf_certificate: Some(CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()),
             endpoint_description: S2EndpointDescription {
                 name: Some("Testendpoint".into()),
                 logo_uri: None,
@@ -1251,7 +1251,7 @@ mod tests {
     #[tokio::test]
     async fn advertised_nodes_wan() {
         let server = Server::new(ServerConfig {
-            root_certificate: None,
+            leaf_certificate: None,
             endpoint_description: S2EndpointDescription {
                 name: Some("Testendpoint".into()),
                 logo_uri: None,
@@ -1313,7 +1313,7 @@ mod tests {
         let test_handler = TestPrePairingHandler::new(PrePairingResponse::Accept);
         let server = Server::new_with_prepairing(
             ServerConfig {
-                root_certificate: None,
+                leaf_certificate: None,
                 endpoint_description: S2EndpointDescription::default(),
                 advertised_nodes: vec![],
             },
@@ -1352,7 +1352,7 @@ mod tests {
         let test_handler = TestPrePairingHandler::new(PrePairingResponse::RejectNoS2Node);
         let server = Server::new_with_prepairing(
             ServerConfig {
-                root_certificate: None,
+                leaf_certificate: None,
                 endpoint_description: S2EndpointDescription::default(),
                 advertised_nodes: vec![],
             },
@@ -1394,7 +1394,7 @@ mod tests {
         let test_handler = TestPrePairingHandler::new(PrePairingResponse::RejectUnwantedRole);
         let server = Server::new_with_prepairing(
             ServerConfig {
-                root_certificate: None,
+                leaf_certificate: None,
                 endpoint_description: S2EndpointDescription::default(),
                 advertised_nodes: vec![],
             },
@@ -1436,7 +1436,7 @@ mod tests {
         let test_handler = TestPrePairingHandler::new(PrePairingResponse::Accept);
         let server = Server::new_with_prepairing(
             ServerConfig {
-                root_certificate: None,
+                leaf_certificate: None,
                 endpoint_description: S2EndpointDescription::default(),
                 advertised_nodes: vec![],
             },
@@ -1469,7 +1469,7 @@ mod tests {
     #[tokio::test]
     async fn pair_attempt() {
         let server = Server::new(ServerConfig {
-            root_certificate: None,
+            leaf_certificate: None,
             endpoint_description: S2EndpointDescription::default(),
             advertised_nodes: vec![],
         });
@@ -1520,7 +1520,7 @@ mod tests {
     #[tokio::test]
     async fn pair_attempt_no_common_communication() {
         let server = Server::new(ServerConfig {
-            root_certificate: None,
+            leaf_certificate: None,
             endpoint_description: S2EndpointDescription::default(),
             advertised_nodes: vec![],
         });
@@ -1570,7 +1570,7 @@ mod tests {
     #[tokio::test]
     async fn pair_attempt_no_common_messages() {
         let server = Server::new(ServerConfig {
-            root_certificate: None,
+            leaf_certificate: None,
             endpoint_description: S2EndpointDescription::default(),
             advertised_nodes: vec![],
         });
@@ -1620,7 +1620,7 @@ mod tests {
     #[tokio::test]
     async fn pair_attempt_forced() {
         let server = Server::new(ServerConfig {
-            root_certificate: None,
+            leaf_certificate: None,
             endpoint_description: S2EndpointDescription::default(),
             advertised_nodes: vec![],
         });
@@ -1671,7 +1671,7 @@ mod tests {
     #[tokio::test]
     async fn pair_attempt_with_unknown_node() {
         let server = Server::new(ServerConfig {
-            root_certificate: None,
+            leaf_certificate: None,
             endpoint_description: S2EndpointDescription::default(),
             advertised_nodes: vec![],
         });
@@ -1708,7 +1708,7 @@ mod tests {
     #[tokio::test]
     async fn pair_attempt_same_role() {
         let server = Server::new(ServerConfig {
-            root_certificate: None,
+            leaf_certificate: None,
             endpoint_description: S2EndpointDescription::default(),
             advertised_nodes: vec![],
         });
@@ -1758,7 +1758,7 @@ mod tests {
     #[tokio::test]
     async fn request_connection_details() {
         let server = Server::new(ServerConfig {
-            root_certificate: None,
+            leaf_certificate: None,
             endpoint_description: S2EndpointDescription::default(),
             advertised_nodes: vec![],
         });
@@ -1813,7 +1813,7 @@ mod tests {
     #[tokio::test]
     async fn request_connection_details_invalid_response() {
         let server = Server::new(ServerConfig {
-            root_certificate: None,
+            leaf_certificate: None,
             endpoint_description: S2EndpointDescription::default(),
             advertised_nodes: vec![],
         });
@@ -1865,7 +1865,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn request_connection_details_too_late() {
         let server = Server::new(ServerConfig {
-            root_certificate: None,
+            leaf_certificate: None,
             endpoint_description: S2EndpointDescription::default(),
             advertised_nodes: vec![],
         });
@@ -1919,7 +1919,7 @@ mod tests {
     #[tokio::test]
     async fn post_connection_details() {
         let server = Server::new(ServerConfig {
-            root_certificate: None,
+            leaf_certificate: None,
             endpoint_description: S2EndpointDescription::default(),
             advertised_nodes: vec![],
         });
@@ -1975,7 +1975,7 @@ mod tests {
     #[tokio::test]
     async fn post_connection_details_invalid_response() {
         let server = Server::new(ServerConfig {
-            root_certificate: None,
+            leaf_certificate: None,
             endpoint_description: S2EndpointDescription::default(),
             advertised_nodes: vec![],
         });
@@ -2031,7 +2031,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn post_connection_details_too_late() {
         let server = Server::new(ServerConfig {
-            root_certificate: None,
+            leaf_certificate: None,
             endpoint_description: S2EndpointDescription::default(),
             advertised_nodes: vec![],
         });
@@ -2089,7 +2089,7 @@ mod tests {
     #[tokio::test]
     async fn finalize() {
         let server = Server::new(ServerConfig {
-            root_certificate: None,
+            leaf_certificate: None,
             endpoint_description: S2EndpointDescription::default(),
             advertised_nodes: vec![],
         });
@@ -2132,7 +2132,7 @@ mod tests {
     #[tokio::test]
     async fn finalize_cancel() {
         let server = Server::new(ServerConfig {
-            root_certificate: None,
+            leaf_certificate: None,
             endpoint_description: S2EndpointDescription::default(),
             advertised_nodes: vec![],
         });
@@ -2175,7 +2175,7 @@ mod tests {
     #[tokio::test]
     async fn finalize_cancel_at_intermediate() {
         let server = Server::new(ServerConfig {
-            root_certificate: None,
+            leaf_certificate: None,
             endpoint_description: S2EndpointDescription::default(),
             advertised_nodes: vec![],
         });
@@ -2224,7 +2224,7 @@ mod tests {
     #[tokio::test]
     async fn finalize_unknown_session() {
         let server = Server::new(ServerConfig {
-            root_certificate: None,
+            leaf_certificate: None,
             endpoint_description: S2EndpointDescription::default(),
             advertised_nodes: vec![],
         });
@@ -2247,7 +2247,7 @@ mod tests {
     #[tokio::test]
     async fn finalize_cancel_unknown_session() {
         let server = Server::new(ServerConfig {
-            root_certificate: None,
+            leaf_certificate: None,
             endpoint_description: S2EndpointDescription::default(),
             advertised_nodes: vec![],
         });
@@ -2270,7 +2270,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn longpolling_timeout() {
         let mut server = Server::new(ServerConfig {
-            root_certificate: None,
+            leaf_certificate: None,
             endpoint_description: S2EndpointDescription::default(),
             advertised_nodes: vec![],
         });
@@ -2301,7 +2301,7 @@ mod tests {
     #[tokio::test]
     async fn longpolling_descriptions() {
         let mut server = Server::new(ServerConfig {
-            root_certificate: None,
+            leaf_certificate: None,
             endpoint_description: S2EndpointDescription::default(),
             advertised_nodes: vec![],
         });
@@ -2373,7 +2373,7 @@ mod tests {
     #[tokio::test]
     async fn longpolling_prepare_pairing() {
         let mut server = Server::new(ServerConfig {
-            root_certificate: None,
+            leaf_certificate: None,
             endpoint_description: S2EndpointDescription::default(),
             advertised_nodes: vec![],
         });
@@ -2438,7 +2438,7 @@ mod tests {
     #[tokio::test]
     async fn longpolling_cancel_prepare_pairing() {
         let mut server = Server::new(ServerConfig {
-            root_certificate: None,
+            leaf_certificate: None,
             endpoint_description: S2EndpointDescription::default(),
             advertised_nodes: vec![],
         });
@@ -2503,7 +2503,7 @@ mod tests {
     #[tokio::test]
     async fn longpolling_request_pairing_success() {
         let mut server = Server::new(ServerConfig {
-            root_certificate: None,
+            leaf_certificate: None,
             endpoint_description: S2EndpointDescription::default(),
             advertised_nodes: vec![],
         });
@@ -2584,7 +2584,7 @@ mod tests {
     #[tokio::test]
     async fn longpolling_request_pairing_failure() {
         let mut server = Server::new(ServerConfig {
-            root_certificate: None,
+            leaf_certificate: None,
             endpoint_description: S2EndpointDescription::default(),
             advertised_nodes: vec![],
         });
@@ -2652,7 +2652,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn longpolling_aborted_request_keeps_session_alive() {
         let mut server = Server::new(ServerConfig {
-            root_certificate: None,
+            leaf_certificate: None,
             endpoint_description: S2EndpointDescription::default(),
             advertised_nodes: vec![],
         });
@@ -2745,7 +2745,7 @@ mod tests {
 
     async fn longpolling_disable_during_request() {
         let mut server = Server::new(ServerConfig {
-            root_certificate: None,
+            leaf_certificate: None,
             endpoint_description: S2EndpointDescription::default(),
             advertised_nodes: vec![],
         });
