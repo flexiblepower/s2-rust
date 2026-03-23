@@ -311,12 +311,14 @@ impl<H: PrePairingHandler> Server<H> {
     pub fn pair_once(
         &self,
         config: Arc<NodeConfig>,
-        pairing_node_id: PairingS2NodeId,
+        pairing_node_id: Option<PairingS2NodeId>,
         pairing_token: PairingToken,
     ) -> Result<PendingPairing, ErrorKind> {
         if config.connection_initiate_url.is_none() {
             return Err(ErrorKind::InvalidConfig(super::ConfigError::MissingInitiateUrl));
         }
+
+        let pairing_node_id = pairing_node_id.unwrap_or(PairingS2NodeId(String::default()));
 
         // We hit issues here, because the node node_description only has S2NodeId with no
         // efficient way of mapping that back.
@@ -342,12 +344,14 @@ impl<H: PrePairingHandler> Server<H> {
     pub fn pair_repeated(
         &self,
         config: Arc<NodeConfig>,
-        pairing_node_id: PairingS2NodeId,
+        pairing_node_id: Option<PairingS2NodeId>,
         pairing_token: PairingToken,
     ) -> Result<RepeatedPairing, ErrorKind> {
         if config.connection_initiate_url.is_none() {
             return Err(ErrorKind::InvalidConfig(super::ConfigError::MissingInitiateUrl));
         }
+
+        let pairing_node_id = pairing_node_id.unwrap_or(PairingS2NodeId(String::default()));
 
         let mut open_pairings = self.state.open_pairings.lock().unwrap();
         let mut permanent_pairings = self.state.permanent_pairings.lock().unwrap();
@@ -824,23 +828,21 @@ async fn v1_request_pairing<H>(
 
     let server_hmac_challenge = HmacChallenge::new(&mut rand::rng(), HMAC_CHALLENGE_BYTES);
 
-    let open_pairing = match request_pairing.id {
-        None => todo!("handle missing request_pairing id"),
-        Some(ref pairing_s2_node_id) => {
-            let mut open_pairings = state.open_pairings.lock().unwrap();
-            if let Some((_, request)) = open_pairings.remove_entry(pairing_s2_node_id) {
-                request
-            } else {
-                drop(open_pairings);
-                let permanent_pairings = state.permanent_pairings.lock().unwrap();
-                let entry = permanent_pairings
-                    .get(pairing_s2_node_id)
-                    .ok_or(PairingResponseErrorMessage::S2NodeNotFound)?;
-                PairingRequest {
-                    config: entry.config.clone(),
-                    sender: ResultSender::Multi(entry.sender.clone()),
-                    token: PairingToken(entry.token.0.clone()),
-                }
+    let pairing_s2_node_id = request_pairing.id.unwrap_or(PairingS2NodeId(String::default()));
+    let open_pairing = {
+        let mut open_pairings = state.open_pairings.lock().unwrap();
+        if let Some((_, request)) = open_pairings.remove_entry(&pairing_s2_node_id) {
+            request
+        } else {
+            drop(open_pairings);
+            let permanent_pairings = state.permanent_pairings.lock().unwrap();
+            let entry = permanent_pairings
+                .get(&pairing_s2_node_id)
+                .ok_or(PairingResponseErrorMessage::S2NodeNotFound)?;
+            PairingRequest {
+                config: entry.config.clone(),
+                sender: ResultSender::Multi(entry.sender.clone()),
+                token: PairingToken(entry.token.0.clone()),
             }
         }
     };
@@ -1481,7 +1483,7 @@ mod tests {
                         .build()
                         .unwrap(),
                 ),
-                pairing_s2_node_id(),
+                Some(pairing_s2_node_id()),
                 PairingToken(b"testtoken".as_slice().into()),
             )
             .unwrap();
@@ -1532,7 +1534,7 @@ mod tests {
                         .build()
                         .unwrap(),
                 ),
-                pairing_s2_node_id(),
+                Some(pairing_s2_node_id()),
                 PairingToken(b"testtoken".as_slice().into()),
             )
             .unwrap();
@@ -1582,7 +1584,7 @@ mod tests {
                         .build()
                         .unwrap(),
                 ),
-                pairing_s2_node_id(),
+                Some(pairing_s2_node_id()),
                 PairingToken(b"testtoken".as_slice().into()),
             )
             .unwrap();
@@ -1632,7 +1634,7 @@ mod tests {
                         .build()
                         .unwrap(),
                 ),
-                pairing_s2_node_id(),
+                Some(pairing_s2_node_id()),
                 PairingToken(b"testtoken".as_slice().into()),
             )
             .unwrap();
@@ -1720,7 +1722,7 @@ mod tests {
                         .build()
                         .unwrap(),
                 ),
-                pairing_s2_node_id(),
+                Some(pairing_s2_node_id()),
                 PairingToken(b"testtoken".as_slice().into()),
             )
             .unwrap();

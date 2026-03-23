@@ -64,7 +64,7 @@ async fn main() {
     let pairing = server
         .pair_once(
             Arc::new(config.clone()),
-            pairing_node_id.clone(),
+            Some(pairing_node_id.clone()),
             PairingToken(PAIRING_TOKEN.into()),
         )
         .unwrap()
@@ -74,7 +74,7 @@ async fn main() {
     println!("token: {}", pairing.token.0);
 
     let mut repeated_pairing = server
-        .pair_repeated(Arc::new(config), pairing_node_id, PairingToken(PAIRING_TOKEN.into()))
+        .pair_repeated(Arc::new(config), Some(pairing_node_id), PairingToken(PAIRING_TOKEN.into()))
         .unwrap();
 
     while let Some(result) = repeated_pairing.next().await {

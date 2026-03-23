@@ -47,7 +47,7 @@ async fn main() {
             &config,
             PairingRemote {
                 url: "https://localhost:8005".into(),
-                id: PairingS2NodeId("ninechars".into()),
+                id: Some(PairingS2NodeId("ninechars".into())),
             },
             PAIRING_TOKEN,
         )
