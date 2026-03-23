@@ -139,7 +139,15 @@
 //! # .with_connection_initiate_url("https://example.com/".into())
 //! # .build()
 //! # .unwrap());
-//! let pairing_result = server.pair_once(config, Some(PairingS2NodeId("XYZ".into())), PairingToken(b"ABCDEF0123456".as_slice().into())).unwrap().result().await;
+//! server.pair_once(
+//!     config,
+//!     Some(PairingS2NodeId("XYZ".into())),
+//!     PairingToken(b"ABCDEF0123456".as_slice().into()),
+//!     async |pairing_result| {
+//!         /* ensure the pairing becomes usable/gets used */
+//!         Ok::<_, std::io::Error>(())
+//!     },
+//! ).unwrap();
 //! # }
 //! ```
 //!
@@ -177,10 +185,15 @@
 //! # .with_connection_initiate_url("https://example.com/".into())
 //! # .build()
 //! # .unwrap());
-//! let mut pairing_results = server.pair_repeated(config, Some(PairingS2NodeId("XYZ".into())), PairingToken(b"ABCDEF0123456".as_slice().into())).unwrap();
-//! while let Some(pairing_result) = pairing_results.next().await {
-//!     /* do something with the pairing result */
-//! }
+//! server.pair_repeated(
+//!     config,
+//!     Some(PairingS2NodeId("XYZ".into())),
+//!     PairingToken(b"ABCDEF0123456".as_slice().into()),
+//!     async |pairing_result| {
+//!         /* ensure the pairing becomes usable/gets used */
+//!         Ok::<_, std::io::Error>(())
+//!     },
+//! ).unwrap();
 //! # }
 //! ```
 //!
@@ -202,8 +215,7 @@ use wire::{HmacChallenge, HmacChallengeResponse};
 pub use client::{Client, ClientConfig, LongpollHandler, Longpoller, PairingRemote};
 pub use error::{ConfigError, Error, ErrorKind};
 pub use server::{
-    LongpollingHandle, NoopPrePairingHandler, PairingToken, PairingTokenError, PendingPairing, PrePairingHandler, PrePairingResponse,
-    RepeatedPairing, Server, ServerConfig,
+    LongpollingHandle, NoopPrePairingHandler, PairingToken, PairingTokenError, PrePairingHandler, PrePairingResponse, Server, ServerConfig,
 };
 pub use wire::PairingS2NodeId;
 

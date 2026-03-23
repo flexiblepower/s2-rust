@@ -684,16 +684,19 @@ mod tests {
         });
         let server_clone = server.clone();
         let server_pair_handle = tokio::spawn(async move {
+            let (tx, rx) = tokio::sync::oneshot::channel();
             server
                 .pair_once(
                     Arc::new(config),
                     Some(pairing_s2_node_id()),
                     PairingToken(b"testtoken".as_slice().into()),
+                    async |result| {
+                        tx.send(result).ok();
+                        Ok::<_, std::io::Error>(())
+                    },
                 )
-                .unwrap()
-                .result()
-                .await
-                .unwrap()
+                .unwrap();
+            rx.await.unwrap().unwrap()
         });
 
         (https_server_handle, server_pair_handle, server_clone)
