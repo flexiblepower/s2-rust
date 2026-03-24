@@ -41,6 +41,8 @@ const LONGPOLLING_HANDLE_BUFFER_SIZE: usize = 16;
 const LONGPOLLING_COMMAND_BUFFER_SIZE: usize = 1;
 
 const LONGPOLLING_RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
+const SESSION_TIMEOUT: Duration = Duration::from_secs(15);
+const ONCEPAIR_TIMEOUT: Duration = Duration::from_mins(15);
 
 /// Token known to both S2 nodes trying to pair.
 ///
@@ -315,6 +317,7 @@ impl<H: PrePairingHandler> Server<H> {
                 config,
                 handler: ResultHandler::Oneshot(Box::new(|result| Box::pin(async move { callback(result).await.map_err(|_| ()) }))),
                 token: pairing_token,
+                age: Instant::now(),
             },
         );
         Ok(())
@@ -523,6 +526,7 @@ struct PairingRequest {
     config: Arc<NodeConfig>,
     handler: ResultHandler,
     token: PairingToken,
+    age: Instant,
 }
 
 struct InitialPairingState {
@@ -834,6 +838,7 @@ async fn v1_request_pairing<H>(
                 config: entry.config.clone(),
                 handler: ResultHandler::Multi(entry.handler.clone()),
                 token: PairingToken(entry.token.0.clone()),
+                age: Instant::now(),
             }
         }
     };
@@ -843,6 +848,12 @@ async fn v1_request_pairing<H>(
 
     async move {
         trace!("Found open pairing session.");
+
+        if Instant::now().duration_since(open_pairing.age) > ONCEPAIR_TIMEOUT {
+            trace!("Pairing session timed out");
+            open_pairing.handler.handle(Err(ErrorKind::Timeout.into())).await;
+            return Err(PairingResponseErrorMessage::S2NodeNotFound);
+        }
 
         if open_pairing.config.node_description.role == request_pairing.node_description.role {
             return Err(PairingResponseErrorMessage::InvalidCombinationOfRoles);
