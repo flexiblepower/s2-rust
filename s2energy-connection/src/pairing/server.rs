@@ -4,7 +4,7 @@ use std::{
     future::poll_fn,
     pin::Pin,
     str::FromStr,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, OnceLock, Weak},
     task::Poll,
     time::Duration,
 };
@@ -22,13 +22,14 @@ use rustls::pki_types::CertificateDer;
 use sha2::Digest;
 use tokio::{
     net::unix::pipe::Receiver,
+    task::JoinHandle,
     time::{Instant, timeout},
 };
 use tracing::{Instrument, info, trace};
 
 use crate::{
     common::{
-        root,
+        AbortingJoinHandle, root,
         wire::{AccessToken, PairingVersion, S2EndpointDescription, S2NodeDescription, S2NodeId},
     },
     pairing::{Error, PairingRole},
@@ -40,9 +41,11 @@ const PERMANENT_PAIRING_BUFFER_SIZE: usize = 1;
 const LONGPOLLING_HANDLE_BUFFER_SIZE: usize = 16;
 const LONGPOLLING_COMMAND_BUFFER_SIZE: usize = 1;
 
+const LONGPOLLING_HTTP_TIMEOUT: Duration = Duration::from_secs(25);
 const LONGPOLLING_RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
 const SESSION_TIMEOUT: Duration = Duration::from_secs(15);
 const ONCEPAIR_TIMEOUT: Duration = Duration::from_mins(15);
+const TIMEOUT_SLACK: Duration = Duration::from_secs(5);
 
 /// Token known to both S2 nodes trying to pair.
 ///
@@ -226,10 +229,18 @@ impl<H: PrePairingHandler> Server<H> {
             longpolling_sessions_active: longpolling_sessions_active.clone(),
             longpolling_sessions: Mutex::new(HashMap::new()),
             longpolling_handle_sender,
+            cleanup_task: OnceLock::new(),
         };
 
+        let state = Arc::new(state);
+
+        state
+            .cleanup_task
+            .set(tokio::spawn(periodic_cleanup(Arc::downgrade(&state))).into())
+            .ok();
+
         Self {
-            state: Arc::new(state),
+            state,
             longpolling_enabled: longpolling_enabled_sender,
             longpolling_sessions_active,
             pending_longpolling_handles: Arc::new(tokio::sync::Mutex::new(pending_longpolling_handles)),
@@ -604,6 +615,7 @@ struct AppStateInner<H> {
     longpolling_sessions_active: Arc<tokio::sync::RwLock<()>>,
     longpolling_sessions: Mutex<HashMap<S2NodeId, LongpollingState>>,
     longpolling_handle_sender: tokio::sync::mpsc::Sender<LongpollingHandle>,
+    cleanup_task: OnceLock<AbortingJoinHandle<()>>,
 }
 
 // Holder for longpolling sessions during a session. Returns
@@ -648,6 +660,45 @@ impl<H> Drop for LocalLongpollingCache<H> {
                 },
             );
         }
+    }
+}
+
+async fn periodic_cleanup<H: PrePairingHandler>(state: Weak<AppStateInner<H>>) {
+    loop {
+        let now = Instant::now();
+        let Some(state) = state.upgrade() else {
+            return;
+        };
+
+        // longpolling
+        {
+            let mut longpolling_sessions = state.longpolling_sessions.lock().unwrap();
+            longpolling_sessions.retain(|_, value| match value {
+                LongpollingState::Disconnected { since, state } => {
+                    now.duration_since(*since) < LONGPOLLING_RESPONSE_TIMEOUT + TIMEOUT_SLACK
+                }
+                LongpollingState::Running {
+                    since,
+                    last_pairing_response,
+                } => now.duration_since(*since) < LONGPOLLING_HTTP_TIMEOUT + TIMEOUT_SLACK,
+            });
+        }
+
+        // Active pairing sessions
+        {
+            let mut attempts = state.attempts.lock().unwrap();
+            attempts.retain(|_, value| now.duration_since(value.start_time) < SESSION_TIMEOUT + TIMEOUT_SLACK);
+        }
+
+        // Open pairing sessions
+        {
+            let mut open_pairings = state.open_pairings.lock().unwrap();
+            open_pairings.retain(|_, value| now.duration_since(value.age) < ONCEPAIR_TIMEOUT + TIMEOUT_SLACK);
+        }
+
+        drop(state);
+
+        tokio::time::sleep(TIMEOUT_SLACK).await;
     }
 }
 
@@ -740,7 +791,7 @@ async fn v1_wait_for_pairing<H>(
     // Wait for something to communicate back to client
     tokio::select! {
         outcome = timeout(
-            Duration::from_secs(25),
+            LONGPOLLING_HTTP_TIMEOUT,
             poll_fn(|cx| {
                 for (k, v) in states.iter_mut() {
                     if let Poll::Ready(message) = v.commands.poll_recv(cx) {

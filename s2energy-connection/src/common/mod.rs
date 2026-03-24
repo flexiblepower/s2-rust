@@ -4,6 +4,7 @@ pub(crate) mod websocket_extractor;
 pub(crate) mod wire;
 
 use reqwest::{StatusCode, Url};
+use tokio::task::JoinHandle;
 use tracing::{debug, trace};
 use wire::PairingVersion;
 
@@ -122,4 +123,18 @@ pub(crate) async fn negotiate_version(client: &reqwest::Client, url: Url) -> Res
 
     trace!("No shared pairing version between client and server.");
     Err(BaseErrorKind::NoSupportedVersion.into())
+}
+
+pub(crate) struct AbortingJoinHandle<T>(pub(crate) JoinHandle<T>);
+
+impl<T> Drop for AbortingJoinHandle<T> {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+impl<T> From<JoinHandle<T>> for AbortingJoinHandle<T> {
+    fn from(value: JoinHandle<T>) -> Self {
+        Self(value)
+    }
 }

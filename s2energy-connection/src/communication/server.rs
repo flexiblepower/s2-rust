@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, OnceLock, Weak},
     time::Duration,
 };
 
@@ -11,11 +11,12 @@ use axum::{
     routing::{get, post},
 };
 use reqwest::StatusCode;
+use tokio::time::Instant;
 use tracing::{Instrument, info, trace};
 
 use crate::{
     CommunicationProtocol, MessageVersion, S2EndpointDescription, S2NodeDescription, S2NodeId,
-    common::{root, websocket_extractor::WebSocketUpgrade, wire::AccessToken},
+    common::{AbortingJoinHandle, root, websocket_extractor::WebSocketUpgrade, wire::AccessToken},
     communication::{
         ConnectionInfo, NodeConfig, WebSocketTransport,
         wire::{
@@ -24,6 +25,9 @@ use crate::{
         },
     },
 };
+
+const SESSION_TIMEOUT: Duration = Duration::from_secs(15);
+const TIMEOUT_SLACK: Duration = Duration::from_secs(5);
 
 // Maximum number of pending connections on the channel between the actual server handler and the server api.
 const BUFFER_SIZE: usize = 1;
@@ -104,6 +108,7 @@ struct AppStateInner<Store> {
     base_url: String,
     endpoint_description: Option<S2EndpointDescription>,
     connection_sender: tokio::sync::mpsc::Sender<(PairingLookup, ConnectionInfo)>,
+    cleanup_task: OnceLock<AbortingJoinHandle<()>>,
 }
 
 struct Expiring<S> {
@@ -113,7 +118,7 @@ struct Expiring<S> {
 
 impl<S> Expiring<S> {
     fn into_state(self) -> Option<S> {
-        if self.start_time.elapsed() > Duration::from_secs(15) {
+        if self.start_time.elapsed() > SESSION_TIMEOUT {
             None
         } else {
             Some(self.session)
@@ -143,15 +148,24 @@ impl<Store: ServerPairingStore> Server<Store> {
     /// Create a new server given a configuration and a storage provider for the pairing sessions.
     pub fn new(config: ServerConfig, store: Store) -> Self {
         let (connection_sender, connection_receiver) = tokio::sync::mpsc::channel(BUFFER_SIZE);
+
+        let app_state = Arc::new(AppStateInner {
+            store,
+            pending_tokens: Mutex::new(HashMap::new()),
+            pending_websockets: Mutex::new(HashMap::new()),
+            base_url: config.base_url,
+            endpoint_description: config.endpoint_description,
+            connection_sender,
+            cleanup_task: OnceLock::new(),
+        });
+
+        app_state
+            .cleanup_task
+            .set(tokio::spawn(periodic_cleanup(Arc::downgrade(&app_state))).into())
+            .ok();
+
         Server {
-            app_state: Arc::new(AppStateInner {
-                store,
-                pending_tokens: Mutex::new(HashMap::new()),
-                pending_websockets: Mutex::new(HashMap::new()),
-                base_url: config.base_url,
-                endpoint_description: config.endpoint_description,
-                connection_sender,
-            }),
+            app_state,
             connection_receiver,
         }
     }
@@ -193,6 +207,31 @@ fn select_overlap<T: Eq + Clone>(primary: &[T], secondary: &[T]) -> Option<T> {
     }
 
     None
+}
+
+async fn periodic_cleanup<Store>(state: Weak<AppStateInner<Store>>) {
+    loop {
+        let now = Instant::now();
+        let Some(state) = state.upgrade() else {
+            return;
+        };
+
+        // pending tokens
+        {
+            let mut pending_tokens = state.pending_tokens.lock().unwrap();
+            pending_tokens.retain(|_, value| now.duration_since(value.start_time) < SESSION_TIMEOUT + TIMEOUT_SLACK);
+        }
+
+        // pending websockets
+        {
+            let mut pending_websockets = state.pending_websockets.lock().unwrap();
+            pending_websockets.retain(|_, value| now.duration_since(value.start_time) < SESSION_TIMEOUT + TIMEOUT_SLACK);
+        }
+
+        drop(state);
+
+        tokio::time::sleep(TIMEOUT_SLACK).await;
+    }
 }
 
 fn v1_router<Store: ServerPairingStore>() -> Router<AppState<Store>> {
