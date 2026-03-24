@@ -1,8 +1,8 @@
-use s2energy_connection::{S2Role, discovery::S2Discoverer};
+use s2energy_connection::{Role, discovery::S2Discoverer};
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
-    let mut discoverer = S2Discoverer::new(S2Role::Cem).await.unwrap();
+    let mut discoverer = S2Discoverer::new(Role::Cem).await.unwrap();
 
     while let Ok(event) = discoverer.next_event().await {
         match event {

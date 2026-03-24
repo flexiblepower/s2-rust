@@ -30,7 +30,7 @@ use tracing::{Instrument, info, trace};
 use crate::{
     common::{
         AbortingJoinHandle, root,
-        wire::{AccessToken, PairingVersion, S2EndpointDescription, S2NodeDescription, S2NodeId},
+        wire::{AccessToken, EndpointDescription, NodeDescription, NodeId, PairingVersion},
     },
     pairing::{Error, PairingRole},
 };
@@ -137,10 +137,10 @@ pub struct ServerConfig {
     /// Presence of this field indicates we are deployed on LAN.
     pub leaf_certificate: Option<CertificateDer<'static>>,
     /// Endpoint description of the server
-    pub endpoint_description: S2EndpointDescription,
+    pub endpoint_description: EndpointDescription,
     /// Initial set of nodes to advertise. This is only used if the server
     /// is deployed on LAN.
-    pub advertised_nodes: Vec<S2NodeDescription>,
+    pub advertised_nodes: Vec<NodeDescription>,
 }
 
 /// Description of what response to
@@ -164,16 +164,12 @@ pub enum PrePairingResponse {
 // operations.
 pub trait PrePairingHandler: Send + Sync + 'static {
     /// Handle a request for pre-pairing, and indicate our willingness.
-    fn prepairing_requested(
-        &self,
-        endpoint: S2EndpointDescription,
-        node: S2NodeDescription,
-        target_node: Option<S2NodeId>,
-    ) -> PrePairingResponse;
+    fn prepairing_requested(&self, endpoint: EndpointDescription, node: NodeDescription, target_node: Option<NodeId>)
+    -> PrePairingResponse;
     /// Handle a cancel event for pre-pairing. Note that not every pre-pairing
     /// request will result in a cancel or a pairing interaction, so timeouts
     /// may be needed.
-    fn prepairing_cancelled(&self, id: S2NodeId, target_node: Option<S2NodeId>);
+    fn prepairing_cancelled(&self, id: NodeId, target_node: Option<NodeId>);
 }
 
 /// A pre-pairing handler that does nothing on receiving a pre-pairing request.
@@ -184,15 +180,15 @@ pub struct NoopPrePairingHandler;
 impl PrePairingHandler for NoopPrePairingHandler {
     fn prepairing_requested(
         &self,
-        _endpoint: S2EndpointDescription,
-        _node: S2NodeDescription,
-        _target_node: Option<S2NodeId>,
+        _endpoint: EndpointDescription,
+        _node: NodeDescription,
+        _target_node: Option<NodeId>,
     ) -> PrePairingResponse {
         // no reason not to accept
         PrePairingResponse::Accept
     }
 
-    fn prepairing_cancelled(&self, _id: S2NodeId, _target_node: Option<S2NodeId>) {
+    fn prepairing_cancelled(&self, _id: NodeId, _target_node: Option<NodeId>) {
         // noop
     }
 }
@@ -262,7 +258,7 @@ impl<H: PrePairingHandler> Server<H> {
     /// Update the nodes advertised by this server.
     ///
     /// These are only used when the server is on a LAN.
-    pub fn update_advertised_nodes(&self, advertised_nodes: Vec<S2NodeDescription>) {
+    pub fn update_advertised_nodes(&self, advertised_nodes: Vec<NodeDescription>) {
         *self.state.advertised_nodes.lock().unwrap() = advertised_nodes;
     }
 
@@ -304,7 +300,7 @@ impl<H: PrePairingHandler> Server<H> {
     pub fn allow_pair_once<E, F: Future<Output = Result<(), E>> + Send>(
         &self,
         config: Arc<NodeConfig>,
-        pairing_node_id: Option<PairingS2NodeId>,
+        pairing_node_id: Option<NodeIdAlias>,
         pairing_token: PairingToken,
         callback: impl (FnOnce(PairingResult<Pairing>) -> F) + Send + 'static,
     ) -> Result<(), ErrorKind> {
@@ -312,7 +308,7 @@ impl<H: PrePairingHandler> Server<H> {
             return Err(ErrorKind::InvalidConfig(super::ConfigError::MissingInitiateUrl));
         }
 
-        let pairing_node_id = pairing_node_id.unwrap_or(PairingS2NodeId(String::default()));
+        let pairing_node_id = pairing_node_id.unwrap_or(NodeIdAlias(String::default()));
 
         // We hit issues here, because the node node_description only has S2NodeId with no
         // efficient way of mapping that back.
@@ -345,7 +341,7 @@ impl<H: PrePairingHandler> Server<H> {
     pub fn allow_pair_repeated<E, F: Future<Output = Result<(), E>> + Send>(
         &self,
         config: Arc<NodeConfig>,
-        pairing_node_id: Option<PairingS2NodeId>,
+        pairing_node_id: Option<NodeIdAlias>,
         pairing_token: PairingToken,
         callback: impl (Fn(PairingResult<Pairing>) -> F) + Send + Sync + 'static,
     ) -> Result<(), ErrorKind> {
@@ -353,7 +349,7 @@ impl<H: PrePairingHandler> Server<H> {
             return Err(ErrorKind::InvalidConfig(super::ConfigError::MissingInitiateUrl));
         }
 
-        let pairing_node_id = pairing_node_id.unwrap_or(PairingS2NodeId(String::default()));
+        let pairing_node_id = pairing_node_id.unwrap_or(NodeIdAlias(String::default()));
 
         let mut open_pairings = self.state.open_pairings.lock().unwrap();
         let mut permanent_pairings = self.state.permanent_pairings.lock().unwrap();
@@ -380,25 +376,25 @@ impl<H: PrePairingHandler> Server<H> {
 /// Handle for a longpolling connection with a client S2 Node.
 pub struct LongpollingHandle {
     commands: tokio::sync::mpsc::Sender<WaitForPairingAction>,
-    endpoint: tokio::sync::watch::Receiver<Option<S2EndpointDescription>>,
-    node: tokio::sync::watch::Receiver<Option<S2NodeDescription>>,
+    endpoint: tokio::sync::watch::Receiver<Option<EndpointDescription>>,
+    node: tokio::sync::watch::Receiver<Option<NodeDescription>>,
     last_pairing_response: tokio::sync::watch::Receiver<Option<Result<(), WaitForPairingErrorMessage>>>,
-    client_id: S2NodeId,
+    client_id: NodeId,
 }
 
 impl LongpollingHandle {
     /// Client S2NodeId of the remote.
-    pub fn client_id(&self) -> S2NodeId {
+    pub fn client_id(&self) -> NodeId {
         self.client_id
     }
 
     /// Node description of the remote.
     ///
     /// This is fallible as it is not send by default, so we need to ask the remote.
-    pub async fn node_description(&mut self) -> Result<S2NodeDescription, Error> {
+    pub async fn node_description(&mut self) -> Result<NodeDescription, Error> {
         if self.node.borrow().is_none() {
             self.commands
-                .send(WaitForPairingAction::SendS2NodeDescription)
+                .send(WaitForPairingAction::SendNodeDescription)
                 .await
                 .map_err(|_| ErrorKind::Cancelled)?;
         }
@@ -414,10 +410,10 @@ impl LongpollingHandle {
     /// Endpoint description of the remote.
     ///
     /// This is fallible as it is not send by default, so we need to ask the remote.
-    pub async fn endpoint_description(&mut self) -> Result<S2EndpointDescription, Error> {
+    pub async fn endpoint_description(&mut self) -> Result<EndpointDescription, Error> {
         if self.endpoint.borrow().is_none() {
             self.commands
-                .send(WaitForPairingAction::SendS2NodeDescription)
+                .send(WaitForPairingAction::SendNodeDescription)
                 .await
                 .map_err(|_| ErrorKind::Cancelled)?;
         }
@@ -504,8 +500,8 @@ impl LongpollingState {
 
 struct LongpollingStateInner {
     commands: tokio::sync::mpsc::Receiver<WaitForPairingAction>,
-    endpoint: tokio::sync::watch::Sender<Option<S2EndpointDescription>>,
-    node: tokio::sync::watch::Sender<Option<S2NodeDescription>>,
+    endpoint: tokio::sync::watch::Sender<Option<EndpointDescription>>,
+    node: tokio::sync::watch::Sender<Option<NodeDescription>>,
     last_pairing_response: tokio::sync::watch::Sender<Option<Result<(), WaitForPairingErrorMessage>>>,
 }
 
@@ -546,14 +542,14 @@ struct InitialPairingState {
     sender: ResultHandler,
     challenge: HmacChallenge,
     token: PairingToken,
-    remote_node_description: S2NodeDescription,
-    remote_endpoint_description: S2EndpointDescription,
+    remote_node_description: NodeDescription,
+    remote_endpoint_description: EndpointDescription,
 }
 struct CompletePairingState {
     session_span: tracing::Span,
     sender: ResultHandler,
-    remote_node_description: S2NodeDescription,
-    remote_endpoint_description: S2EndpointDescription,
+    remote_node_description: NodeDescription,
+    remote_endpoint_description: EndpointDescription,
     access_token: AccessToken,
     role: PairingRole,
 }
@@ -601,10 +597,10 @@ type AppState<H> = Arc<AppStateInner<H>>;
 
 struct AppStateInner<H> {
     network: Network,
-    endpoint_description: S2EndpointDescription,
-    advertised_nodes: Mutex<Vec<S2NodeDescription>>,
-    permanent_pairings: Mutex<HashMap<PairingS2NodeId, PermanentPairingRequest>>,
-    open_pairings: Mutex<HashMap<PairingS2NodeId, PairingRequest>>,
+    endpoint_description: EndpointDescription,
+    advertised_nodes: Mutex<Vec<NodeDescription>>,
+    permanent_pairings: Mutex<HashMap<NodeIdAlias, PermanentPairingRequest>>,
+    open_pairings: Mutex<HashMap<NodeIdAlias, PairingRequest>>,
     attempts: Mutex<HashMap<PairingAttemptId, ExpiringPairingState>>,
     prepairing_handler: Arc<H>,
     longpolling_enabled: tokio::sync::watch::Receiver<bool>,
@@ -613,7 +609,7 @@ struct AppStateInner<H> {
     // each request will hold a read lock on this for its duration.
     // the enable/disable logic will keep a write lock.
     longpolling_sessions_active: Arc<tokio::sync::RwLock<()>>,
-    longpolling_sessions: Mutex<HashMap<S2NodeId, LongpollingState>>,
+    longpolling_sessions: Mutex<HashMap<NodeId, LongpollingState>>,
     longpolling_handle_sender: tokio::sync::mpsc::Sender<LongpollingHandle>,
     cleanup_task: OnceLock<AbortingJoinHandle<()>>,
 }
@@ -621,7 +617,7 @@ struct AppStateInner<H> {
 // Holder for longpolling sessions during a session. Returns
 // them to the appstate on drop.
 struct LocalLongpollingCache<H> {
-    sessions: HashMap<S2NodeId, LongpollingStateInner>,
+    sessions: HashMap<NodeId, LongpollingStateInner>,
     state: AppState<H>,
 }
 
@@ -635,7 +631,7 @@ impl<H> LocalLongpollingCache<H> {
 }
 
 impl<H> std::ops::Deref for LocalLongpollingCache<H> {
-    type Target = HashMap<S2NodeId, LongpollingStateInner>;
+    type Target = HashMap<NodeId, LongpollingStateInner>;
 
     fn deref(&self) -> &Self::Target {
         &self.sessions
@@ -704,8 +700,8 @@ async fn periodic_cleanup<H: PrePairingHandler>(state: Weak<AppStateInner<H>>) {
 
 fn v1_router<H: PrePairingHandler>() -> Router<AppState<H>> {
     Router::new()
-        .route("/s2endpoint", get(v1_s2endpoint))
-        .route("/s2nodes", get(v1_s2nodes))
+        .route("/endpoint", get(v1_s2endpoint))
+        .route("/nodes", get(v1_s2nodes))
         .route("/preparePairing", post(v1_prepare_pairing))
         .route("/cancelPreparePairing", post(v1_cancel_prepare_pairing))
         .route("/waitForPairing", post(v1_wait_for_pairing))
@@ -733,7 +729,7 @@ async fn v1_wait_for_pairing<H>(
     {
         let mut longpolling_sessions = state.longpolling_sessions.lock().unwrap();
         for request in &requests {
-            let state = match longpolling_sessions.entry(request.client_s2_node_id) {
+            let state = match longpolling_sessions.entry(request.client_node_id) {
                 std::collections::hash_map::Entry::Occupied(mut occupied_entry) => match occupied_entry.get_mut().take() {
                     Some(state) => state,
                     None => {
@@ -750,7 +746,7 @@ async fn v1_wait_for_pairing<H>(
                         endpoint: endpoint_receiver,
                         node: node_receiver,
                         last_pairing_response: last_pairing_receiver,
-                        client_id: request.client_s2_node_id,
+                        client_id: request.client_node_id,
                     });
                     vacant_entry.insert(LongpollingState::Running {
                         since: Instant::now(),
@@ -764,18 +760,18 @@ async fn v1_wait_for_pairing<H>(
                     }
                 }
             };
-            states.insert(request.client_s2_node_id, state);
+            states.insert(request.client_node_id, state);
         }
     }
 
     // Update sessions based on request data
     for request in requests {
         // Guaranteed to be present because of previous loop
-        let state = states.get_mut(&request.client_s2_node_id).unwrap();
-        if let Some(endpoint) = request.client_s2_endpoint_description {
+        let state = states.get_mut(&request.client_node_id).unwrap();
+        if let Some(endpoint) = request.client_endpoint_description {
             state.endpoint.send_replace(Some(endpoint));
         }
-        if let Some(node) = request.client_s2_node_description {
+        if let Some(node) = request.clien_node_description {
             state.node.send_replace(Some(node));
         }
         if let Some(error_message) = request.error_message {
@@ -804,7 +800,7 @@ async fn v1_wait_for_pairing<H>(
                 std::task::Poll::Pending
             }),
         ) => return match outcome {
-            Ok(Some((client_s2_node_id, action))) => Ok(Json(WaitForPairingResponse { client_s2_node_id, action })),
+            Ok(Some((client_node_id, action))) => Ok(Json(WaitForPairingResponse { client_node_id, action })),
             Ok(None) | Err(_) => Err(StatusCode::NO_CONTENT),
         },
         _ = enabled.wait_for(|v| !*v) => return Err(StatusCode::BAD_REQUEST),
@@ -812,7 +808,7 @@ async fn v1_wait_for_pairing<H>(
 }
 
 #[tracing::instrument(skip_all, level = tracing::Level::INFO)]
-async fn v1_s2endpoint<H>(State(state): State<AppState<H>>) -> Result<Json<S2EndpointDescription>, StatusCode> {
+async fn v1_s2endpoint<H>(State(state): State<AppState<H>>) -> Result<Json<EndpointDescription>, StatusCode> {
     if state.network.is_lan() {
         Ok(Json(state.endpoint_description.clone()))
     } else {
@@ -821,7 +817,7 @@ async fn v1_s2endpoint<H>(State(state): State<AppState<H>>) -> Result<Json<S2End
 }
 
 #[tracing::instrument(skip_all, level = tracing::Level::INFO)]
-async fn v1_s2nodes<H>(State(state): State<AppState<H>>) -> Result<Json<Vec<S2NodeDescription>>, StatusCode> {
+async fn v1_s2nodes<H>(State(state): State<AppState<H>>) -> Result<Json<Vec<NodeDescription>>, StatusCode> {
     if state.network.is_lan() {
         Ok(Json(state.advertised_nodes.lock().unwrap().clone()))
     } else {
@@ -835,8 +831,8 @@ async fn v1_prepare_pairing<H: PrePairingHandler>(
     Json(request): Json<PrePairingRequest>,
 ) -> Result<StatusCode, PairingResponseErrorMessage> {
     match state.prepairing_handler.prepairing_requested(
-        request.client_s2_endpoint_description,
-        request.client_s2_node_description,
+        request.client_endpoint_description,
+        request.client_node_description,
         request.server_id,
     ) {
         PrePairingResponse::Accept => Ok(StatusCode::NO_CONTENT),
@@ -874,7 +870,7 @@ async fn v1_request_pairing<H>(
 
     let server_hmac_challenge = HmacChallenge::new(&mut rand::rng(), HMAC_CHALLENGE_BYTES);
 
-    let pairing_s2_node_id = request_pairing.id.unwrap_or(PairingS2NodeId(String::default()));
+    let pairing_s2_node_id = request_pairing.id.unwrap_or(NodeIdAlias(String::default()));
     let open_pairing = {
         let mut open_pairings = state.open_pairings.lock().unwrap();
         if let Some((_, request)) = open_pairings.remove_entry(&pairing_s2_node_id) {
@@ -969,8 +965,8 @@ async fn v1_request_pairing<H>(
 
         let resp = RequestPairingResponse {
             pairing_attempt_id,
-            server_s2_node_description: open_pairing.config.node_description.clone(),
-            server_s2_endpoint_description: state.endpoint_description.clone(),
+            server_node_description: open_pairing.config.node_description.clone(),
+            server_endpoint_description: state.endpoint_description.clone(),
             selected_hmac_hashing_algorithm: HmacHashingAlgorithm::Sha256,
             client_hmac_challenge_response,
             server_hmac_challenge,
@@ -1122,7 +1118,7 @@ async fn v1_post_connection_details<H>(
 async fn v1_finalize_pairing<H>(
     State(state): State<AppState<H>>,
     pairing_attempt_id: PairingAttemptId,
-    Json(success): Json<bool>,
+    Json(FinalizePairingRequest { success }): Json<FinalizePairingRequest>,
 ) -> StatusCode {
     trace!("Received request to finalize pairing session.");
 
@@ -1203,14 +1199,14 @@ mod tests {
     use tracing::{Level, span};
 
     use crate::{
-        AccessToken, CommunicationProtocol, MessageVersion, S2EndpointDescription, S2NodeDescription, S2NodeId, S2Role,
+        AccessToken, CommunicationProtocol, EndpointDescription, MessageVersion, NodeDescription, NodeId, Role,
         common::wire::test::{UUID_A, UUID_B, basic_node_description, pairing_s2_node_id},
         pairing::{
-            ErrorKind, Network, NodeConfig, PairingRole, PairingS2NodeId, PairingToken, PrePairingHandler, PrePairingResponse, Server,
+            ErrorKind, Network, NodeConfig, NodeIdAlias, PairingRole, PairingToken, PrePairingHandler, PrePairingResponse, Server,
             ServerConfig,
             server::{CompletePairingState, ExpiringPairingState, InitialPairingState, PairingRequest, PairingState, ResultHandler},
             wire::{
-                CancelPrePairingRequest, ConnectionDetails, HmacChallenge, HmacHashingAlgorithm, PairingAttemptId,
+                CancelPrePairingRequest, ConnectionDetails, FinalizePairingRequest, HmacChallenge, HmacHashingAlgorithm, PairingAttemptId,
                 PairingResponseErrorMessage, PostConnectionDetailsRequest, PrePairingRequest, RequestConnectionDetailsRequest,
                 RequestPairing, RequestPairingResponse, WaitForPairingAction, WaitForPairingErrorMessage, WaitForPairingRequest,
                 WaitForPairingResponse,
@@ -1229,7 +1225,7 @@ mod tests {
     async fn version_negotiation() {
         let server = Server::new(ServerConfig {
             leaf_certificate: None,
-            endpoint_description: S2EndpointDescription::default(),
+            endpoint_description: EndpointDescription::default(),
             advertised_nodes: vec![],
         });
 
@@ -1247,22 +1243,22 @@ mod tests {
     async fn advertised_endpoint() {
         let server = Server::new(ServerConfig {
             leaf_certificate: Some(CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()),
-            endpoint_description: S2EndpointDescription {
+            endpoint_description: EndpointDescription {
                 name: Some("Testendpoint".into()),
-                logo_uri: None,
+                logo_url: None,
                 deployment: None,
             },
-            advertised_nodes: vec![basic_node_description(UUID_A, S2Role::Cem)],
+            advertised_nodes: vec![basic_node_description(UUID_A, Role::Cem)],
         });
 
         let response = server
             .get_router()
-            .oneshot(http::Request::get("/v1/s2endpoint").body(Body::empty()).unwrap())
+            .oneshot(http::Request::get("/v1/endpoint").body(Body::empty()).unwrap())
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         let body = response.into_body().collect().await.unwrap().to_bytes();
-        let body_data: S2EndpointDescription = serde_json::from_slice(&body).unwrap();
+        let body_data: EndpointDescription = serde_json::from_slice(&body).unwrap();
         assert_eq!(body_data.name.as_deref(), Some("Testendpoint"));
     }
 
@@ -1270,17 +1266,17 @@ mod tests {
     async fn advertised_endpoint_wan() {
         let server = Server::new(ServerConfig {
             leaf_certificate: None,
-            endpoint_description: S2EndpointDescription {
+            endpoint_description: EndpointDescription {
                 name: Some("Testendpoint".into()),
-                logo_uri: None,
+                logo_url: None,
                 deployment: None,
             },
-            advertised_nodes: vec![basic_node_description(UUID_A, S2Role::Cem)],
+            advertised_nodes: vec![basic_node_description(UUID_A, Role::Cem)],
         });
 
         let response = server
             .get_router()
-            .oneshot(http::Request::get("/v1/s2endpoint").body(Body::empty()).unwrap())
+            .oneshot(http::Request::get("/v1/endpoint").body(Body::empty()).unwrap())
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
@@ -1290,40 +1286,40 @@ mod tests {
     async fn advertised_nodes() {
         let server = Server::new(ServerConfig {
             leaf_certificate: Some(CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()),
-            endpoint_description: S2EndpointDescription {
+            endpoint_description: EndpointDescription {
                 name: Some("Testendpoint".into()),
-                logo_uri: None,
+                logo_url: None,
                 deployment: None,
             },
-            advertised_nodes: vec![basic_node_description(UUID_A, S2Role::Cem)],
+            advertised_nodes: vec![basic_node_description(UUID_A, Role::Cem)],
         });
 
         let response = server
             .get_router()
-            .oneshot(http::Request::get("/v1/s2nodes").body(Body::empty()).unwrap())
+            .oneshot(http::Request::get("/v1/nodes").body(Body::empty()).unwrap())
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         let body = response.into_body().collect().await.unwrap().to_bytes();
-        let body_data: Vec<S2NodeDescription> = serde_json::from_slice(&body).unwrap();
-        assert_eq!(body_data, vec![basic_node_description(UUID_A, S2Role::Cem)]);
+        let body_data: Vec<NodeDescription> = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body_data, vec![basic_node_description(UUID_A, Role::Cem)]);
     }
 
     #[tokio::test]
     async fn advertised_nodes_wan() {
         let server = Server::new(ServerConfig {
             leaf_certificate: None,
-            endpoint_description: S2EndpointDescription {
+            endpoint_description: EndpointDescription {
                 name: Some("Testendpoint".into()),
-                logo_uri: None,
+                logo_url: None,
                 deployment: None,
             },
-            advertised_nodes: vec![basic_node_description(UUID_A, S2Role::Cem)],
+            advertised_nodes: vec![basic_node_description(UUID_A, Role::Cem)],
         });
 
         let response = server
             .get_router()
-            .oneshot(http::Request::get("/v1/s2nodes").body(Body::empty()).unwrap())
+            .oneshot(http::Request::get("/v1/nodes").body(Body::empty()).unwrap())
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
@@ -1331,10 +1327,10 @@ mod tests {
 
     #[derive(Debug, Clone)]
     struct TestPrePairingHandler {
-        endpoint: Arc<Mutex<Option<S2EndpointDescription>>>,
-        node: Arc<Mutex<Option<S2NodeDescription>>>,
-        client_id: Arc<Mutex<Option<S2NodeId>>>,
-        target_node: Arc<Mutex<Option<Option<S2NodeId>>>>,
+        endpoint: Arc<Mutex<Option<EndpointDescription>>>,
+        node: Arc<Mutex<Option<NodeDescription>>>,
+        client_id: Arc<Mutex<Option<NodeId>>>,
+        target_node: Arc<Mutex<Option<Option<NodeId>>>>,
         response: PrePairingResponse,
     }
 
@@ -1353,9 +1349,9 @@ mod tests {
     impl PrePairingHandler for TestPrePairingHandler {
         fn prepairing_requested(
             &self,
-            endpoint: S2EndpointDescription,
-            node: S2NodeDescription,
-            target_node: Option<S2NodeId>,
+            endpoint: EndpointDescription,
+            node: NodeDescription,
+            target_node: Option<NodeId>,
         ) -> super::PrePairingResponse {
             *self.endpoint.lock().unwrap() = Some(endpoint);
             *self.node.lock().unwrap() = Some(node);
@@ -1363,7 +1359,7 @@ mod tests {
             self.response
         }
 
-        fn prepairing_cancelled(&self, id: crate::S2NodeId, target_node: Option<S2NodeId>) {
+        fn prepairing_cancelled(&self, id: crate::NodeId, target_node: Option<NodeId>) {
             *self.client_id.lock().unwrap() = Some(id);
             *self.target_node.lock().unwrap() = Some(target_node);
         }
@@ -1375,7 +1371,7 @@ mod tests {
         let server = Server::new_with_prepairing(
             ServerConfig {
                 leaf_certificate: None,
-                endpoint_description: S2EndpointDescription::default(),
+                endpoint_description: EndpointDescription::default(),
                 advertised_nodes: vec![],
             },
             test_handler.clone(),
@@ -1387,8 +1383,8 @@ mod tests {
                     .header(http::header::CONTENT_TYPE, "application/json")
                     .body(Body::from(
                         serde_json::to_vec(&PrePairingRequest {
-                            client_s2_endpoint_description: S2EndpointDescription::default(),
-                            client_s2_node_description: basic_node_description(UUID_A, S2Role::Cem),
+                            client_endpoint_description: EndpointDescription::default(),
+                            client_node_description: basic_node_description(UUID_A, Role::Cem),
                             server_id: None,
                         })
                         .unwrap(),
@@ -1403,7 +1399,7 @@ mod tests {
         let node = test_handler.node.lock().unwrap().take().unwrap();
         let target_node = test_handler.target_node.lock().unwrap().take().unwrap();
         assert_eq!(endpoint.deployment, None);
-        assert_eq!(node.role, S2Role::Cem);
+        assert_eq!(node.role, Role::Cem);
         assert_eq!(node.id, UUID_A.into());
         assert_eq!(target_node, None);
     }
@@ -1414,7 +1410,7 @@ mod tests {
         let server = Server::new_with_prepairing(
             ServerConfig {
                 leaf_certificate: None,
-                endpoint_description: S2EndpointDescription::default(),
+                endpoint_description: EndpointDescription::default(),
                 advertised_nodes: vec![],
             },
             test_handler.clone(),
@@ -1426,8 +1422,8 @@ mod tests {
                     .header(http::header::CONTENT_TYPE, "application/json")
                     .body(Body::from(
                         serde_json::to_vec(&PrePairingRequest {
-                            client_s2_endpoint_description: S2EndpointDescription::default(),
-                            client_s2_node_description: basic_node_description(UUID_A, S2Role::Cem),
+                            client_endpoint_description: EndpointDescription::default(),
+                            client_node_description: basic_node_description(UUID_A, Role::Cem),
                             server_id: None,
                         })
                         .unwrap(),
@@ -1445,7 +1441,7 @@ mod tests {
         let node = test_handler.node.lock().unwrap().take().unwrap();
         let target_node = test_handler.target_node.lock().unwrap().take().unwrap();
         assert_eq!(endpoint.deployment, None);
-        assert_eq!(node.role, S2Role::Cem);
+        assert_eq!(node.role, Role::Cem);
         assert_eq!(node.id, UUID_A.into());
         assert_eq!(target_node, None);
     }
@@ -1456,7 +1452,7 @@ mod tests {
         let server = Server::new_with_prepairing(
             ServerConfig {
                 leaf_certificate: None,
-                endpoint_description: S2EndpointDescription::default(),
+                endpoint_description: EndpointDescription::default(),
                 advertised_nodes: vec![],
             },
             test_handler.clone(),
@@ -1468,8 +1464,8 @@ mod tests {
                     .header(http::header::CONTENT_TYPE, "application/json")
                     .body(Body::from(
                         serde_json::to_vec(&PrePairingRequest {
-                            client_s2_endpoint_description: S2EndpointDescription::default(),
-                            client_s2_node_description: basic_node_description(UUID_A, S2Role::Cem),
+                            client_endpoint_description: EndpointDescription::default(),
+                            client_node_description: basic_node_description(UUID_A, Role::Cem),
                             server_id: None,
                         })
                         .unwrap(),
@@ -1487,7 +1483,7 @@ mod tests {
         let node = test_handler.node.lock().unwrap().take().unwrap();
         let target_node = test_handler.target_node.lock().unwrap().take().unwrap();
         assert_eq!(endpoint.deployment, None);
-        assert_eq!(node.role, S2Role::Cem);
+        assert_eq!(node.role, Role::Cem);
         assert_eq!(node.id, UUID_A.into());
         assert_eq!(target_node, None);
     }
@@ -1498,7 +1494,7 @@ mod tests {
         let server = Server::new_with_prepairing(
             ServerConfig {
                 leaf_certificate: None,
-                endpoint_description: S2EndpointDescription::default(),
+                endpoint_description: EndpointDescription::default(),
                 advertised_nodes: vec![],
             },
             test_handler.clone(),
@@ -1531,13 +1527,13 @@ mod tests {
     async fn pair_attempt() {
         let server = Server::new(ServerConfig {
             leaf_certificate: None,
-            endpoint_description: S2EndpointDescription::default(),
+            endpoint_description: EndpointDescription::default(),
             advertised_nodes: vec![],
         });
         server
             .allow_pair_once(
                 Arc::new(
-                    NodeConfig::builder(basic_node_description(UUID_A, S2Role::Rm), vec![MessageVersion("v1".into())])
+                    NodeConfig::builder(basic_node_description(UUID_A, Role::Rm), vec![MessageVersion("v1".into())])
                         .with_connection_initiate_url("https://example.com/".into())
                         .build()
                         .unwrap(),
@@ -1556,8 +1552,8 @@ mod tests {
                     .header(http::header::CONTENT_TYPE, "application/json")
                     .body(Body::from(
                         serde_json::to_vec(&RequestPairing {
-                            node_description: basic_node_description(UUID_B, S2Role::Cem),
-                            endpoint_description: S2EndpointDescription::default(),
+                            node_description: basic_node_description(UUID_B, Role::Cem),
+                            endpoint_description: EndpointDescription::default(),
                             id: Some(pairing_s2_node_id()),
                             supported_protocols: vec![CommunicationProtocol("WebSocket".into())],
                             supported_versions: vec![MessageVersion("v1".into())],
@@ -1583,13 +1579,13 @@ mod tests {
     async fn pair_attempt_no_common_communication() {
         let server = Server::new(ServerConfig {
             leaf_certificate: None,
-            endpoint_description: S2EndpointDescription::default(),
+            endpoint_description: EndpointDescription::default(),
             advertised_nodes: vec![],
         });
         server
             .allow_pair_once(
                 Arc::new(
-                    NodeConfig::builder(basic_node_description(UUID_A, S2Role::Rm), vec![MessageVersion("v1".into())])
+                    NodeConfig::builder(basic_node_description(UUID_A, Role::Rm), vec![MessageVersion("v1".into())])
                         .with_connection_initiate_url("https://example.com/".into())
                         .build()
                         .unwrap(),
@@ -1608,8 +1604,8 @@ mod tests {
                     .header(http::header::CONTENT_TYPE, "application/json")
                     .body(Body::from(
                         serde_json::to_vec(&RequestPairing {
-                            node_description: basic_node_description(UUID_B, S2Role::Cem),
-                            endpoint_description: S2EndpointDescription::default(),
+                            node_description: basic_node_description(UUID_B, Role::Cem),
+                            endpoint_description: EndpointDescription::default(),
                             id: Some(pairing_s2_node_id()),
                             supported_protocols: vec![CommunicationProtocol("HTTP/3".into())],
                             supported_versions: vec![MessageVersion("v1".into())],
@@ -1634,13 +1630,13 @@ mod tests {
     async fn pair_attempt_no_common_messages() {
         let server = Server::new(ServerConfig {
             leaf_certificate: None,
-            endpoint_description: S2EndpointDescription::default(),
+            endpoint_description: EndpointDescription::default(),
             advertised_nodes: vec![],
         });
         server
             .allow_pair_once(
                 Arc::new(
-                    NodeConfig::builder(basic_node_description(UUID_A, S2Role::Rm), vec![MessageVersion("v1".into())])
+                    NodeConfig::builder(basic_node_description(UUID_A, Role::Rm), vec![MessageVersion("v1".into())])
                         .with_connection_initiate_url("https://example.com/".into())
                         .build()
                         .unwrap(),
@@ -1659,8 +1655,8 @@ mod tests {
                     .header(http::header::CONTENT_TYPE, "application/json")
                     .body(Body::from(
                         serde_json::to_vec(&RequestPairing {
-                            node_description: basic_node_description(UUID_B, S2Role::Cem),
-                            endpoint_description: S2EndpointDescription::default(),
+                            node_description: basic_node_description(UUID_B, Role::Cem),
+                            endpoint_description: EndpointDescription::default(),
                             id: Some(pairing_s2_node_id()),
                             supported_protocols: vec![CommunicationProtocol("WebSocket".into())],
                             supported_versions: vec![MessageVersion("v0".into())],
@@ -1685,13 +1681,13 @@ mod tests {
     async fn pair_attempt_forced() {
         let server = Server::new(ServerConfig {
             leaf_certificate: None,
-            endpoint_description: S2EndpointDescription::default(),
+            endpoint_description: EndpointDescription::default(),
             advertised_nodes: vec![],
         });
         server
             .allow_pair_once(
                 Arc::new(
-                    NodeConfig::builder(basic_node_description(UUID_A, S2Role::Rm), vec![MessageVersion("v1".into())])
+                    NodeConfig::builder(basic_node_description(UUID_A, Role::Rm), vec![MessageVersion("v1".into())])
                         .with_connection_initiate_url("https://example.com/".into())
                         .build()
                         .unwrap(),
@@ -1710,8 +1706,8 @@ mod tests {
                     .header(http::header::CONTENT_TYPE, "application/json")
                     .body(Body::from(
                         serde_json::to_vec(&RequestPairing {
-                            node_description: basic_node_description(UUID_B, S2Role::Cem),
-                            endpoint_description: S2EndpointDescription::default(),
+                            node_description: basic_node_description(UUID_B, Role::Cem),
+                            endpoint_description: EndpointDescription::default(),
                             id: Some(pairing_s2_node_id()),
                             supported_protocols: vec![CommunicationProtocol("HTTP/3".into())],
                             supported_versions: vec![MessageVersion("v0".into())],
@@ -1737,7 +1733,7 @@ mod tests {
     async fn pair_attempt_with_unknown_node() {
         let server = Server::new(ServerConfig {
             leaf_certificate: None,
-            endpoint_description: S2EndpointDescription::default(),
+            endpoint_description: EndpointDescription::default(),
             advertised_nodes: vec![],
         });
 
@@ -1748,8 +1744,8 @@ mod tests {
                     .header(http::header::CONTENT_TYPE, "application/json")
                     .body(Body::from(
                         serde_json::to_vec(&RequestPairing {
-                            node_description: basic_node_description(UUID_A, S2Role::Cem),
-                            endpoint_description: S2EndpointDescription::default(),
+                            node_description: basic_node_description(UUID_A, Role::Cem),
+                            endpoint_description: EndpointDescription::default(),
                             id: Some(pairing_s2_node_id()),
                             supported_protocols: vec![CommunicationProtocol("WebSocket".into())],
                             supported_versions: vec![MessageVersion("v1".into())],
@@ -1774,13 +1770,13 @@ mod tests {
     async fn pair_attempt_same_role() {
         let server = Server::new(ServerConfig {
             leaf_certificate: None,
-            endpoint_description: S2EndpointDescription::default(),
+            endpoint_description: EndpointDescription::default(),
             advertised_nodes: vec![],
         });
         server
             .allow_pair_once(
                 Arc::new(
-                    NodeConfig::builder(basic_node_description(UUID_A, S2Role::Rm), vec![MessageVersion("v1".into())])
+                    NodeConfig::builder(basic_node_description(UUID_A, Role::Rm), vec![MessageVersion("v1".into())])
                         .with_connection_initiate_url("https://example.com/".into())
                         .build()
                         .unwrap(),
@@ -1799,8 +1795,8 @@ mod tests {
                     .header(http::header::CONTENT_TYPE, "application/json")
                     .body(Body::from(
                         serde_json::to_vec(&RequestPairing {
-                            node_description: basic_node_description(UUID_B, S2Role::Rm),
-                            endpoint_description: S2EndpointDescription::default(),
+                            node_description: basic_node_description(UUID_B, Role::Rm),
+                            endpoint_description: EndpointDescription::default(),
                             id: Some(pairing_s2_node_id()),
                             supported_protocols: vec![CommunicationProtocol("WebSocket".into())],
                             supported_versions: vec![MessageVersion("v1".into())],
@@ -1825,7 +1821,7 @@ mod tests {
     async fn request_connection_details() {
         let server = Server::new(ServerConfig {
             leaf_certificate: None,
-            endpoint_description: S2EndpointDescription::default(),
+            endpoint_description: EndpointDescription::default(),
             advertised_nodes: vec![],
         });
         let mut attempts = server.state.attempts.lock().unwrap();
@@ -1837,7 +1833,7 @@ mod tests {
                 state: PairingState::Initial(InitialPairingState {
                     session_span: span!(Level::TRACE, "testspan"),
                     config: Arc::new(
-                        NodeConfig::builder(basic_node_description(UUID_A, S2Role::Rm), vec![MessageVersion("v1".into())])
+                        NodeConfig::builder(basic_node_description(UUID_A, Role::Rm), vec![MessageVersion("v1".into())])
                             .with_connection_initiate_url("https://example.com/".into())
                             .build()
                             .unwrap(),
@@ -1845,8 +1841,8 @@ mod tests {
                     sender: ResultHandler::Oneshot(Box::new(|_| Box::pin(async { Ok(()) }))),
                     challenge: challenge.clone(),
                     token: PairingToken(b"testtoken".as_slice().into()),
-                    remote_node_description: basic_node_description(UUID_B, S2Role::Cem),
-                    remote_endpoint_description: S2EndpointDescription::default(),
+                    remote_node_description: basic_node_description(UUID_B, Role::Cem),
+                    remote_endpoint_description: EndpointDescription::default(),
                 }),
             },
         );
@@ -1879,7 +1875,7 @@ mod tests {
     async fn request_connection_details_invalid_response() {
         let server = Server::new(ServerConfig {
             leaf_certificate: None,
-            endpoint_description: S2EndpointDescription::default(),
+            endpoint_description: EndpointDescription::default(),
             advertised_nodes: vec![],
         });
         let mut attempts = server.state.attempts.lock().unwrap();
@@ -1891,7 +1887,7 @@ mod tests {
                 state: PairingState::Initial(InitialPairingState {
                     session_span: span!(Level::TRACE, "testspan"),
                     config: Arc::new(
-                        NodeConfig::builder(basic_node_description(UUID_A, S2Role::Rm), vec![MessageVersion("v1".into())])
+                        NodeConfig::builder(basic_node_description(UUID_A, Role::Rm), vec![MessageVersion("v1".into())])
                             .with_connection_initiate_url("https://example.com/".into())
                             .build()
                             .unwrap(),
@@ -1899,8 +1895,8 @@ mod tests {
                     sender: ResultHandler::Oneshot(Box::new(|_| Box::pin(async { Ok(()) }))),
                     challenge: challenge.clone(),
                     token: PairingToken(b"testtoken".as_slice().into()),
-                    remote_node_description: basic_node_description(UUID_B, S2Role::Cem),
-                    remote_endpoint_description: S2EndpointDescription::default(),
+                    remote_node_description: basic_node_description(UUID_B, Role::Cem),
+                    remote_endpoint_description: EndpointDescription::default(),
                 }),
             },
         );
@@ -1930,7 +1926,7 @@ mod tests {
     async fn request_connection_details_too_late() {
         let server = Server::new(ServerConfig {
             leaf_certificate: None,
-            endpoint_description: S2EndpointDescription::default(),
+            endpoint_description: EndpointDescription::default(),
             advertised_nodes: vec![],
         });
         let mut attempts = server.state.attempts.lock().unwrap();
@@ -1942,7 +1938,7 @@ mod tests {
                 state: PairingState::Initial(InitialPairingState {
                     session_span: span!(Level::TRACE, "testspan"),
                     config: Arc::new(
-                        NodeConfig::builder(basic_node_description(UUID_A, S2Role::Rm), vec![MessageVersion("v1".into())])
+                        NodeConfig::builder(basic_node_description(UUID_A, Role::Rm), vec![MessageVersion("v1".into())])
                             .with_connection_initiate_url("https://example.com/".into())
                             .build()
                             .unwrap(),
@@ -1950,8 +1946,8 @@ mod tests {
                     sender: ResultHandler::Oneshot(Box::new(|_| Box::pin(async { Ok(()) }))),
                     challenge: challenge.clone(),
                     token: PairingToken(b"testtoken".as_slice().into()),
-                    remote_node_description: basic_node_description(UUID_B, S2Role::Cem),
-                    remote_endpoint_description: S2EndpointDescription::default(),
+                    remote_node_description: basic_node_description(UUID_B, Role::Cem),
+                    remote_endpoint_description: EndpointDescription::default(),
                 }),
             },
         );
@@ -1983,7 +1979,7 @@ mod tests {
     async fn post_connection_details() {
         let server = Server::new(ServerConfig {
             leaf_certificate: None,
-            endpoint_description: S2EndpointDescription::default(),
+            endpoint_description: EndpointDescription::default(),
             advertised_nodes: vec![],
         });
         let mut attempts = server.state.attempts.lock().unwrap();
@@ -1995,7 +1991,7 @@ mod tests {
                 state: PairingState::Initial(InitialPairingState {
                     session_span: span!(Level::TRACE, "testspan"),
                     config: Arc::new(
-                        NodeConfig::builder(basic_node_description(UUID_A, S2Role::Rm), vec![MessageVersion("v1".into())])
+                        NodeConfig::builder(basic_node_description(UUID_A, Role::Rm), vec![MessageVersion("v1".into())])
                             .with_connection_initiate_url("https://example.com/".into())
                             .build()
                             .unwrap(),
@@ -2003,8 +1999,8 @@ mod tests {
                     sender: ResultHandler::Oneshot(Box::new(|_| Box::pin(async { Ok(()) }))),
                     challenge: challenge.clone(),
                     token: PairingToken(b"testtoken".as_slice().into()),
-                    remote_node_description: basic_node_description(UUID_B, S2Role::Cem),
-                    remote_endpoint_description: S2EndpointDescription::default(),
+                    remote_node_description: basic_node_description(UUID_B, Role::Cem),
+                    remote_endpoint_description: EndpointDescription::default(),
                 }),
             },
         );
@@ -2038,7 +2034,7 @@ mod tests {
     async fn post_connection_details_invalid_response() {
         let server = Server::new(ServerConfig {
             leaf_certificate: None,
-            endpoint_description: S2EndpointDescription::default(),
+            endpoint_description: EndpointDescription::default(),
             advertised_nodes: vec![],
         });
         let mut attempts = server.state.attempts.lock().unwrap();
@@ -2050,7 +2046,7 @@ mod tests {
                 state: PairingState::Initial(InitialPairingState {
                     session_span: span!(Level::TRACE, "testspan"),
                     config: Arc::new(
-                        NodeConfig::builder(basic_node_description(UUID_A, S2Role::Rm), vec![MessageVersion("v1".into())])
+                        NodeConfig::builder(basic_node_description(UUID_A, Role::Rm), vec![MessageVersion("v1".into())])
                             .with_connection_initiate_url("https://example.com/".into())
                             .build()
                             .unwrap(),
@@ -2058,8 +2054,8 @@ mod tests {
                     sender: ResultHandler::Oneshot(Box::new(|_| Box::pin(async { Ok(()) }))),
                     challenge: challenge.clone(),
                     token: PairingToken(b"testtoken".as_slice().into()),
-                    remote_node_description: basic_node_description(UUID_B, S2Role::Cem),
-                    remote_endpoint_description: S2EndpointDescription::default(),
+                    remote_node_description: basic_node_description(UUID_B, Role::Cem),
+                    remote_endpoint_description: EndpointDescription::default(),
                 }),
             },
         );
@@ -2093,7 +2089,7 @@ mod tests {
     async fn post_connection_details_too_late() {
         let server = Server::new(ServerConfig {
             leaf_certificate: None,
-            endpoint_description: S2EndpointDescription::default(),
+            endpoint_description: EndpointDescription::default(),
             advertised_nodes: vec![],
         });
         let mut attempts = server.state.attempts.lock().unwrap();
@@ -2105,7 +2101,7 @@ mod tests {
                 state: PairingState::Initial(InitialPairingState {
                     session_span: span!(Level::TRACE, "testspan"),
                     config: Arc::new(
-                        NodeConfig::builder(basic_node_description(UUID_A, S2Role::Rm), vec![MessageVersion("v1".into())])
+                        NodeConfig::builder(basic_node_description(UUID_A, Role::Rm), vec![MessageVersion("v1".into())])
                             .with_connection_initiate_url("https://example.com/".into())
                             .build()
                             .unwrap(),
@@ -2113,8 +2109,8 @@ mod tests {
                     sender: ResultHandler::Oneshot(Box::new(|_| Box::pin(async { Ok(()) }))),
                     challenge: challenge.clone(),
                     token: PairingToken(b"testtoken".as_slice().into()),
-                    remote_node_description: basic_node_description(UUID_B, S2Role::Cem),
-                    remote_endpoint_description: S2EndpointDescription::default(),
+                    remote_node_description: basic_node_description(UUID_B, Role::Cem),
+                    remote_endpoint_description: EndpointDescription::default(),
                 }),
             },
         );
@@ -2150,7 +2146,7 @@ mod tests {
     async fn finalize() {
         let server = Server::new(ServerConfig {
             leaf_certificate: None,
-            endpoint_description: S2EndpointDescription::default(),
+            endpoint_description: EndpointDescription::default(),
             advertised_nodes: vec![],
         });
         let mut attempts = server.state.attempts.lock().unwrap();
@@ -2168,8 +2164,8 @@ mod tests {
                             Ok(())
                         })
                     })),
-                    remote_node_description: basic_node_description(UUID_B, S2Role::Cem),
-                    remote_endpoint_description: S2EndpointDescription::default(),
+                    remote_node_description: basic_node_description(UUID_B, Role::Cem),
+                    remote_endpoint_description: EndpointDescription::default(),
                     access_token: AccessToken::new(&mut rand::rng()),
                     role: PairingRole::CommunicationServer,
                 }),
@@ -2183,7 +2179,7 @@ mod tests {
                 http::Request::post("/v1/finalizePairing")
                     .header(http::header::AUTHORIZATION, "Bearer testid")
                     .header(http::header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(serde_json::to_vec(&true).unwrap()))
+                    .body(Body::from(serde_json::to_vec(&FinalizePairingRequest { success: true }).unwrap()))
                     .unwrap(),
             )
             .await
@@ -2198,7 +2194,7 @@ mod tests {
     async fn finalize_cancel() {
         let server = Server::new(ServerConfig {
             leaf_certificate: None,
-            endpoint_description: S2EndpointDescription::default(),
+            endpoint_description: EndpointDescription::default(),
             advertised_nodes: vec![],
         });
         let mut attempts = server.state.attempts.lock().unwrap();
@@ -2216,8 +2212,8 @@ mod tests {
                             Ok(())
                         })
                     })),
-                    remote_node_description: basic_node_description(UUID_B, S2Role::Cem),
-                    remote_endpoint_description: S2EndpointDescription::default(),
+                    remote_node_description: basic_node_description(UUID_B, Role::Cem),
+                    remote_endpoint_description: EndpointDescription::default(),
                     access_token: AccessToken::new(&mut rand::rng()),
                     role: PairingRole::CommunicationServer,
                 }),
@@ -2231,7 +2227,7 @@ mod tests {
                 http::Request::post("/v1/finalizePairing")
                     .header(http::header::AUTHORIZATION, "Bearer testid")
                     .header(http::header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(serde_json::to_vec(&false).unwrap()))
+                    .body(Body::from(serde_json::to_vec(&FinalizePairingRequest { success: false }).unwrap()))
                     .unwrap(),
             )
             .await
@@ -2246,7 +2242,7 @@ mod tests {
     async fn finalize_cancel_at_intermediate() {
         let server = Server::new(ServerConfig {
             leaf_certificate: None,
-            endpoint_description: S2EndpointDescription::default(),
+            endpoint_description: EndpointDescription::default(),
             advertised_nodes: vec![],
         });
         let mut attempts = server.state.attempts.lock().unwrap();
@@ -2259,7 +2255,7 @@ mod tests {
                 state: PairingState::Initial(InitialPairingState {
                     session_span: span!(Level::TRACE, "testspan"),
                     config: Arc::new(
-                        NodeConfig::builder(basic_node_description(UUID_A, S2Role::Rm), vec![MessageVersion("v1".into())])
+                        NodeConfig::builder(basic_node_description(UUID_A, Role::Rm), vec![MessageVersion("v1".into())])
                             .with_connection_initiate_url("https://example.com/".into())
                             .build()
                             .unwrap(),
@@ -2272,8 +2268,8 @@ mod tests {
                     })),
                     challenge: challenge.clone(),
                     token: PairingToken(b"testtoken".as_slice().into()),
-                    remote_node_description: basic_node_description(UUID_B, S2Role::Cem),
-                    remote_endpoint_description: S2EndpointDescription::default(),
+                    remote_node_description: basic_node_description(UUID_B, Role::Cem),
+                    remote_endpoint_description: EndpointDescription::default(),
                 }),
             },
         );
@@ -2285,7 +2281,7 @@ mod tests {
                 http::Request::post("/v1/finalizePairing")
                     .header(http::header::AUTHORIZATION, "Bearer testid")
                     .header(http::header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(serde_json::to_vec(&false).unwrap()))
+                    .body(Body::from(serde_json::to_vec(&FinalizePairingRequest { success: false }).unwrap()))
                     .unwrap(),
             )
             .await
@@ -2300,7 +2296,7 @@ mod tests {
     async fn finalize_unknown_session() {
         let server = Server::new(ServerConfig {
             leaf_certificate: None,
-            endpoint_description: S2EndpointDescription::default(),
+            endpoint_description: EndpointDescription::default(),
             advertised_nodes: vec![],
         });
 
@@ -2310,7 +2306,7 @@ mod tests {
                 http::Request::post("/v1/finalizePairing")
                     .header(http::header::AUTHORIZATION, "Bearer testid")
                     .header(http::header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(serde_json::to_vec(&true).unwrap()))
+                    .body(Body::from(serde_json::to_vec(&FinalizePairingRequest { success: true }).unwrap()))
                     .unwrap(),
             )
             .await
@@ -2323,7 +2319,7 @@ mod tests {
     async fn finalize_cancel_unknown_session() {
         let server = Server::new(ServerConfig {
             leaf_certificate: None,
-            endpoint_description: S2EndpointDescription::default(),
+            endpoint_description: EndpointDescription::default(),
             advertised_nodes: vec![],
         });
 
@@ -2333,7 +2329,7 @@ mod tests {
                 http::Request::post("/v1/finalizePairing")
                     .header(http::header::AUTHORIZATION, "Bearer testid")
                     .header(http::header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(serde_json::to_vec(&false).unwrap()))
+                    .body(Body::from(serde_json::to_vec(&FinalizePairingRequest { success: false }).unwrap()))
                     .unwrap(),
             )
             .await
@@ -2346,7 +2342,7 @@ mod tests {
     async fn finalize_handler_failed() {
         let server = Server::new(ServerConfig {
             leaf_certificate: None,
-            endpoint_description: S2EndpointDescription::default(),
+            endpoint_description: EndpointDescription::default(),
             advertised_nodes: vec![],
         });
         let mut attempts = server.state.attempts.lock().unwrap();
@@ -2364,8 +2360,8 @@ mod tests {
                             Err(())
                         })
                     })),
-                    remote_node_description: basic_node_description(UUID_B, S2Role::Cem),
-                    remote_endpoint_description: S2EndpointDescription::default(),
+                    remote_node_description: basic_node_description(UUID_B, Role::Cem),
+                    remote_endpoint_description: EndpointDescription::default(),
                     access_token: AccessToken::new(&mut rand::rng()),
                     role: PairingRole::CommunicationServer,
                 }),
@@ -2379,7 +2375,7 @@ mod tests {
                 http::Request::post("/v1/finalizePairing")
                     .header(http::header::AUTHORIZATION, "Bearer testid")
                     .header(http::header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(serde_json::to_vec(&true).unwrap()))
+                    .body(Body::from(serde_json::to_vec(&FinalizePairingRequest { success: true }).unwrap()))
                     .unwrap(),
             )
             .await
@@ -2394,7 +2390,7 @@ mod tests {
     async fn longpolling_timeout() {
         let mut server = Server::new(ServerConfig {
             leaf_certificate: None,
-            endpoint_description: S2EndpointDescription::default(),
+            endpoint_description: EndpointDescription::default(),
             advertised_nodes: vec![],
         });
 
@@ -2407,9 +2403,9 @@ mod tests {
                     .header(http::header::CONTENT_TYPE, "application/json")
                     .body(Body::from(
                         serde_json::to_vec(&vec![WaitForPairingRequest {
-                            client_s2_node_id: UUID_A.into(),
-                            client_s2_node_description: None,
-                            client_s2_endpoint_description: None,
+                            client_node_id: UUID_A.into(),
+                            clien_node_description: None,
+                            client_endpoint_description: None,
                             error_message: None,
                         }])
                         .unwrap(),
@@ -2425,7 +2421,7 @@ mod tests {
     async fn longpolling_descriptions() {
         let mut server = Server::new(ServerConfig {
             leaf_certificate: None,
-            endpoint_description: S2EndpointDescription::default(),
+            endpoint_description: EndpointDescription::default(),
             advertised_nodes: vec![],
         });
 
@@ -2441,9 +2437,9 @@ mod tests {
                         .header(http::header::CONTENT_TYPE, "application/json")
                         .body(Body::from(
                             serde_json::to_vec(&vec![WaitForPairingRequest {
-                                client_s2_node_id: UUID_A.into(),
-                                client_s2_node_description: None,
-                                client_s2_endpoint_description: None,
+                                client_node_id: UUID_A.into(),
+                                clien_node_description: None,
+                                client_endpoint_description: None,
                                 error_message: None,
                             }])
                             .unwrap(),
@@ -2455,8 +2451,8 @@ mod tests {
             assert_eq!(response.status(), StatusCode::OK);
             let body = response.into_body().collect().await.unwrap().to_bytes();
             let response_data: WaitForPairingResponse = serde_json::from_slice(&body).unwrap();
-            assert_eq!(response_data.client_s2_node_id, UUID_A.into());
-            assert_eq!(response_data.action, WaitForPairingAction::SendS2NodeDescription);
+            assert_eq!(response_data.client_node_id, UUID_A.into());
+            assert_eq!(response_data.action, WaitForPairingAction::SendNodeDescription);
 
             server_clone
                 .get_router()
@@ -2465,9 +2461,9 @@ mod tests {
                         .header(http::header::CONTENT_TYPE, "application/json")
                         .body(Body::from(
                             serde_json::to_vec(&vec![WaitForPairingRequest {
-                                client_s2_node_id: UUID_A.into(),
-                                client_s2_node_description: Some(basic_node_description(UUID_A, S2Role::Cem)),
-                                client_s2_endpoint_description: Some(S2EndpointDescription::default()),
+                                client_node_id: UUID_A.into(),
+                                clien_node_description: Some(basic_node_description(UUID_A, Role::Cem)),
+                                client_endpoint_description: Some(EndpointDescription::default()),
                                 error_message: None,
                             }])
                             .unwrap(),
@@ -2482,11 +2478,11 @@ mod tests {
             let mut longpolling_handle = server.get_longpolling().await;
             assert_eq!(
                 longpolling_handle.node_description().await.unwrap(),
-                basic_node_description(UUID_A, S2Role::Cem)
+                basic_node_description(UUID_A, Role::Cem)
             );
             assert_eq!(
                 longpolling_handle.endpoint_description().await.unwrap(),
-                S2EndpointDescription::default()
+                EndpointDescription::default()
             );
         };
 
@@ -2497,7 +2493,7 @@ mod tests {
     async fn longpolling_prepare_pairing() {
         let mut server = Server::new(ServerConfig {
             leaf_certificate: None,
-            endpoint_description: S2EndpointDescription::default(),
+            endpoint_description: EndpointDescription::default(),
             advertised_nodes: vec![],
         });
 
@@ -2513,9 +2509,9 @@ mod tests {
                         .header(http::header::CONTENT_TYPE, "application/json")
                         .body(Body::from(
                             serde_json::to_vec(&vec![WaitForPairingRequest {
-                                client_s2_node_id: UUID_A.into(),
-                                client_s2_node_description: None,
-                                client_s2_endpoint_description: None,
+                                client_node_id: UUID_A.into(),
+                                clien_node_description: None,
+                                client_endpoint_description: None,
                                 error_message: None,
                             }])
                             .unwrap(),
@@ -2527,7 +2523,7 @@ mod tests {
             assert_eq!(response.status(), StatusCode::OK);
             let body = response.into_body().collect().await.unwrap().to_bytes();
             let response_data: WaitForPairingResponse = serde_json::from_slice(&body).unwrap();
-            assert_eq!(response_data.client_s2_node_id, UUID_A.into());
+            assert_eq!(response_data.client_node_id, UUID_A.into());
             assert_eq!(response_data.action, WaitForPairingAction::PreparePairing);
 
             server_clone
@@ -2537,9 +2533,9 @@ mod tests {
                         .header(http::header::CONTENT_TYPE, "application/json")
                         .body(Body::from(
                             serde_json::to_vec(&vec![WaitForPairingRequest {
-                                client_s2_node_id: UUID_A.into(),
-                                client_s2_node_description: None,
-                                client_s2_endpoint_description: None,
+                                client_node_id: UUID_A.into(),
+                                clien_node_description: None,
+                                client_endpoint_description: None,
                                 error_message: None,
                             }])
                             .unwrap(),
@@ -2562,7 +2558,7 @@ mod tests {
     async fn longpolling_cancel_prepare_pairing() {
         let mut server = Server::new(ServerConfig {
             leaf_certificate: None,
-            endpoint_description: S2EndpointDescription::default(),
+            endpoint_description: EndpointDescription::default(),
             advertised_nodes: vec![],
         });
 
@@ -2578,9 +2574,9 @@ mod tests {
                         .header(http::header::CONTENT_TYPE, "application/json")
                         .body(Body::from(
                             serde_json::to_vec(&vec![WaitForPairingRequest {
-                                client_s2_node_id: UUID_A.into(),
-                                client_s2_node_description: None,
-                                client_s2_endpoint_description: None,
+                                client_node_id: UUID_A.into(),
+                                clien_node_description: None,
+                                client_endpoint_description: None,
                                 error_message: None,
                             }])
                             .unwrap(),
@@ -2592,7 +2588,7 @@ mod tests {
             assert_eq!(response.status(), StatusCode::OK);
             let body = response.into_body().collect().await.unwrap().to_bytes();
             let response_data: WaitForPairingResponse = serde_json::from_slice(&body).unwrap();
-            assert_eq!(response_data.client_s2_node_id, UUID_A.into());
+            assert_eq!(response_data.client_node_id, UUID_A.into());
             assert_eq!(response_data.action, WaitForPairingAction::CancelPreparePairing);
 
             server_clone
@@ -2602,9 +2598,9 @@ mod tests {
                         .header(http::header::CONTENT_TYPE, "application/json")
                         .body(Body::from(
                             serde_json::to_vec(&vec![WaitForPairingRequest {
-                                client_s2_node_id: UUID_A.into(),
-                                client_s2_node_description: None,
-                                client_s2_endpoint_description: None,
+                                client_node_id: UUID_A.into(),
+                                clien_node_description: None,
+                                client_endpoint_description: None,
                                 error_message: None,
                             }])
                             .unwrap(),
@@ -2627,7 +2623,7 @@ mod tests {
     async fn longpolling_request_pairing_success() {
         let mut server = Server::new(ServerConfig {
             leaf_certificate: None,
-            endpoint_description: S2EndpointDescription::default(),
+            endpoint_description: EndpointDescription::default(),
             advertised_nodes: vec![],
         });
 
@@ -2643,9 +2639,9 @@ mod tests {
                         .header(http::header::CONTENT_TYPE, "application/json")
                         .body(Body::from(
                             serde_json::to_vec(&vec![WaitForPairingRequest {
-                                client_s2_node_id: UUID_A.into(),
-                                client_s2_node_description: None,
-                                client_s2_endpoint_description: None,
+                                client_node_id: UUID_A.into(),
+                                clien_node_description: None,
+                                client_endpoint_description: None,
                                 error_message: None,
                             }])
                             .unwrap(),
@@ -2657,7 +2653,7 @@ mod tests {
             assert_eq!(response.status(), StatusCode::OK);
             let body = response.into_body().collect().await.unwrap().to_bytes();
             let response_data: WaitForPairingResponse = serde_json::from_slice(&body).unwrap();
-            assert_eq!(response_data.client_s2_node_id, UUID_A.into());
+            assert_eq!(response_data.client_node_id, UUID_A.into());
             assert_eq!(response_data.action, WaitForPairingAction::RequestPairing);
 
             let poll_req = server_clone.get_router().oneshot(
@@ -2665,9 +2661,9 @@ mod tests {
                     .header(http::header::CONTENT_TYPE, "application/json")
                     .body(Body::from(
                         serde_json::to_vec(&vec![WaitForPairingRequest {
-                            client_s2_node_id: UUID_A.into(),
-                            client_s2_node_description: None,
-                            client_s2_endpoint_description: None,
+                            client_node_id: UUID_A.into(),
+                            clien_node_description: None,
+                            client_endpoint_description: None,
                             error_message: None,
                         }])
                         .unwrap(),
@@ -2679,8 +2675,8 @@ mod tests {
                     .header(http::header::CONTENT_TYPE, "application/json")
                     .body(Body::from(
                         serde_json::to_vec(&RequestPairing {
-                            node_description: basic_node_description(UUID_A, S2Role::Cem),
-                            endpoint_description: S2EndpointDescription::default(),
+                            node_description: basic_node_description(UUID_A, Role::Cem),
+                            endpoint_description: EndpointDescription::default(),
                             id: Some(pairing_s2_node_id()),
                             supported_protocols: vec![CommunicationProtocol("WebSocket".into())],
                             supported_versions: vec![MessageVersion("v1".into())],
@@ -2708,7 +2704,7 @@ mod tests {
     async fn longpolling_request_pairing_failure() {
         let mut server = Server::new(ServerConfig {
             leaf_certificate: None,
-            endpoint_description: S2EndpointDescription::default(),
+            endpoint_description: EndpointDescription::default(),
             advertised_nodes: vec![],
         });
 
@@ -2724,9 +2720,9 @@ mod tests {
                         .header(http::header::CONTENT_TYPE, "application/json")
                         .body(Body::from(
                             serde_json::to_vec(&vec![WaitForPairingRequest {
-                                client_s2_node_id: UUID_A.into(),
-                                client_s2_node_description: None,
-                                client_s2_endpoint_description: None,
+                                client_node_id: UUID_A.into(),
+                                clien_node_description: None,
+                                client_endpoint_description: None,
                                 error_message: None,
                             }])
                             .unwrap(),
@@ -2738,7 +2734,7 @@ mod tests {
             assert_eq!(response.status(), StatusCode::OK);
             let body = response.into_body().collect().await.unwrap().to_bytes();
             let response_data: WaitForPairingResponse = serde_json::from_slice(&body).unwrap();
-            assert_eq!(response_data.client_s2_node_id, UUID_A.into());
+            assert_eq!(response_data.client_node_id, UUID_A.into());
             assert_eq!(response_data.action, WaitForPairingAction::RequestPairing);
 
             server_clone
@@ -2748,9 +2744,9 @@ mod tests {
                         .header(http::header::CONTENT_TYPE, "application/json")
                         .body(Body::from(
                             serde_json::to_vec(&vec![WaitForPairingRequest {
-                                client_s2_node_id: UUID_A.into(),
-                                client_s2_node_description: None,
-                                client_s2_endpoint_description: None,
+                                client_node_id: UUID_A.into(),
+                                clien_node_description: None,
+                                client_endpoint_description: None,
                                 error_message: Some(WaitForPairingErrorMessage::NoValidTokenOnPairingClient),
                             }])
                             .unwrap(),
@@ -2776,7 +2772,7 @@ mod tests {
     async fn longpolling_aborted_request_keeps_session_alive() {
         let mut server = Server::new(ServerConfig {
             leaf_certificate: None,
-            endpoint_description: S2EndpointDescription::default(),
+            endpoint_description: EndpointDescription::default(),
             advertised_nodes: vec![],
         });
 
@@ -2793,9 +2789,9 @@ mod tests {
                             .header(http::header::CONTENT_TYPE, "application/json")
                             .body(Body::from(
                                 serde_json::to_vec(&vec![WaitForPairingRequest {
-                                    client_s2_node_id: UUID_A.into(),
-                                    client_s2_node_description: None,
-                                    client_s2_endpoint_description: None,
+                                    client_node_id: UUID_A.into(),
+                                    clien_node_description: None,
+                                    client_endpoint_description: None,
                                     error_message: None,
                                 }])
                                 .unwrap(),
@@ -2813,9 +2809,9 @@ mod tests {
                         .header(http::header::CONTENT_TYPE, "application/json")
                         .body(Body::from(
                             serde_json::to_vec(&vec![WaitForPairingRequest {
-                                client_s2_node_id: UUID_A.into(),
-                                client_s2_node_description: None,
-                                client_s2_endpoint_description: None,
+                                client_node_id: UUID_A.into(),
+                                clien_node_description: None,
+                                client_endpoint_description: None,
                                 error_message: None,
                             }])
                             .unwrap(),
@@ -2827,8 +2823,8 @@ mod tests {
             assert_eq!(response.status(), StatusCode::OK);
             let body = response.into_body().collect().await.unwrap().to_bytes();
             let response_data: WaitForPairingResponse = serde_json::from_slice(&body).unwrap();
-            assert_eq!(response_data.client_s2_node_id, UUID_A.into());
-            assert_eq!(response_data.action, WaitForPairingAction::SendS2NodeDescription);
+            assert_eq!(response_data.client_node_id, UUID_A.into());
+            assert_eq!(response_data.action, WaitForPairingAction::SendNodeDescription);
 
             server_clone
                 .get_router()
@@ -2837,9 +2833,9 @@ mod tests {
                         .header(http::header::CONTENT_TYPE, "application/json")
                         .body(Body::from(
                             serde_json::to_vec(&vec![WaitForPairingRequest {
-                                client_s2_node_id: UUID_A.into(),
-                                client_s2_node_description: Some(basic_node_description(UUID_A, S2Role::Cem)),
-                                client_s2_endpoint_description: Some(S2EndpointDescription::default()),
+                                client_node_id: UUID_A.into(),
+                                clien_node_description: Some(basic_node_description(UUID_A, Role::Cem)),
+                                client_endpoint_description: Some(EndpointDescription::default()),
                                 error_message: None,
                             }])
                             .unwrap(),
@@ -2855,11 +2851,11 @@ mod tests {
             sleep(Duration::from_secs(10)).await;
             assert_eq!(
                 longpolling_handle.node_description().await.unwrap(),
-                basic_node_description(UUID_A, S2Role::Cem)
+                basic_node_description(UUID_A, Role::Cem)
             );
             assert_eq!(
                 longpolling_handle.endpoint_description().await.unwrap(),
-                S2EndpointDescription::default()
+                EndpointDescription::default()
             );
         };
 
@@ -2869,7 +2865,7 @@ mod tests {
     async fn longpolling_disable_during_request() {
         let mut server = Server::new(ServerConfig {
             leaf_certificate: None,
-            endpoint_description: S2EndpointDescription::default(),
+            endpoint_description: EndpointDescription::default(),
             advertised_nodes: vec![],
         });
 
@@ -2885,9 +2881,9 @@ mod tests {
                         .header(http::header::CONTENT_TYPE, "application/json")
                         .body(Body::from(
                             serde_json::to_vec(&vec![WaitForPairingRequest {
-                                client_s2_node_id: UUID_A.into(),
-                                client_s2_node_description: None,
-                                client_s2_endpoint_description: None,
+                                client_node_id: UUID_A.into(),
+                                clien_node_description: None,
+                                client_endpoint_description: None,
                                 error_message: None,
                             }])
                             .unwrap(),

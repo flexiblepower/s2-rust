@@ -8,11 +8,12 @@ use thiserror::Error;
 use tracing::info;
 
 use crate::{
-    S2NodeId,
-    common::wire::{AccessToken, CommunicationProtocol, MessageVersion, S2EndpointDescription, S2NodeDescription},
+    NodeId,
+    common::wire::{AccessToken, CommunicationProtocol, EndpointDescription, MessageVersion, NodeDescription},
 };
 
 #[derive(Error, Debug, Serialize, Deserialize, PartialEq, Eq, Hash, Clone, Copy)]
+#[serde(tag = "errorMessage")]
 pub(crate) enum PairingResponseErrorMessage {
     #[error("Invalid combination of roles")]
     InvalidCombinationOfRoles,
@@ -60,6 +61,7 @@ impl IntoResponse for PairingResponseErrorMessage {
 }
 
 #[derive(Error, Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(tag = "errorMessage")]
 pub(crate) enum WaitForPairingErrorMessage {
     #[error("No valid token available on remote.")]
     NoValidTokenOnPairingClient,
@@ -106,16 +108,16 @@ impl PartialEq for HmacChallengeResponse {
 /// It is used as a short identifier (since the user might have to type it in manually)
 /// for the S2Node, which can be used to lookup the actual [`S2NodeId`].
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct PairingS2NodeId(pub String);
+pub struct NodeIdAlias(pub String);
 
-impl PairingS2NodeId {
+impl NodeIdAlias {
     /// Create a new id.
     pub fn new(rng: &mut impl rand::CryptoRng) -> Self {
         Self(Alphanumeric.sample_string(rng, 12))
     }
 }
 
-impl std::fmt::Display for PairingS2NodeId {
+impl std::fmt::Display for NodeIdAlias {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.0.fmt(f)
     }
@@ -123,14 +125,14 @@ impl std::fmt::Display for PairingS2NodeId {
 
 #[derive(Serialize, Deserialize)]
 pub(crate) struct RequestPairing {
-    #[serde(rename = "clientS2NodeDescription")]
-    pub node_description: S2NodeDescription,
-    #[serde(rename = "clientS2EndpointDescription")]
-    pub endpoint_description: S2EndpointDescription,
+    #[serde(rename = "clientNodeDescription")]
+    pub node_description: NodeDescription,
+    #[serde(rename = "clientEndpointDescription")]
+    pub endpoint_description: EndpointDescription,
     /// A server-assigned identifier of the S2Node that this server represents.
-    #[serde(rename = "pairingS2NodeId")]
+    #[serde(rename = "nodeIdAlias")]
     #[serde(default)]
-    pub id: Option<PairingS2NodeId>,
+    pub id: Option<NodeIdAlias>,
     #[serde(rename = "supportedCommunicationProtocols")]
     pub supported_protocols: Vec<CommunicationProtocol>,
     /// The versions of the S2 JSON message schemas this S2Node implementation currently supports.
@@ -196,8 +198,8 @@ impl<S: Sync + Send> FromRequestParts<S> for PairingAttemptId {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RequestPairingResponse {
     pub pairing_attempt_id: PairingAttemptId,
-    pub server_s2_node_description: S2NodeDescription,
-    pub server_s2_endpoint_description: S2EndpointDescription,
+    pub server_node_description: NodeDescription,
+    pub server_endpoint_description: EndpointDescription,
     pub selected_hmac_hashing_algorithm: HmacHashingAlgorithm,
     pub client_hmac_challenge_response: HmacChallengeResponse,
     pub server_hmac_challenge: HmacChallenge,
@@ -212,20 +214,18 @@ pub(crate) struct RequestConnectionDetailsRequest {
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct PrePairingRequest {
-    pub client_s2_endpoint_description: S2EndpointDescription,
-    pub client_s2_node_description: S2NodeDescription,
-    // TODO: Update to Pairing S2 Node ID
-    #[serde(rename = "serverS2PairingNodeId")]
-    pub server_id: Option<S2NodeId>,
+    pub client_endpoint_description: EndpointDescription,
+    pub client_node_description: NodeDescription,
+    #[serde(rename = "serverNodeId")]
+    pub server_id: Option<NodeId>,
 }
 
 #[derive(Serialize, Deserialize)]
 pub(crate) struct CancelPrePairingRequest {
-    #[serde(rename = "clientS2NodeId")]
-    pub client_id: S2NodeId,
-    // TODO: Update to Pairing S2 Node ID
-    #[serde(rename = "serverS2PairingNodeId")]
-    pub server_id: Option<S2NodeId>,
+    #[serde(rename = "clientNodeId")]
+    pub client_id: NodeId,
+    #[serde(rename = "serverNodeId")]
+    pub server_id: Option<NodeId>,
 }
 
 /// Details the Connection client needs to set up an S2 session.
@@ -246,16 +246,22 @@ pub(crate) struct PostConnectionDetailsRequest {
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct WaitForPairingRequest {
-    pub client_s2_node_id: S2NodeId,
-    pub client_s2_node_description: Option<S2NodeDescription>,
-    pub client_s2_endpoint_description: Option<S2EndpointDescription>,
+    pub client_node_id: NodeId,
+    pub clien_node_description: Option<NodeDescription>,
+    pub client_endpoint_description: Option<EndpointDescription>,
+    #[serde(flatten)]
     pub error_message: Option<WaitForPairingErrorMessage>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub(crate) struct FinalizePairingRequest {
+    pub success: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash)]
 #[serde(rename_all = "camelCase")]
 pub(crate) enum WaitForPairingAction {
-    SendS2NodeDescription,
+    SendNodeDescription,
     PreparePairing,
     CancelPreparePairing,
     RequestPairing,
@@ -264,7 +270,7 @@ pub(crate) enum WaitForPairingAction {
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct WaitForPairingResponse {
-    pub client_s2_node_id: S2NodeId,
+    pub client_node_id: NodeId,
     pub action: WaitForPairingAction,
 }
 

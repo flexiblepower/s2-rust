@@ -4,7 +4,7 @@ use uuid::uuid;
 use rustls::pki_types::{CertificateDer, pem::PemObject};
 use s2energy_common::S2Transport;
 use s2energy_connection::{
-    AccessToken, MessageVersion, S2NodeId,
+    AccessToken, MessageVersion, NodeId,
     communication::{Client, ClientConfig, ClientPairing, NodeConfig},
 };
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
@@ -12,18 +12,18 @@ use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 struct MemoryPairing {
     communication_url: String,
     tokens: Vec<AccessToken>,
-    server: S2NodeId,
-    client: S2NodeId,
+    server: NodeId,
+    client: NodeId,
 }
 
 impl ClientPairing for &mut MemoryPairing {
     type Error = Infallible;
 
-    fn client_id(&self) -> S2NodeId {
+    fn client_id(&self) -> NodeId {
         self.client.clone()
     }
 
-    fn server_id(&self) -> S2NodeId {
+    fn server_id(&self) -> NodeId {
         self.server.clone()
     }
 

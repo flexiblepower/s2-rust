@@ -24,7 +24,7 @@ use zeroconf_tokio::{
 };
 
 use crate::{
-    Deployment, S2Role,
+    Deployment, Role,
     discovery::error::{Error, ErrorKind},
 };
 
@@ -44,7 +44,7 @@ pub struct DiscoverableS2Endpoint {
     deployment: Deployment,
     pairing_url: Option<String>,
     longpolling_url: Option<String>,
-    roles: Vec<S2Role>,
+    roles: Vec<Role>,
 }
 
 impl DiscoverableS2Endpoint {
@@ -74,7 +74,7 @@ impl DiscoverableS2Endpoint {
     }
 
     /// Build a new [`DiscoverableS2Endpoint`] with support for pairing.
-    pub fn build_with_pairing(roles: Vec<S2Role>, pairing_url: String) -> Result<DiscoverableS2EndpointBuilder, BuilderError> {
+    pub fn build_with_pairing(roles: Vec<Role>, pairing_url: String) -> Result<DiscoverableS2EndpointBuilder, BuilderError> {
         let parsed_url: Url = pairing_url.parse().map_err(|_| BuilderError::InvalidUrl)?;
         let host = parsed_url.host().ok_or(BuilderError::InvalidUrl)?;
         let deployment = Deployment::try_from(host).map_err(|_| BuilderError::InvalidUrl)?;
@@ -90,7 +90,7 @@ impl DiscoverableS2Endpoint {
     }
 
     /// Build a new [`DiscoverableS2Endpoint`] with support for longpolling.
-    pub fn build_with_longpolling(roles: Vec<S2Role>, longpolling_url: String) -> Result<DiscoverableS2EndpointBuilder, BuilderError> {
+    pub fn build_with_longpolling(roles: Vec<Role>, longpolling_url: String) -> Result<DiscoverableS2EndpointBuilder, BuilderError> {
         let parsed_url: Url = longpolling_url.parse().map_err(|_| BuilderError::InvalidUrl)?;
         let host = parsed_url.host().ok_or(BuilderError::InvalidUrl)?;
         let deployment = Deployment::try_from(host).map_err(|_| BuilderError::InvalidUrl)?;
@@ -121,8 +121,8 @@ impl DiscoverableS2Endpoint {
             .sub_types()
             .iter()
             .filter_map(|v| match v.as_str() {
-                "cem" => Some(S2Role::Cem),
-                "rm" => Some(S2Role::Rm),
+                "cem" => Some(Role::Cem),
+                "rm" => Some(Role::Rm),
                 _ => None,
             })
             .collect::<Vec<_>>();
@@ -183,7 +183,7 @@ pub struct DiscoverableS2EndpointBuilder {
     deployment: Deployment,
     pairing_url: Option<String>,
     longpolling_url: Option<String>,
-    roles: Vec<S2Role>,
+    roles: Vec<Role>,
 }
 
 impl DiscoverableS2EndpointBuilder {
@@ -320,7 +320,7 @@ pub enum DiscoveryEvent {
 
 impl S2Discoverer {
     /// Create a new discovery client for endpoints providing the given role.
-    pub async fn new(role: S2Role) -> Result<Self, Error> {
+    pub async fn new(role: Role) -> Result<Self, Error> {
         // The unwrap on service type is fine as its arguments are always valid.
         let mut browser = MdnsBrowserAsync::new(MdnsBrowser::new(
             ServiceType::with_sub_types("s2connect", "tcp", vec![role.service_subtype()]).unwrap(),

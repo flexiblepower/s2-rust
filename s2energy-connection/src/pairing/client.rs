@@ -5,10 +5,10 @@ use rustls::pki_types::CertificateDer;
 use tracing::{Instrument, Span, debug, span, trace};
 
 use crate::common::negotiate_version;
-use crate::common::wire::{AccessToken, Deployment, PairingVersion, S2Role};
+use crate::common::wire::{AccessToken, Deployment, PairingVersion, Role};
 use crate::pairing::transport::{HashProvider, hash_providing_https_client};
 use crate::pairing::{ConfigError, Error, Pairing, PairingRole};
-use crate::{S2EndpointDescription, S2NodeDescription, S2NodeId};
+use crate::{EndpointDescription, NodeDescription, NodeId};
 
 use super::NodeConfig;
 use super::wire::*;
@@ -20,7 +20,7 @@ pub struct PairingRemote {
     /// URL at which the remote node can be reached
     pub url: String,
     /// S2 node id of the remote node.
-    pub id: Option<PairingS2NodeId>,
+    pub id: Option<NodeIdAlias>,
 }
 
 /// Remote node to pair with.
@@ -29,7 +29,7 @@ pub struct PrePairingRemote {
     /// URL at which the remote node can be reached
     pub url: String,
     /// S2 node id of the remote node.
-    pub id: S2NodeId,
+    pub id: NodeId,
 }
 
 /// Configuration for pairing clients.
@@ -39,7 +39,7 @@ pub struct ClientConfig {
     /// When the remote is on the LAN, this is not used.
     pub additional_certificates: Vec<CertificateDer<'static>>,
     /// Description of our endpoint.
-    pub endpoint_description: S2EndpointDescription,
+    pub endpoint_description: EndpointDescription,
     /// Where the pairing is deployed.
     pub pairing_deployment: Deployment,
 }
@@ -48,7 +48,7 @@ pub struct ClientConfig {
 ///
 /// Used as the client end of a pairing interaction.
 pub struct Client {
-    endpoint_description: S2EndpointDescription,
+    endpoint_description: EndpointDescription,
     additional_certificates: Vec<CertificateDer<'static>>,
     pairing_deployment: Deployment,
 }
@@ -56,7 +56,7 @@ pub struct Client {
 /// A currently active pre-pairing session with a remote.
 pub struct PrePairing<'a> {
     span: tracing::Span,
-    remote_id: S2NodeId,
+    remote_id: NodeId,
     session: V1Session<'a>,
     local_deployment: Deployment,
     certhash: Option<HashProvider>,
@@ -88,7 +88,7 @@ impl PrePairing<'_> {
     /// When the callback returns an error, the client will be notified of the error.
     pub async fn pair<E: std::error::Error + Send + 'static>(
         self,
-        remote_id: Option<PairingS2NodeId>,
+        remote_id: Option<NodeIdAlias>,
         pairing_token: &[u8],
         callback: impl AsyncFnOnce(Pairing) -> Result<(), E>,
     ) -> PairingResult<()> {
@@ -110,7 +110,7 @@ pub struct Longpoller(Arc<LongpollerInner>);
 struct LongpollerInner {
     span: Span,
     nodes: std::sync::Mutex<Vec<NodeConfig>>,
-    endpoint_description: S2EndpointDescription,
+    endpoint_description: EndpointDescription,
     // Client is held by the runner longterm, hence we use a tokio mutex.
     client: tokio::sync::Mutex<reqwest::Client>,
     base_url: Url,
@@ -121,11 +121,11 @@ pub trait LongpollHandler {
     /// Remote requests pairing
     ///
     /// Return value indicates whether we are able to start pairing with the remote.
-    fn request_pairing(&mut self, node: S2NodeId) -> impl Future<Output = bool> + Send;
+    fn request_pairing(&mut self, node: NodeId) -> impl Future<Output = bool> + Send;
     /// Remote requests us to prepare for pairing.
-    fn prepare_pairing(&mut self, node: S2NodeId) -> impl Future<Output = ()> + Send;
+    fn prepare_pairing(&mut self, node: NodeId) -> impl Future<Output = ()> + Send;
     /// Remote cancels a previous request to prepare for pairing.
-    fn cancel_prepare_pairing(&mut self, node: S2NodeId) -> impl Future<Output = ()> + Send;
+    fn cancel_prepare_pairing(&mut self, node: NodeId) -> impl Future<Output = ()> + Send;
 }
 
 impl Longpoller {
@@ -141,8 +141,8 @@ impl Longpoller {
             #[derive(Clone, Copy, PartialEq, Eq)]
             enum Action {
                 None,
-                ProvideDescription(S2NodeId),
-                ReturnError(S2NodeId, WaitForPairingErrorMessage),
+                ProvideDescription(NodeId),
+                ReturnError(NodeId, WaitForPairingErrorMessage),
             }
 
             let mut action = Action::None;
@@ -155,21 +155,21 @@ impl Longpoller {
                     .iter()
                     .map(|node| match action {
                         Action::ProvideDescription(id) if id == node.node_description.id => WaitForPairingRequest {
-                            client_s2_node_id: node.node_description.id,
-                            client_s2_node_description: Some(node.node_description.clone()),
-                            client_s2_endpoint_description: Some(self.0.endpoint_description.clone()),
+                            client_node_id: node.node_description.id,
+                            clien_node_description: Some(node.node_description.clone()),
+                            client_endpoint_description: Some(self.0.endpoint_description.clone()),
                             error_message: None,
                         },
                         Action::ReturnError(id, error_message) if id == node.node_description.id => WaitForPairingRequest {
-                            client_s2_node_id: node.node_description.id,
-                            client_s2_node_description: None,
-                            client_s2_endpoint_description: None,
+                            client_node_id: node.node_description.id,
+                            clien_node_description: None,
+                            client_endpoint_description: None,
                             error_message: Some(error_message),
                         },
                         _ => WaitForPairingRequest {
-                            client_s2_node_id: node.node_description.id,
-                            client_s2_node_description: None,
-                            client_s2_endpoint_description: None,
+                            client_node_id: node.node_description.id,
+                            clien_node_description: None,
+                            client_endpoint_description: None,
                             error_message: None,
                         },
                     })
@@ -199,13 +199,12 @@ impl Longpoller {
 
                 let response: WaitForPairingResponse = response.json().await.map_err(|e| Error::new(ErrorKind::ProtocolError, e))?;
                 match response.action {
-                    WaitForPairingAction::SendS2NodeDescription => action = Action::ProvideDescription(response.client_s2_node_id),
-                    WaitForPairingAction::PreparePairing => handler.prepare_pairing(response.client_s2_node_id).await,
-                    WaitForPairingAction::CancelPreparePairing => handler.cancel_prepare_pairing(response.client_s2_node_id).await,
+                    WaitForPairingAction::SendNodeDescription => action = Action::ProvideDescription(response.client_node_id),
+                    WaitForPairingAction::PreparePairing => handler.prepare_pairing(response.client_node_id).await,
+                    WaitForPairingAction::CancelPreparePairing => handler.cancel_prepare_pairing(response.client_node_id).await,
                     WaitForPairingAction::RequestPairing => {
-                        if !handler.request_pairing(response.client_s2_node_id).await {
-                            action =
-                                Action::ReturnError(response.client_s2_node_id, WaitForPairingErrorMessage::NoValidTokenOnPairingClient)
+                        if !handler.request_pairing(response.client_node_id).await {
+                            action = Action::ReturnError(response.client_node_id, WaitForPairingErrorMessage::NoValidTokenOnPairingClient)
                         }
                     }
                 }
@@ -226,7 +225,7 @@ impl Longpoller {
     }
 
     /// Stop longpolling for the local node with the given id.
-    pub fn remove_node(&self, id: S2NodeId) {
+    pub fn remove_node(&self, id: NodeId) {
         self.0.nodes.lock().unwrap().retain(|node| node.node_description.id != id);
     }
 }
@@ -243,7 +242,7 @@ impl Client {
 
     /// Get information about a specific endpoint and its nodes
     #[tracing::instrument(skip_all, fields(remote = ?remote), level = tracing::Level::ERROR)]
-    pub async fn get_endpoint_descriptors(&self, remote: String) -> PairingResult<(S2EndpointDescription, Vec<S2NodeDescription>)> {
+    pub async fn get_endpoint_descriptors(&self, remote: String) -> PairingResult<(EndpointDescription, Vec<NodeDescription>)> {
         trace!("Querying remote for descriptors");
 
         let url = Url::try_from(remote.as_str()).map_err(|e| Error::new(ErrorKind::InvalidUrl, e))?;
@@ -259,7 +258,7 @@ impl Client {
                 let base_url = url.join("v1/").unwrap();
 
                 let endpoint_response = client
-                    .get(base_url.join("s2endpoint").unwrap())
+                    .get(base_url.join("endpoint").unwrap())
                     .send()
                     .await
                     .map_err(|e| Error::new(ErrorKind::TransportFailed, e))?;
@@ -271,13 +270,13 @@ impl Client {
                     return Err(ErrorKind::ProtocolError.into());
                 }
 
-                let endpoint: S2EndpointDescription = endpoint_response
+                let endpoint: EndpointDescription = endpoint_response
                     .json()
                     .await
                     .map_err(|e| Error::new(ErrorKind::ProtocolError, e))?;
 
                 let node_response = client
-                    .get(base_url.join("s2nodes").unwrap())
+                    .get(base_url.join("nodes").unwrap())
                     .send()
                     .await
                     .map_err(|e| Error::new(ErrorKind::TransportFailed, e))?;
@@ -289,7 +288,7 @@ impl Client {
                     return Err(ErrorKind::ProtocolError.into());
                 }
 
-                let nodes: Vec<S2NodeDescription> = node_response.json().await.map_err(|e| Error::new(ErrorKind::ProtocolError, e))?;
+                let nodes: Vec<NodeDescription> = node_response.json().await.map_err(|e| Error::new(ErrorKind::ProtocolError, e))?;
 
                 Ok((endpoint, nodes))
             }
@@ -415,13 +414,13 @@ impl Client {
 
 struct V1Session<'a> {
     client: reqwest::Client,
-    endpoint_description: S2EndpointDescription,
+    endpoint_description: EndpointDescription,
     base_url: Url,
     config: &'a NodeConfig,
 }
 
 impl<'a> V1Session<'a> {
-    fn new(client: reqwest::Client, url: Url, config: &'a NodeConfig, endpoint_description: S2EndpointDescription) -> Self {
+    fn new(client: reqwest::Client, url: Url, config: &'a NodeConfig, endpoint_description: EndpointDescription) -> Self {
         V1Session {
             client,
             endpoint_description,
@@ -434,15 +433,15 @@ impl<'a> V1Session<'a> {
         self,
         certhash: Option<HashProvider>,
         local_deployment: Deployment,
-        id: S2NodeId,
+        id: NodeId,
         span: Span,
     ) -> PairingResult<PrePairing<'a>> {
         let response = self
             .client
             .post(self.base_url.join("preparePairing").unwrap())
             .json(&PrePairingRequest {
-                client_s2_endpoint_description: self.endpoint_description.clone(),
-                client_s2_node_description: self.config.node_description.clone(),
+                client_endpoint_description: self.endpoint_description.clone(),
+                client_node_description: self.config.node_description.clone(),
                 server_id: Some(id),
             })
             .send()
@@ -470,7 +469,7 @@ impl<'a> V1Session<'a> {
         self,
         certhash: Option<HashProvider>,
         local_deployment: Deployment,
-        id: Option<PairingS2NodeId>,
+        id: Option<NodeIdAlias>,
         pairing_token: &[u8],
         callback: impl AsyncFnOnce(Pairing) -> Result<(), E>,
     ) -> PairingResult<()> {
@@ -497,10 +496,10 @@ impl<'a> V1Session<'a> {
         let request_pairing_response = self.request_pairing(id, &client_hmac_challenge).await?;
         let attempt_id = request_pairing_response.pairing_attempt_id;
         let remote_deployment = request_pairing_response
-            .server_s2_endpoint_description
+            .server_endpoint_description
             .deployment
             .unwrap_or_else(|| network.as_deployment());
-        let remote_role = request_pairing_response.server_s2_node_description.role;
+        let remote_role = request_pairing_response.server_node_description.role;
 
         trace!("Requested pairing from remote.");
 
@@ -530,16 +529,16 @@ impl<'a> V1Session<'a> {
         }
 
         let role = match (our_deployment, our_role, remote_deployment, remote_role) {
-            (_, S2Role::Rm, _, S2Role::Rm) | (_, S2Role::Cem, _, S2Role::Cem) => {
+            (_, Role::Rm, _, Role::Rm) | (_, Role::Cem, _, Role::Cem) => {
                 let _ = self.finalize(&attempt_id, false).await;
                 return Err(ErrorKind::RemoteOfSameType.into());
             }
             (Deployment::Lan, _, Deployment::Wan, _) => CommunicationRole::CommunicationClient,
             // unwrap is okay here, as Deployment::Wan or S2Role::Cem locally means we will ALWAYS have a connection initiate url.
-            (Deployment::Wan, _, Deployment::Lan, _) | (_, S2Role::Cem, _, S2Role::Rm) => CommunicationRole::CommunicationServer {
+            (Deployment::Wan, _, Deployment::Lan, _) | (_, Role::Cem, _, Role::Rm) => CommunicationRole::CommunicationServer {
                 initiate_connection_url: self.config.connection_initiate_url.as_ref().unwrap().into(),
             },
-            (_, S2Role::Rm, _, S2Role::Cem) => CommunicationRole::CommunicationClient,
+            (_, Role::Rm, _, Role::Cem) => CommunicationRole::CommunicationClient,
         };
 
         trace!("Determined communication role.");
@@ -560,8 +559,8 @@ impl<'a> V1Session<'a> {
                     return Err(e);
                 }
                 Pairing {
-                    remote_endpoint_description: request_pairing_response.server_s2_endpoint_description,
-                    remote_node_description: request_pairing_response.server_s2_node_description,
+                    remote_endpoint_description: request_pairing_response.server_endpoint_description,
+                    remote_node_description: request_pairing_response.server_node_description,
                     token: access_token,
                     role: PairingRole::CommunicationServer,
                 }
@@ -575,8 +574,8 @@ impl<'a> V1Session<'a> {
                     }
                 };
                 Pairing {
-                    remote_endpoint_description: request_pairing_response.server_s2_endpoint_description,
-                    remote_node_description: request_pairing_response.server_s2_node_description,
+                    remote_endpoint_description: request_pairing_response.server_endpoint_description,
+                    remote_node_description: request_pairing_response.server_node_description,
                     token: connection_details.access_token,
                     role: PairingRole::CommunicationClient {
                         initiate_url: connection_details.initiate_connection_url,
@@ -671,7 +670,7 @@ impl<'a> V1Session<'a> {
 
     async fn request_pairing(
         &self,
-        id: Option<PairingS2NodeId>,
+        id: Option<NodeIdAlias>,
         client_hmac_challenge: &HmacChallenge,
     ) -> PairingResult<RequestPairingResponse> {
         let request = RequestPairing {
@@ -714,7 +713,7 @@ impl<'a> V1Session<'a> {
             .client
             .post(self.base_url.join("finalizePairing").unwrap())
             .bearer_auth(&attempt_id.0)
-            .json(&success)
+            .json(&FinalizePairingRequest { success })
             .send()
             .await
             .map_err(|e| Error::new(ErrorKind::TransportFailed, e))?;
@@ -735,14 +734,15 @@ mod tests {
     };
 
     use crate::{
-        Deployment, MessageVersion, S2EndpointDescription, S2NodeDescription, S2NodeId, S2Role,
+        Deployment, EndpointDescription, MessageVersion, NodeDescription, NodeId, Role,
         common::wire::test::{UUID_A, UUID_B, basic_node_description, pairing_s2_node_id},
         pairing::{
             Client, ClientConfig, ErrorKind, LongpollHandler, Longpoller, Network, NodeConfig, NoopPrePairingHandler, Pairing,
             PairingRemote, PairingRole, PairingToken, PrePairingHandler, PrePairingResponse, Server, ServerConfig,
             client::PrePairingRemote,
             wire::{
-                HmacChallenge, HmacChallengeResponse, PairingAttemptId, PairingResponseErrorMessage, RequestPairing, RequestPairingResponse,
+                FinalizePairingRequest, HmacChallenge, HmacChallengeResponse, PairingAttemptId, PairingResponseErrorMessage,
+                RequestPairing, RequestPairingResponse,
             },
         },
     };
@@ -764,7 +764,7 @@ mod tests {
         let mut server = Server::new_with_prepairing(
             ServerConfig {
                 leaf_certificate: None,
-                endpoint_description: S2EndpointDescription::default(),
+                endpoint_description: EndpointDescription::default(),
                 advertised_nodes: vec![],
             },
             handler,
@@ -815,7 +815,7 @@ mod tests {
 
     #[tokio::test]
     async fn descriptors() {
-        let server_config = NodeConfig::builder(basic_node_description(UUID_A, S2Role::Cem), vec![MessageVersion("v1".into())])
+        let server_config = NodeConfig::builder(basic_node_description(UUID_A, Role::Cem), vec![MessageVersion("v1".into())])
             .with_connection_initiate_url("test.example.com".into())
             .build()
             .unwrap();
@@ -823,13 +823,13 @@ mod tests {
         let (server_handle, _server_pairing, _) = setup_server(
             server_config,
             Router::new()
-                .route("/v1/s2endpoint", get(|| async { Json(S2EndpointDescription::default()) }))
+                .route("/v1/endpoint", get(|| async { Json(EndpointDescription::default()) }))
                 .route(
-                    "/v1/s2nodes",
+                    "/v1/nodes",
                     get(|| async {
                         Json(vec![
-                            basic_node_description(UUID_A, S2Role::Cem),
-                            basic_node_description(UUID_B, S2Role::Rm),
+                            basic_node_description(UUID_A, Role::Cem),
+                            basic_node_description(UUID_B, Role::Rm),
                         ])
                     }),
                 ),
@@ -840,7 +840,7 @@ mod tests {
 
         let client = Client::new(ClientConfig {
             additional_certificates: vec![CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()],
-            endpoint_description: S2EndpointDescription::default(),
+            endpoint_description: EndpointDescription::default(),
             pairing_deployment: Deployment::Wan,
         })
         .unwrap();
@@ -856,7 +856,7 @@ mod tests {
 
     #[tokio::test]
     async fn descriptors_forbidden() {
-        let server_config = NodeConfig::builder(basic_node_description(UUID_A, S2Role::Cem), vec![MessageVersion("v1".into())])
+        let server_config = NodeConfig::builder(basic_node_description(UUID_A, Role::Cem), vec![MessageVersion("v1".into())])
             .with_connection_initiate_url("test.example.com".into())
             .build()
             .unwrap();
@@ -864,8 +864,8 @@ mod tests {
         let (server_handle, _server_pairing, _) = setup_server(
             server_config,
             Router::new()
-                .route("/v1/s2endpoint", get(|| async { StatusCode::UNAUTHORIZED }))
-                .route("/v1/s2nodes", get(|| async { StatusCode::UNAUTHORIZED })),
+                .route("/v1/endpoint", get(|| async { StatusCode::UNAUTHORIZED }))
+                .route("/v1/nodes", get(|| async { StatusCode::UNAUTHORIZED })),
         )
         .await;
 
@@ -873,7 +873,7 @@ mod tests {
 
         let client = Client::new(ClientConfig {
             additional_certificates: vec![CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()],
-            endpoint_description: S2EndpointDescription::default(),
+            endpoint_description: EndpointDescription::default(),
             pairing_deployment: Deployment::Wan,
         })
         .unwrap();
@@ -887,12 +887,12 @@ mod tests {
 
     #[tokio::test]
     async fn pairing_ok_rm_initiates() {
-        let server_config = NodeConfig::builder(basic_node_description(UUID_A, S2Role::Cem), vec![MessageVersion("v1".into())])
+        let server_config = NodeConfig::builder(basic_node_description(UUID_A, Role::Cem), vec![MessageVersion("v1".into())])
             .with_connection_initiate_url("test.example.com".into())
             .build()
             .unwrap();
 
-        let client_config = NodeConfig::builder(basic_node_description(UUID_B, S2Role::Rm), vec![MessageVersion("v1".into())])
+        let client_config = NodeConfig::builder(basic_node_description(UUID_B, Role::Rm), vec![MessageVersion("v1".into())])
             .with_connection_initiate_url("client.example.com".into())
             .build()
             .unwrap();
@@ -907,7 +907,7 @@ mod tests {
 
         let client = Client::new(ClientConfig {
             additional_certificates: vec![CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()],
-            endpoint_description: S2EndpointDescription::default(),
+            endpoint_description: EndpointDescription::default(),
             pairing_deployment: Deployment::Wan,
         })
         .unwrap();
@@ -931,12 +931,12 @@ mod tests {
 
     #[tokio::test]
     async fn pairing_ok_cem_initiates() {
-        let server_config = NodeConfig::builder(basic_node_description(UUID_A, S2Role::Rm), vec![MessageVersion("v1".into())])
+        let server_config = NodeConfig::builder(basic_node_description(UUID_A, Role::Rm), vec![MessageVersion("v1".into())])
             .with_connection_initiate_url("test.example.com".into())
             .build()
             .unwrap();
 
-        let client_config = NodeConfig::builder(basic_node_description(UUID_B, S2Role::Cem), vec![MessageVersion("v1".into())])
+        let client_config = NodeConfig::builder(basic_node_description(UUID_B, Role::Cem), vec![MessageVersion("v1".into())])
             .with_connection_initiate_url("client.example.com".into())
             .build()
             .unwrap();
@@ -951,7 +951,7 @@ mod tests {
 
         let client = Client::new(ClientConfig {
             additional_certificates: vec![CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()],
-            endpoint_description: S2EndpointDescription::default(),
+            endpoint_description: EndpointDescription::default(),
             pairing_deployment: Deployment::Wan,
         })
         .unwrap();
@@ -975,10 +975,10 @@ mod tests {
 
     #[derive(Debug, Clone)]
     struct TestPrePairingHandler {
-        endpoint: Arc<Mutex<Option<S2EndpointDescription>>>,
-        node: Arc<Mutex<Option<S2NodeDescription>>>,
-        client_id: Arc<Mutex<Option<S2NodeId>>>,
-        target_node: Arc<Mutex<Option<Option<S2NodeId>>>>,
+        endpoint: Arc<Mutex<Option<EndpointDescription>>>,
+        node: Arc<Mutex<Option<NodeDescription>>>,
+        client_id: Arc<Mutex<Option<NodeId>>>,
+        target_node: Arc<Mutex<Option<Option<NodeId>>>>,
         response: PrePairingResponse,
     }
 
@@ -997,9 +997,9 @@ mod tests {
     impl PrePairingHandler for TestPrePairingHandler {
         fn prepairing_requested(
             &self,
-            endpoint: S2EndpointDescription,
-            node: S2NodeDescription,
-            target_node: Option<S2NodeId>,
+            endpoint: EndpointDescription,
+            node: NodeDescription,
+            target_node: Option<NodeId>,
         ) -> PrePairingResponse {
             *self.endpoint.lock().unwrap() = Some(endpoint);
             *self.node.lock().unwrap() = Some(node);
@@ -1007,7 +1007,7 @@ mod tests {
             self.response
         }
 
-        fn prepairing_cancelled(&self, id: crate::S2NodeId, target_node: Option<S2NodeId>) {
+        fn prepairing_cancelled(&self, id: crate::NodeId, target_node: Option<NodeId>) {
             *self.client_id.lock().unwrap() = Some(id);
             *self.target_node.lock().unwrap() = Some(target_node);
         }
@@ -1015,12 +1015,12 @@ mod tests {
 
     #[tokio::test]
     async fn prepairing_then_pair() {
-        let server_config = NodeConfig::builder(basic_node_description(UUID_A, S2Role::Rm), vec![MessageVersion("v1".into())])
+        let server_config = NodeConfig::builder(basic_node_description(UUID_A, Role::Rm), vec![MessageVersion("v1".into())])
             .with_connection_initiate_url("test.example.com".into())
             .build()
             .unwrap();
 
-        let client_config = NodeConfig::builder(basic_node_description(UUID_B, S2Role::Cem), vec![MessageVersion("v1".into())])
+        let client_config = NodeConfig::builder(basic_node_description(UUID_B, Role::Cem), vec![MessageVersion("v1".into())])
             .with_connection_initiate_url("client.example.com".into())
             .build()
             .unwrap();
@@ -1036,7 +1036,7 @@ mod tests {
 
         let client = Client::new(ClientConfig {
             additional_certificates: vec![CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()],
-            endpoint_description: S2EndpointDescription::default(),
+            endpoint_description: EndpointDescription::default(),
             pairing_deployment: Deployment::Wan,
         })
         .unwrap();
@@ -1068,12 +1068,12 @@ mod tests {
 
     #[tokio::test]
     async fn prepairing_then_cancel() {
-        let server_config = NodeConfig::builder(basic_node_description(UUID_A, S2Role::Rm), vec![MessageVersion("v1".into())])
+        let server_config = NodeConfig::builder(basic_node_description(UUID_A, Role::Rm), vec![MessageVersion("v1".into())])
             .with_connection_initiate_url("test.example.com".into())
             .build()
             .unwrap();
 
-        let client_config = NodeConfig::builder(basic_node_description(UUID_B, S2Role::Cem), vec![MessageVersion("v1".into())])
+        let client_config = NodeConfig::builder(basic_node_description(UUID_B, Role::Cem), vec![MessageVersion("v1".into())])
             .with_connection_initiate_url("client.example.com".into())
             .build()
             .unwrap();
@@ -1089,7 +1089,7 @@ mod tests {
 
         let client = Client::new(ClientConfig {
             additional_certificates: vec![CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()],
-            endpoint_description: S2EndpointDescription::default(),
+            endpoint_description: EndpointDescription::default(),
             pairing_deployment: Deployment::Wan,
         })
         .unwrap();
@@ -1115,12 +1115,12 @@ mod tests {
 
     #[tokio::test]
     async fn prepairing_rejected() {
-        let server_config = NodeConfig::builder(basic_node_description(UUID_A, S2Role::Rm), vec![MessageVersion("v1".into())])
+        let server_config = NodeConfig::builder(basic_node_description(UUID_A, Role::Rm), vec![MessageVersion("v1".into())])
             .with_connection_initiate_url("test.example.com".into())
             .build()
             .unwrap();
 
-        let client_config = NodeConfig::builder(basic_node_description(UUID_B, S2Role::Cem), vec![MessageVersion("v1".into())])
+        let client_config = NodeConfig::builder(basic_node_description(UUID_B, Role::Cem), vec![MessageVersion("v1".into())])
             .with_connection_initiate_url("client.example.com".into())
             .build()
             .unwrap();
@@ -1136,7 +1136,7 @@ mod tests {
 
         let client = Client::new(ClientConfig {
             additional_certificates: vec![CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()],
-            endpoint_description: S2EndpointDescription::default(),
+            endpoint_description: EndpointDescription::default(),
             pairing_deployment: Deployment::Wan,
         })
         .unwrap();
@@ -1150,12 +1150,12 @@ mod tests {
 
     #[tokio::test]
     async fn pairing_rejects_invalid_hmac() {
-        let server_config = NodeConfig::builder(basic_node_description(UUID_A, S2Role::Cem), vec![MessageVersion("v1".into())])
+        let server_config = NodeConfig::builder(basic_node_description(UUID_A, Role::Cem), vec![MessageVersion("v1".into())])
             .with_connection_initiate_url("test.example.com".into())
             .build()
             .unwrap();
 
-        let client_config = NodeConfig::builder(basic_node_description(UUID_B, S2Role::Rm), vec![MessageVersion("v1".into())])
+        let client_config = NodeConfig::builder(basic_node_description(UUID_B, Role::Rm), vec![MessageVersion("v1".into())])
             .with_connection_initiate_url("client.example.com".into())
             .build()
             .unwrap();
@@ -1170,8 +1170,8 @@ mod tests {
                     post(|| async {
                         Json(RequestPairingResponse {
                             pairing_attempt_id: PairingAttemptId("testid".into()),
-                            server_s2_node_description: basic_node_description(UUID_A, S2Role::Cem),
-                            server_s2_endpoint_description: S2EndpointDescription::default(),
+                            server_node_description: basic_node_description(UUID_A, Role::Cem),
+                            server_endpoint_description: EndpointDescription::default(),
                             selected_hmac_hashing_algorithm: crate::pairing::wire::HmacHashingAlgorithm::Sha256,
                             client_hmac_challenge_response: HmacChallengeResponse(vec![0; 64]),
                             server_hmac_challenge: HmacChallenge::new(&mut rand::rng(), 32),
@@ -1180,10 +1180,12 @@ mod tests {
                 )
                 .route(
                     "/v1/finalizePairing",
-                    post(|attempt_id: PairingAttemptId, Json(success): Json<bool>| async move {
-                        assert_eq!(attempt_id.0, "testid");
-                        *finalize_result_clone.lock().unwrap() = Some(success);
-                    }),
+                    post(
+                        |attempt_id: PairingAttemptId, Json(FinalizePairingRequest { success })| async move {
+                            assert_eq!(attempt_id.0, "testid");
+                            *finalize_result_clone.lock().unwrap() = Some(success);
+                        },
+                    ),
                 ),
         )
         .await;
@@ -1196,7 +1198,7 @@ mod tests {
 
         let client = Client::new(ClientConfig {
             additional_certificates: vec![CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()],
-            endpoint_description: S2EndpointDescription::default(),
+            endpoint_description: EndpointDescription::default(),
             pairing_deployment: Deployment::Wan,
         })
         .unwrap();
@@ -1215,12 +1217,12 @@ mod tests {
 
     #[tokio::test]
     async fn pairing_rejects_same_role() {
-        let server_config = NodeConfig::builder(basic_node_description(UUID_A, S2Role::Rm), vec![MessageVersion("v1".into())])
+        let server_config = NodeConfig::builder(basic_node_description(UUID_A, Role::Rm), vec![MessageVersion("v1".into())])
             .with_connection_initiate_url("test.example.com".into())
             .build()
             .unwrap();
 
-        let client_config = NodeConfig::builder(basic_node_description(UUID_B, S2Role::Rm), vec![MessageVersion("v1".into())])
+        let client_config = NodeConfig::builder(basic_node_description(UUID_B, Role::Rm), vec![MessageVersion("v1".into())])
             .with_connection_initiate_url("client.example.com".into())
             .build()
             .unwrap();
@@ -1235,8 +1237,8 @@ mod tests {
                     post(|Json(request): Json<RequestPairing>| async move {
                         Json(RequestPairingResponse {
                             pairing_attempt_id: PairingAttemptId("testid".into()),
-                            server_s2_node_description: basic_node_description(UUID_A, S2Role::Rm),
-                            server_s2_endpoint_description: S2EndpointDescription::default(),
+                            server_node_description: basic_node_description(UUID_A, Role::Rm),
+                            server_endpoint_description: EndpointDescription::default(),
                             selected_hmac_hashing_algorithm: crate::pairing::wire::HmacHashingAlgorithm::Sha256,
                             client_hmac_challenge_response: request.client_hmac_challenge.sha256(&Network::Wan, b"testtoken"),
                             server_hmac_challenge: HmacChallenge::new(&mut rand::rng(), 32),
@@ -1245,10 +1247,12 @@ mod tests {
                 )
                 .route(
                     "/v1/finalizePairing",
-                    post(|attempt_id: PairingAttemptId, Json(success): Json<bool>| async move {
-                        assert_eq!(attempt_id.0, "testid");
-                        *finalize_result_clone.lock().unwrap() = Some(success);
-                    }),
+                    post(
+                        |attempt_id: PairingAttemptId, Json(FinalizePairingRequest { success })| async move {
+                            assert_eq!(attempt_id.0, "testid");
+                            *finalize_result_clone.lock().unwrap() = Some(success);
+                        },
+                    ),
                 ),
         )
         .await;
@@ -1261,7 +1265,7 @@ mod tests {
 
         let client = Client::new(ClientConfig {
             additional_certificates: vec![CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()],
-            endpoint_description: S2EndpointDescription::default(),
+            endpoint_description: EndpointDescription::default(),
             pairing_deployment: Deployment::Wan,
         })
         .unwrap();
@@ -1280,12 +1284,12 @@ mod tests {
 
     #[tokio::test]
     async fn pairing_rejects_same_role_reported_by_server() {
-        let server_config = NodeConfig::builder(basic_node_description(UUID_A, S2Role::Rm), vec![MessageVersion("v1".into())])
+        let server_config = NodeConfig::builder(basic_node_description(UUID_A, Role::Rm), vec![MessageVersion("v1".into())])
             .with_connection_initiate_url("test.example.com".into())
             .build()
             .unwrap();
 
-        let client_config = NodeConfig::builder(basic_node_description(UUID_B, S2Role::Rm), vec![MessageVersion("v1".into())])
+        let client_config = NodeConfig::builder(basic_node_description(UUID_B, Role::Rm), vec![MessageVersion("v1".into())])
             .with_connection_initiate_url("client.example.com".into())
             .build()
             .unwrap();
@@ -1306,10 +1310,12 @@ mod tests {
                 )
                 .route(
                     "/v1/finalizePairing",
-                    post(|attempt_id: PairingAttemptId, Json(success): Json<bool>| async move {
-                        assert_eq!(attempt_id.0, "testid");
-                        *finalize_result_clone.lock().unwrap() = Some(success);
-                    }),
+                    post(
+                        |attempt_id: PairingAttemptId, Json(FinalizePairingRequest { success })| async move {
+                            assert_eq!(attempt_id.0, "testid");
+                            *finalize_result_clone.lock().unwrap() = Some(success);
+                        },
+                    ),
                 ),
         )
         .await;
@@ -1322,7 +1328,7 @@ mod tests {
 
         let client = Client::new(ClientConfig {
             additional_certificates: vec![CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()],
-            endpoint_description: S2EndpointDescription::default(),
+            endpoint_description: EndpointDescription::default(),
             pairing_deployment: Deployment::Wan,
         })
         .unwrap();
@@ -1341,12 +1347,12 @@ mod tests {
 
     #[tokio::test]
     async fn pairing_invokes_finalize_on_bad_request_connection_details() {
-        let server_config = NodeConfig::builder(basic_node_description(UUID_A, S2Role::Cem), vec![MessageVersion("v1".into())])
+        let server_config = NodeConfig::builder(basic_node_description(UUID_A, Role::Cem), vec![MessageVersion("v1".into())])
             .with_connection_initiate_url("test.example.com".into())
             .build()
             .unwrap();
 
-        let client_config = NodeConfig::builder(basic_node_description(UUID_B, S2Role::Rm), vec![MessageVersion("v1".into())])
+        let client_config = NodeConfig::builder(basic_node_description(UUID_B, Role::Rm), vec![MessageVersion("v1".into())])
             .with_connection_initiate_url("client.example.com".into())
             .build()
             .unwrap();
@@ -1359,7 +1365,7 @@ mod tests {
                 .route("/v1/requestConnectionDetails", post(|| async { StatusCode::BAD_GATEWAY }))
                 .route(
                     "/v1/finalizePairing",
-                    post(|Json(success): Json<bool>| async move {
+                    post(|Json(FinalizePairingRequest { success })| async move {
                         *finalize_result_clone.lock().unwrap() = Some(success);
                     }),
                 ),
@@ -1374,7 +1380,7 @@ mod tests {
 
         let client = Client::new(ClientConfig {
             additional_certificates: vec![CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()],
-            endpoint_description: S2EndpointDescription::default(),
+            endpoint_description: EndpointDescription::default(),
             pairing_deployment: Deployment::Wan,
         })
         .unwrap();
@@ -1393,12 +1399,12 @@ mod tests {
 
     #[tokio::test]
     async fn pairing_invokes_finalize_on_bad_post_connection_details() {
-        let server_config = NodeConfig::builder(basic_node_description(UUID_A, S2Role::Rm), vec![MessageVersion("v1".into())])
+        let server_config = NodeConfig::builder(basic_node_description(UUID_A, Role::Rm), vec![MessageVersion("v1".into())])
             .with_connection_initiate_url("test.example.com".into())
             .build()
             .unwrap();
 
-        let client_config = NodeConfig::builder(basic_node_description(UUID_B, S2Role::Cem), vec![MessageVersion("v1".into())])
+        let client_config = NodeConfig::builder(basic_node_description(UUID_B, Role::Cem), vec![MessageVersion("v1".into())])
             .with_connection_initiate_url("client.example.com".into())
             .build()
             .unwrap();
@@ -1411,7 +1417,7 @@ mod tests {
                 .route("/v1/postConnectionDetails", post(|| async { StatusCode::BAD_GATEWAY }))
                 .route(
                     "/v1/finalizePairing",
-                    post(|Json(success): Json<bool>| async move {
+                    post(|Json(FinalizePairingRequest { success })| async move {
                         *finalize_result_clone.lock().unwrap() = Some(success);
                     }),
                 ),
@@ -1426,7 +1432,7 @@ mod tests {
 
         let client = Client::new(ClientConfig {
             additional_certificates: vec![CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()],
-            endpoint_description: S2EndpointDescription::default(),
+            endpoint_description: EndpointDescription::default(),
             pairing_deployment: Deployment::Wan,
         })
         .unwrap();
@@ -1445,12 +1451,12 @@ mod tests {
 
     #[tokio::test]
     async fn pairing_invokes_finalize_on_callback_failure() {
-        let server_config = NodeConfig::builder(basic_node_description(UUID_A, S2Role::Rm), vec![MessageVersion("v1".into())])
+        let server_config = NodeConfig::builder(basic_node_description(UUID_A, Role::Rm), vec![MessageVersion("v1".into())])
             .with_connection_initiate_url("test.example.com".into())
             .build()
             .unwrap();
 
-        let client_config = NodeConfig::builder(basic_node_description(UUID_B, S2Role::Cem), vec![MessageVersion("v1".into())])
+        let client_config = NodeConfig::builder(basic_node_description(UUID_B, Role::Cem), vec![MessageVersion("v1".into())])
             .with_connection_initiate_url("client.example.com".into())
             .build()
             .unwrap();
@@ -1461,7 +1467,7 @@ mod tests {
             server_config,
             Router::new().route(
                 "/v1/finalizePairing",
-                post(|Json(success): Json<bool>| async move {
+                post(|Json(FinalizePairingRequest { success })| async move {
                     *finalize_result_clone.lock().unwrap() = Some(success);
                 }),
             ),
@@ -1476,7 +1482,7 @@ mod tests {
 
         let client = Client::new(ClientConfig {
             additional_certificates: vec![CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()],
-            endpoint_description: S2EndpointDescription::default(),
+            endpoint_description: EndpointDescription::default(),
             pairing_deployment: Deployment::Wan,
         })
         .unwrap();
@@ -1495,7 +1501,7 @@ mod tests {
 
     #[tokio::test]
     async fn longpolling() {
-        let server_config = NodeConfig::builder(basic_node_description(UUID_A, S2Role::Cem), vec![MessageVersion("v1".into())])
+        let server_config = NodeConfig::builder(basic_node_description(UUID_A, Role::Cem), vec![MessageVersion("v1".into())])
             .with_connection_initiate_url("test.example.com".into())
             .build()
             .unwrap();
@@ -1505,14 +1511,14 @@ mod tests {
         let addr = server_handle.listening().await.unwrap();
 
         let client_task = async move {
-            let client_config = NodeConfig::builder(basic_node_description(UUID_B, S2Role::Rm), vec![MessageVersion("v1".into())])
+            let client_config = NodeConfig::builder(basic_node_description(UUID_B, Role::Rm), vec![MessageVersion("v1".into())])
                 .with_connection_initiate_url("client.example.com".into())
                 .build()
                 .unwrap();
 
             let client = Client::new(ClientConfig {
                 additional_certificates: vec![CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()],
-                endpoint_description: S2EndpointDescription::default(),
+                endpoint_description: EndpointDescription::default(),
                 pairing_deployment: Deployment::Wan,
             })
             .unwrap();
@@ -1526,19 +1532,19 @@ mod tests {
             }
 
             impl LongpollHandler for TestHandler<'_> {
-                async fn request_pairing(&mut self, node: S2NodeId) -> bool {
+                async fn request_pairing(&mut self, node: NodeId) -> bool {
                     assert!(self.have_cancel);
                     assert_eq!(node, UUID_B.into());
                     self.poller.remove_node(node);
                     true
                 }
 
-                async fn prepare_pairing(&mut self, node: S2NodeId) {
+                async fn prepare_pairing(&mut self, node: NodeId) {
                     assert_eq!(node, UUID_B.into());
                     self.have_prepare = true;
                 }
 
-                async fn cancel_prepare_pairing(&mut self, node: S2NodeId) {
+                async fn cancel_prepare_pairing(&mut self, node: NodeId) {
                     assert_eq!(node, UUID_B.into());
                     assert!(self.have_prepare);
                     self.have_cancel = true;
@@ -1579,7 +1585,7 @@ mod tests {
             assert_eq!(longpoll_session.client_id(), UUID_B.into());
             let node_description = longpoll_session.node_description().await.unwrap();
             assert_eq!(node_description.id, UUID_B.into());
-            assert_eq!(node_description.role, S2Role::Rm);
+            assert_eq!(node_description.role, Role::Rm);
 
             assert!(longpoll_session.prepare_pairing().await.is_ok());
             assert!(longpoll_session.cancel_prepare_pairing().await.is_ok());
@@ -1598,7 +1604,7 @@ mod tests {
 
     #[tokio::test]
     async fn longpolling_request_pairing_not_ready() {
-        let server_config = NodeConfig::builder(basic_node_description(UUID_A, S2Role::Cem), vec![MessageVersion("v1".into())])
+        let server_config = NodeConfig::builder(basic_node_description(UUID_A, Role::Cem), vec![MessageVersion("v1".into())])
             .with_connection_initiate_url("test.example.com".into())
             .build()
             .unwrap();
@@ -1608,14 +1614,14 @@ mod tests {
         let addr = server_handle.listening().await.unwrap();
 
         let client_task = tokio::spawn(async move {
-            let client_config = NodeConfig::builder(basic_node_description(UUID_B, S2Role::Rm), vec![MessageVersion("v1".into())])
+            let client_config = NodeConfig::builder(basic_node_description(UUID_B, Role::Rm), vec![MessageVersion("v1".into())])
                 .with_connection_initiate_url("client.example.com".into())
                 .build()
                 .unwrap();
 
             let client = Client::new(ClientConfig {
                 additional_certificates: vec![CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()],
-                endpoint_description: S2EndpointDescription::default(),
+                endpoint_description: EndpointDescription::default(),
                 pairing_deployment: Deployment::Wan,
             })
             .unwrap();
@@ -1625,16 +1631,16 @@ mod tests {
             struct TestHandler;
 
             impl LongpollHandler for TestHandler {
-                async fn request_pairing(&mut self, node: S2NodeId) -> bool {
+                async fn request_pairing(&mut self, node: NodeId) -> bool {
                     assert_eq!(node, UUID_B.into());
                     false
                 }
 
-                async fn prepare_pairing(&mut self, _node: S2NodeId) {
+                async fn prepare_pairing(&mut self, _node: NodeId) {
                     unimplemented!()
                 }
 
-                async fn cancel_prepare_pairing(&mut self, _node: S2NodeId) {
+                async fn cancel_prepare_pairing(&mut self, _node: NodeId) {
                     unimplemented!()
                 }
             }
@@ -1654,12 +1660,12 @@ mod tests {
 
     #[tokio::test]
     async fn longpolling_cancelled() {
-        let server_config = NodeConfig::builder(basic_node_description(UUID_A, S2Role::Cem), vec![MessageVersion("v1".into())])
+        let server_config = NodeConfig::builder(basic_node_description(UUID_A, Role::Cem), vec![MessageVersion("v1".into())])
             .with_connection_initiate_url("test.example.com".into())
             .build()
             .unwrap();
 
-        let client_config = NodeConfig::builder(basic_node_description(UUID_B, S2Role::Rm), vec![MessageVersion("v1".into())])
+        let client_config = NodeConfig::builder(basic_node_description(UUID_B, Role::Rm), vec![MessageVersion("v1".into())])
             .with_connection_initiate_url("client.example.com".into())
             .build()
             .unwrap();
@@ -1672,7 +1678,7 @@ mod tests {
 
         let client = Client::new(ClientConfig {
             additional_certificates: vec![CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()],
-            endpoint_description: S2EndpointDescription::default(),
+            endpoint_description: EndpointDescription::default(),
             pairing_deployment: Deployment::Wan,
         })
         .unwrap();
@@ -1687,15 +1693,15 @@ mod tests {
         struct TestHandler;
 
         impl LongpollHandler for TestHandler {
-            async fn request_pairing(&mut self, _node: S2NodeId) -> bool {
+            async fn request_pairing(&mut self, _node: NodeId) -> bool {
                 unimplemented!()
             }
 
-            async fn prepare_pairing(&mut self, _node: S2NodeId) {
+            async fn prepare_pairing(&mut self, _node: NodeId) {
                 unimplemented!()
             }
 
-            async fn cancel_prepare_pairing(&mut self, _node: S2NodeId) {
+            async fn cancel_prepare_pairing(&mut self, _node: NodeId) {
                 unimplemented!()
             }
         }
@@ -1707,12 +1713,12 @@ mod tests {
 
     #[tokio::test]
     async fn longpolling_rejected() {
-        let server_config = NodeConfig::builder(basic_node_description(UUID_A, S2Role::Cem), vec![MessageVersion("v1".into())])
+        let server_config = NodeConfig::builder(basic_node_description(UUID_A, Role::Cem), vec![MessageVersion("v1".into())])
             .with_connection_initiate_url("test.example.com".into())
             .build()
             .unwrap();
 
-        let client_config = NodeConfig::builder(basic_node_description(UUID_B, S2Role::Rm), vec![MessageVersion("v1".into())])
+        let client_config = NodeConfig::builder(basic_node_description(UUID_B, Role::Rm), vec![MessageVersion("v1".into())])
             .with_connection_initiate_url("client.example.com".into())
             .build()
             .unwrap();
@@ -1725,7 +1731,7 @@ mod tests {
 
         let client = Client::new(ClientConfig {
             additional_certificates: vec![CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()],
-            endpoint_description: S2EndpointDescription::default(),
+            endpoint_description: EndpointDescription::default(),
             pairing_deployment: Deployment::Wan,
         })
         .unwrap();
@@ -1740,15 +1746,15 @@ mod tests {
         struct TestHandler;
 
         impl LongpollHandler for TestHandler {
-            async fn request_pairing(&mut self, _node: S2NodeId) -> bool {
+            async fn request_pairing(&mut self, _node: NodeId) -> bool {
                 unimplemented!()
             }
 
-            async fn prepare_pairing(&mut self, _node: S2NodeId) {
+            async fn prepare_pairing(&mut self, _node: NodeId) {
                 unimplemented!()
             }
 
-            async fn cancel_prepare_pairing(&mut self, _node: S2NodeId) {
+            async fn cancel_prepare_pairing(&mut self, _node: NodeId) {
                 unimplemented!()
             }
         }

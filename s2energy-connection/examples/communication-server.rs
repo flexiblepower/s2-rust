@@ -9,7 +9,7 @@ use uuid::uuid;
 use axum_server::tls_rustls::RustlsConfig;
 use s2energy_common::S2Transport;
 use s2energy_connection::{
-    AccessToken, MessageVersion, S2NodeId,
+    AccessToken, MessageVersion, NodeId,
     communication::{NodeConfig, PairingLookupResult, Server, ServerConfig, ServerPairing, ServerPairingStore},
 };
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
@@ -17,8 +17,8 @@ use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 struct MemoryPairingStoreInner {
     token: AccessToken,
     config: Arc<NodeConfig>,
-    server: S2NodeId,
-    client: S2NodeId,
+    server: NodeId,
+    client: NodeId,
     // indication of whether the client has unpaired with us.
     unpaired: bool,
 }

@@ -7,7 +7,7 @@ use tokio_tungstenite::{Connector, connect_async_tls_with_config, tungstenite::C
 use tracing::{debug, trace};
 
 use crate::{
-    AccessToken, CommunicationProtocol, S2EndpointDescription, S2NodeId,
+    AccessToken, CommunicationProtocol, EndpointDescription, NodeId,
     common::negotiate_version,
     communication::{
         CommunicationResult, ConnectionInfo, Error, ErrorKind, NodeConfig, WebSocketTransport,
@@ -25,7 +25,7 @@ pub struct ClientConfig {
     /// When the remote is on the LAN, this is not used.
     pub additional_certificates: Vec<CertificateDer<'static>>,
     /// Optional description of this endpoint, sent as update to the server.
-    pub endpoint_description: Option<S2EndpointDescription>,
+    pub endpoint_description: Option<EndpointDescription>,
 }
 
 /// Client used to setup communication sessions for a node.
@@ -33,7 +33,7 @@ pub struct ClientConfig {
 pub struct Client {
     config: Arc<NodeConfig>,
     additional_certificates: Vec<CertificateDer<'static>>,
-    endpoint_description: Option<S2EndpointDescription>,
+    endpoint_description: Option<EndpointDescription>,
 }
 
 /// A description of a pairing between two S2 Nodes.
@@ -45,9 +45,9 @@ pub trait ClientPairing: Send {
     type Error: std::error::Error + 'static;
 
     /// The Node ID of the S2 node initiating communication.
-    fn client_id(&self) -> S2NodeId;
+    fn client_id(&self) -> NodeId;
     /// The Node Id of the S2 node receiving the request to communicate.
-    fn server_id(&self) -> S2NodeId;
+    fn server_id(&self) -> NodeId;
     /// The currently stored access tokens for the connection.
     fn access_tokens(&self) -> impl AsRef<[AccessToken]>;
     /// The communication url the client can use to contact the server.
@@ -301,7 +301,7 @@ mod tests {
     use tokio::net::TcpListener;
 
     use crate::{
-        AccessToken, CommunicationProtocol, MessageVersion, S2EndpointDescription, S2NodeId, S2Role,
+        AccessToken, CommunicationProtocol, EndpointDescription, MessageVersion, NodeId, Role,
         common::wire::test::{UUID_A, UUID_B, basic_node_description},
         communication::{
             self, Client, ClientConfig, ClientPairing, ErrorKind, NodeConfig, PairingLookup, Server, ServerConfig, ServerPairing,
@@ -366,8 +366,8 @@ mod tests {
     }
 
     struct TestPairing {
-        client: S2NodeId,
-        server: S2NodeId,
+        client: NodeId,
+        server: NodeId,
         tokens: Arc<Mutex<Vec<AccessToken>>>,
         url: String,
     }
@@ -375,11 +375,11 @@ mod tests {
     impl ClientPairing for &TestPairing {
         type Error = Infallible;
 
-        fn client_id(&self) -> S2NodeId {
+        fn client_id(&self) -> NodeId {
             self.server
         }
 
-        fn server_id(&self) -> S2NodeId {
+        fn server_id(&self) -> NodeId {
             self.client
         }
 
@@ -399,7 +399,7 @@ mod tests {
 
     async fn setup_server<S: ServerPairingStore>(
         store: S,
-        endpoint: Option<S2EndpointDescription>,
+        endpoint: Option<EndpointDescription>,
         overrides: Router<()>,
     ) -> (Handle<SocketAddr>, Server<S>) {
         let rustls_config = RustlsConfig::from_pem(
@@ -563,9 +563,9 @@ mod tests {
         let client = Client::new(
             ClientConfig {
                 additional_certificates: vec![CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()],
-                endpoint_description: Some(S2EndpointDescription {
+                endpoint_description: Some(EndpointDescription {
                     name: Some("a".into()),
-                    logo_uri: Some("b".into()),
+                    logo_url: Some("b".into()),
                     deployment: None,
                 }),
             },
@@ -589,9 +589,9 @@ mod tests {
         assert_eq!(server_connection.message_version, MessageVersion("v1".into()));
         assert_eq!(
             server_connection.remote_endpoint_description.unwrap(),
-            S2EndpointDescription {
+            EndpointDescription {
                 name: Some("a".into()),
-                logo_uri: Some("b".into()),
+                logo_url: Some("b".into()),
                 deployment: None,
             }
         );
@@ -614,9 +614,9 @@ mod tests {
         );
         let (handle, mut server) = setup_server(
             store.clone(),
-            Some(S2EndpointDescription {
+            Some(EndpointDescription {
                 name: Some("a".into()),
-                logo_uri: Some("b".into()),
+                logo_url: Some("b".into()),
                 deployment: None,
             }),
             Router::new(),
@@ -643,9 +643,9 @@ mod tests {
         assert_eq!(client_connection.message_version, MessageVersion("v1".into()));
         assert_eq!(
             client_connection.remote_endpoint_description.unwrap(),
-            S2EndpointDescription {
+            EndpointDescription {
                 name: Some("a".into()),
-                logo_uri: Some("b".into()),
+                logo_url: Some("b".into()),
                 deployment: None,
             }
         );
@@ -682,7 +682,7 @@ mod tests {
             },
             Arc::new(
                 NodeConfig::builder(vec![MessageVersion("v1".into())])
-                    .with_node_description(basic_node_description(UUID_A, S2Role::Rm))
+                    .with_node_description(basic_node_description(UUID_A, Role::Rm))
                     .build(),
             ),
         );
@@ -730,7 +730,7 @@ mod tests {
             },
             Arc::new(
                 NodeConfig::builder(vec![MessageVersion("v1".into())])
-                    .with_node_description(basic_node_description(UUID_B, S2Role::Cem))
+                    .with_node_description(basic_node_description(UUID_B, Role::Cem))
                     .build(),
             ),
         );
@@ -948,8 +948,8 @@ mod tests {
         );
 
         struct NonPersistingPairing {
-            client: S2NodeId,
-            server: S2NodeId,
+            client: NodeId,
+            server: NodeId,
             tokens: Vec<AccessToken>,
             url: String,
         }
@@ -957,11 +957,11 @@ mod tests {
         impl ClientPairing for NonPersistingPairing {
             type Error = std::io::Error;
 
-            fn client_id(&self) -> S2NodeId {
+            fn client_id(&self) -> NodeId {
                 self.server
             }
 
-            fn server_id(&self) -> S2NodeId {
+            fn server_id(&self) -> NodeId {
                 self.client
             }
 

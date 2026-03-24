@@ -3,8 +3,8 @@ use std::path::PathBuf;
 use uuid::uuid;
 
 use s2energy_connection::{
-    Deployment, MessageVersion, S2EndpointDescription, S2NodeDescription, S2Role,
-    pairing::{Client, ClientConfig, NodeConfig, PairingRemote, PairingS2NodeId},
+    Deployment, EndpointDescription, MessageVersion, NodeDescription, Role,
+    pairing::{Client, ClientConfig, NodeConfig, NodeIdAlias, PairingRemote},
 };
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
@@ -18,14 +18,14 @@ async fn main() {
         .init();
 
     let config = NodeConfig::builder(
-        S2NodeDescription {
+        NodeDescription {
             id: uuid!("67e55044-10b1-426f-9247-bb680e5fe0c7").into(),
             brand: String::from("super-reliable-corp"),
-            logo_uri: None,
+            logo_url: None,
             type_: String::from("fancy"),
             model_name: String::from("the best"),
             user_defined_name: None,
-            role: S2Role::Rm,
+            role: Role::Rm,
         },
         vec![MessageVersion("v1".into())],
     )
@@ -37,7 +37,7 @@ async fn main() {
         additional_certificates: vec![
             CertificateDer::from_pem_file(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("testdata").join("root.pem")).unwrap(),
         ],
-        endpoint_description: S2EndpointDescription::default(),
+        endpoint_description: EndpointDescription::default(),
         pairing_deployment: Deployment::Lan,
     })
     .unwrap();
@@ -48,7 +48,7 @@ async fn main() {
             &config,
             PairingRemote {
                 url: "https://localhost:8005".into(),
-                id: Some(PairingS2NodeId("ninechars".into())),
+                id: Some(NodeIdAlias("ninechars".into())),
             },
             PAIRING_TOKEN,
             async |pairing| {

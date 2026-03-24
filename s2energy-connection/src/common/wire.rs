@@ -38,13 +38,13 @@ pub struct MessageVersion(pub String);
 /// Information about the pairing endpoint of a S2 node.
 #[derive(Default, Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
 #[serde(rename_all = "camelCase")]
-pub struct S2EndpointDescription {
+pub struct EndpointDescription {
     /// Name of the endpoint.
     #[serde(default)]
     pub name: Option<String>,
     /// URI of a logo to be used for the endpoint in GUIs.
     #[serde(default)]
-    pub logo_uri: Option<String>,
+    pub logo_url: Option<String>,
     /// Type of deployment used by the endpoint (local or globally routable).
     #[serde(default)]
     pub deployment: Option<Deployment>,
@@ -130,21 +130,21 @@ impl From<uuid::Error> for InvalidNodeId {
 
 /// Unique identifier of the S2 node.
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct S2NodeId(Uuid);
+pub struct NodeId(Uuid);
 
-impl From<Uuid> for S2NodeId {
+impl From<Uuid> for NodeId {
     fn from(value: Uuid) -> Self {
         Self(value)
     }
 }
 
-impl From<S2NodeId> for Uuid {
-    fn from(value: S2NodeId) -> Self {
+impl From<NodeId> for Uuid {
+    fn from(value: NodeId) -> Self {
         value.0
     }
 }
 
-impl TryFrom<String> for S2NodeId {
+impl TryFrom<String> for NodeId {
     type Error = InvalidNodeId;
 
     fn try_from(value: String) -> Result<Self, Self::Error> {
@@ -152,7 +152,7 @@ impl TryFrom<String> for S2NodeId {
     }
 }
 
-impl TryFrom<&str> for S2NodeId {
+impl TryFrom<&str> for NodeId {
     type Error = InvalidNodeId;
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
@@ -160,7 +160,7 @@ impl TryFrom<&str> for S2NodeId {
     }
 }
 
-impl std::ops::Deref for S2NodeId {
+impl std::ops::Deref for NodeId {
     type Target = Uuid;
 
     fn deref(&self) -> &Self::Target {
@@ -168,19 +168,19 @@ impl std::ops::Deref for S2NodeId {
     }
 }
 
-impl std::ops::DerefMut for S2NodeId {
+impl std::ops::DerefMut for NodeId {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }
 }
 
-impl core::fmt::Display for S2NodeId {
+impl core::fmt::Display for NodeId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.0.as_hyphenated().fmt(f)
     }
 }
 
-impl S2NodeId {
+impl NodeId {
     /// Generate a new random node id.
     #[expect(clippy::new_without_default, reason = "New uses non-trivial randomness")]
     pub fn new() -> Self {
@@ -191,14 +191,14 @@ impl S2NodeId {
 /// Information about the S2 node.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
 #[serde(rename_all = "camelCase")]
-pub struct S2NodeDescription {
+pub struct NodeDescription {
     /// Unique identifier of the node.
-    pub id: S2NodeId,
+    pub id: NodeId,
     /// Brandname used for the node.
     pub brand: String,
     /// URI of a logo to be used for the node in GUIs.
     #[serde(default)]
-    pub logo_uri: Option<String>,
+    pub logo_url: Option<String>,
     /// The type of this node.
     pub type_: String,
     /// Model name of the device this node belongs to.
@@ -207,7 +207,7 @@ pub struct S2NodeDescription {
     #[serde(default)]
     pub user_defined_name: Option<String>,
     /// The S2 role this device has (e.g. CEM or RM).
-    pub role: S2Role,
+    pub role: Role,
 }
 
 /// Identifier of a protocol that can be used for communication of S2 messages between nodes.
@@ -220,14 +220,14 @@ pub struct CommunicationProtocol(pub String);
 /// Role within the S2 standard.
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash)]
 #[serde(rename_all = "UPPERCASE")]
-pub enum S2Role {
+pub enum Role {
     /// Customer Energy Manager.
     Cem,
     /// Resource Manager.
     Rm,
 }
 
-impl S2Role {
+impl Role {
     pub(crate) fn service_subtype(self) -> &'static str {
         match self {
             Self::Cem => "cem",
@@ -267,20 +267,20 @@ impl TryFrom<url::Host<&str>> for Deployment {
 pub(crate) mod test {
     use uuid::{Uuid, uuid};
 
-    use crate::{S2NodeDescription, S2Role, pairing::PairingS2NodeId};
+    use crate::{NodeDescription, Role, pairing::NodeIdAlias};
 
     pub(crate) const UUID_A: Uuid = uuid!("67e55044-10b1-426f-9247-bb680e5fe0c8");
     pub(crate) const UUID_B: Uuid = uuid!("67e55044-10b1-426f-9247-bb680e5fe0c7");
 
-    pub(crate) fn pairing_s2_node_id() -> PairingS2NodeId {
-        PairingS2NodeId("test_pairing_id".into())
+    pub(crate) fn pairing_s2_node_id() -> NodeIdAlias {
+        NodeIdAlias("test_pairing_id".into())
     }
 
-    pub(crate) fn basic_node_description(uuid: Uuid, role: S2Role) -> S2NodeDescription {
-        S2NodeDescription {
+    pub(crate) fn basic_node_description(uuid: Uuid, role: Role) -> NodeDescription {
+        NodeDescription {
             id: uuid.into(),
             brand: String::from("super-reliable-corp"),
-            logo_uri: None,
+            logo_url: None,
             type_: String::from("fancy"),
             model_name: String::from("the best"),
             user_defined_name: None,
