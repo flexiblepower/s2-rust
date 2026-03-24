@@ -139,7 +139,7 @@
 //! # .with_connection_initiate_url("https://example.com/".into())
 //! # .build()
 //! # .unwrap());
-//! server.pair_once(
+//! server.allow_pair_once(
 //!     config,
 //!     Some(PairingS2NodeId("XYZ".into())),
 //!     PairingToken(b"ABCDEF0123456".as_slice().into()),
@@ -185,7 +185,7 @@
 //! # .with_connection_initiate_url("https://example.com/".into())
 //! # .build()
 //! # .unwrap());
-//! server.pair_repeated(
+//! server.allow_pair_repeated(
 //!     config,
 //!     Some(PairingS2NodeId("XYZ".into())),
 //!     PairingToken(b"ABCDEF0123456".as_slice().into()),
