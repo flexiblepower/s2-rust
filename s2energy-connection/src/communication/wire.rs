@@ -6,9 +6,10 @@ use subtle::ConstantTimeEq;
 use thiserror::Error;
 use tracing::info;
 
-use crate::{CommunicationProtocol, MessageVersion, S2EndpointDescription, S2NodeDescription, S2NodeId, common::wire::AccessToken};
+use crate::{CommunicationProtocol, EndpointDescription, MessageVersion, NodeDescription, NodeId, common::wire::AccessToken};
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
+#[serde(tag = "communicationProtocol")]
 pub(crate) enum CommunicationDetails {
     WebSocket(WebSocketCommunicationDetails),
 }
@@ -20,6 +21,7 @@ pub(crate) struct WebSocketCommunicationDetails {
 }
 
 #[derive(Serialize, Deserialize, Debug, Error, Clone, PartialEq, Eq, Hash)]
+#[serde(tag = "errorMessage")]
 pub(crate) enum CommunicationDetailsErrorMessage {
     #[error("Incompatible S2 message versions")]
     IncompatibleS2MessageVersions,
@@ -35,18 +37,18 @@ pub(crate) enum CommunicationDetailsErrorMessage {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct InitiateConnectionRequest {
-    #[serde(rename = "clientS2NodeId")]
-    pub(crate) client_node_id: S2NodeId,
-    #[serde(rename = "serverS2NodeId")]
-    pub(crate) server_node_id: S2NodeId,
+    #[serde(rename = "clientNodeId")]
+    pub(crate) client_node_id: NodeId,
+    #[serde(rename = "serverNodeId")]
+    pub(crate) server_node_id: NodeId,
     #[serde(rename = "supportedS2MessageVersions")]
     pub(crate) supported_message_versions: Vec<MessageVersion>,
     #[serde(rename = "supportedCommunicationProtocols")]
     pub(crate) supported_communication_protocols: Vec<CommunicationProtocol>,
-    #[serde(rename = "clientS2NodeDescription")]
-    pub(crate) node_description: Option<S2NodeDescription>,
-    #[serde(rename = "clientS2EndpointDescription")]
-    pub(crate) endpoint_description: Option<S2EndpointDescription>,
+    #[serde(rename = "clientNodeDescription")]
+    pub(crate) node_description: Option<NodeDescription>,
+    #[serde(rename = "clientEndpointDescription")]
+    pub(crate) endpoint_description: Option<EndpointDescription>,
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
@@ -57,18 +59,18 @@ pub(crate) struct InitiateConnectionResponse {
     pub(crate) message_version: MessageVersion,
     #[serde(rename = "accessToken")]
     pub(crate) access_token: AccessToken,
-    #[serde(rename = "serverS2NodeDescription")]
-    pub(crate) node_description: Option<S2NodeDescription>,
-    #[serde(rename = "serverS2EndpointDescription")]
-    pub(crate) endpoint_description: Option<S2EndpointDescription>,
+    #[serde(rename = "serverNodeDescription")]
+    pub(crate) node_description: Option<NodeDescription>,
+    #[serde(rename = "serverEndpointDescription")]
+    pub(crate) endpoint_description: Option<EndpointDescription>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct UnpairRequest {
-    #[serde(rename = "clientS2NodeId")]
-    pub(crate) client_node_id: S2NodeId,
-    #[serde(rename = "serverS2NodeId")]
-    pub(crate) server_node_id: S2NodeId,
+    #[serde(rename = "clientNodeId")]
+    pub(crate) client_node_id: NodeId,
+    #[serde(rename = "serverNodeId")]
+    pub(crate) server_node_id: NodeId,
 }
 
 /// One-time access token for secure access to the S2 message communication channel. It must be renewed every time a client wants to access

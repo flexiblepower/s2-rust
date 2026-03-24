@@ -3,8 +3,8 @@ use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 use uuid::uuid;
 
 use s2energy_connection::{
-    MessageVersion, S2EndpointDescription, S2NodeDescription, S2Role,
-    pairing::{NodeConfig, PairingS2NodeId, PairingToken, Server, ServerConfig},
+    EndpointDescription, MessageVersion, NodeDescription, Role,
+    pairing::{NodeConfig, NodeIdAlias, PairingToken, Server, ServerConfig},
 };
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
@@ -20,18 +20,18 @@ async fn main() {
 
     let server = Server::new(ServerConfig {
         leaf_certificate: None,
-        endpoint_description: S2EndpointDescription::default(),
+        endpoint_description: EndpointDescription::default(),
         advertised_nodes: vec![],
     });
     let config = NodeConfig::builder(
-        S2NodeDescription {
+        NodeDescription {
             id: uuid!("67e55044-10b1-426f-9247-bb680e5fe0c8").into(),
             brand: String::from("super-reliable-corp"),
-            logo_uri: None,
+            logo_url: None,
             type_: String::from("fancy"),
             model_name: String::from("the best"),
             user_defined_name: None,
-            role: S2Role::Cem,
+            role: Role::Cem,
         },
         vec![MessageVersion("v1".into())],
     )
@@ -59,7 +59,7 @@ async fn main() {
             .unwrap();
     });
 
-    let pairing_node_id = PairingS2NodeId("ninechars".into());
+    let pairing_node_id = NodeIdAlias("ninechars".into());
 
     let server_clone = server.clone();
     server

@@ -15,7 +15,7 @@ use tokio::time::Instant;
 use tracing::{Instrument, info, trace};
 
 use crate::{
-    CommunicationProtocol, MessageVersion, S2EndpointDescription, S2NodeDescription, S2NodeId,
+    CommunicationProtocol, EndpointDescription, MessageVersion, NodeDescription, NodeId,
     common::{AbortingJoinHandle, root, websocket_extractor::WebSocketUpgrade, wire::AccessToken},
     communication::{
         ConnectionInfo, NodeConfig, WebSocketTransport,
@@ -36,9 +36,9 @@ const BUFFER_SIZE: usize = 1;
 /// A pairing to be looked up.
 pub struct PairingLookup {
     /// Identifier of the remote end of the pairing.
-    pub client: S2NodeId,
+    pub client: NodeId,
     /// Identifier of the local end of the pairing.
-    pub server: S2NodeId,
+    pub server: NodeId,
 }
 
 /// Result of looking up a pairing.
@@ -90,7 +90,7 @@ pub struct ServerConfig {
     /// URL at which the communication server is reachable.
     pub base_url: String,
     /// Updated description of this endpoint to send during communication requests.
-    pub endpoint_description: Option<S2EndpointDescription>,
+    pub endpoint_description: Option<EndpointDescription>,
 }
 
 /// Server for handling the S2 Communication establishment subprotocol.
@@ -106,7 +106,7 @@ struct AppStateInner<Store> {
     pending_tokens: Mutex<HashMap<AccessToken, Expiring<Session>>>,
     pending_websockets: Mutex<HashMap<CommunicationToken, Expiring<PendingWebsocket>>>,
     base_url: String,
-    endpoint_description: Option<S2EndpointDescription>,
+    endpoint_description: Option<EndpointDescription>,
     connection_sender: tokio::sync::mpsc::Sender<(PairingLookup, ConnectionInfo)>,
     cleanup_task: OnceLock<AbortingJoinHandle<()>>,
 }
@@ -131,16 +131,16 @@ struct Session {
     span: tracing::Span,
     lookup: PairingLookup,
     token: AccessToken,
-    node_description: Option<S2NodeDescription>,
-    endpoint_description: Option<S2EndpointDescription>,
+    node_description: Option<NodeDescription>,
+    endpoint_description: Option<EndpointDescription>,
     message_version: MessageVersion,
     communication_protocol: CommunicationProtocol,
 }
 
 struct PendingWebsocket {
     lookup: PairingLookup,
-    node_description: Option<S2NodeDescription>,
-    endpoint_description: Option<S2EndpointDescription>,
+    node_description: Option<NodeDescription>,
+    endpoint_description: Option<EndpointDescription>,
     message_version: MessageVersion,
 }
 

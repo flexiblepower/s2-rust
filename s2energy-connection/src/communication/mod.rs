@@ -16,16 +16,16 @@
 //! up of communication, can be added through methods on the builder:
 //! ```rust
 //! # use s2energy_connection::communication::NodeConfig;
-//! # use s2energy_connection::{MessageVersion, S2NodeDescription, S2NodeId, S2Role};
+//! # use s2energy_connection::{MessageVersion, NodeDescription, NodeId, Role};
 //! let _config = NodeConfig::builder(vec![MessageVersion("v1".into())])
-//! .with_node_description(S2NodeDescription {
-//!     id: S2NodeId::try_from("67e55044-10b1-426f-9247-bb680e5fe0c8").unwrap(),
+//! .with_node_description(NodeDescription {
+//!     id: NodeId::try_from("67e55044-10b1-426f-9247-bb680e5fe0c8").unwrap(),
 //!     brand: String::from("super-reliable-corp"),
-//!     logo_uri: None,
+//!     logo_url: None,
 //!     type_: String::from("fancy"),
 //!     model_name: String::from("the best"),
 //!     user_defined_name: None,
-//!     role: S2Role::Rm,
+//!     role: Role::Rm,
 //! }).build();
 //! ```
 //!
@@ -44,10 +44,10 @@
 //! # use std::sync::Arc;
 //! # use std::convert::Infallible;
 //! # use s2energy_connection::communication::{NodeConfig, Client, ClientConfig, ClientPairing};
-//! # use s2energy_connection::{MessageVersion, AccessToken, S2NodeId};
+//! # use s2energy_connection::{MessageVersion, AccessToken, NodeId};
 //! struct MemoryClientPairing {
-//!     client_id: S2NodeId,
-//!     server_id: S2NodeId,
+//!     client_id: NodeId,
+//!     server_id: NodeId,
 //!     communication_url: String,
 //!     access_tokens: Vec<AccessToken>,
 //! }
@@ -55,11 +55,11 @@
 //! impl ClientPairing for MemoryClientPairing {
 //!     type Error = Infallible;
 //!     
-//!     fn client_id(&self) -> S2NodeId {
+//!     fn client_id(&self) -> NodeId {
 //!         self.client_id
 //!     }
 //!
-//!     fn server_id(&self) -> S2NodeId {
+//!     fn server_id(&self) -> NodeId {
 //!         self.server_id
 //!     }
 //!
@@ -80,8 +80,8 @@
 //! let config = NodeConfig::builder(vec![MessageVersion("v1".into())]).build();
 //! let client = Client::new(ClientConfig::default(), Arc::new(config));
 //! let connection_result = client.connect(MemoryClientPairing {
-//!     client_id: S2NodeId::try_from("67e55044-10b1-426f-9247-bb680e5fe0c8").unwrap(),
-//!     server_id: S2NodeId::try_from("67e55044-10b1-426f-9247-bb680e5fe0c6").unwrap(),
+//!     client_id: NodeId::try_from("67e55044-10b1-426f-9247-bb680e5fe0c8").unwrap(),
+//!     server_id: NodeId::try_from("67e55044-10b1-426f-9247-bb680e5fe0c6").unwrap(),
 //!     communication_url: "https://example.com".into(),
 //!     access_tokens: vec![AccessToken("some-token-value".into())],
 //! });
@@ -205,7 +205,7 @@
 //!
 //! A complete example of a communication client and communication server are present in the examples folder. These demonstrate also more completely
 //! how a simple server setup can be done using the [`axum-server`](https://docs.rs/axum-server/0.8.0/axum_server/) crate.
-use crate::{MessageVersion, S2EndpointDescription, S2NodeDescription};
+use crate::{EndpointDescription, MessageVersion, NodeDescription};
 
 mod client;
 mod error;
@@ -221,13 +221,13 @@ pub use websocket::{WebSocketError, WebSocketTransport};
 /// Full description of an S2 Node for communication.
 #[derive(Debug, Clone)]
 pub struct NodeConfig {
-    node_description: Option<S2NodeDescription>,
+    node_description: Option<NodeDescription>,
     supported_message_versions: Vec<MessageVersion>,
 }
 
 impl NodeConfig {
     /// Description of the S2 node.
-    pub fn node_description(&self) -> Option<&S2NodeDescription> {
+    pub fn node_description(&self) -> Option<&NodeDescription> {
         self.node_description.as_ref()
     }
 
@@ -256,7 +256,7 @@ impl AsRef<NodeConfig> for NodeConfig {
 
 /// Builder for a [`NodeConfig`].
 pub struct ConfigBuilder {
-    node_description: Option<S2NodeDescription>,
+    node_description: Option<NodeDescription>,
     supported_message_versions: Vec<MessageVersion>,
 }
 
@@ -264,7 +264,7 @@ impl ConfigBuilder {
     /// Set the node description.
     ///
     /// Note that this replaces any previous node decriptions passed.
-    pub fn with_node_description(mut self, node_description: S2NodeDescription) -> Self {
+    pub fn with_node_description(mut self, node_description: NodeDescription) -> Self {
         self.node_description = Some(node_description);
         self
     }
@@ -285,9 +285,9 @@ pub type CommunicationResult<T> = Result<T, Error>;
 #[derive(Debug)]
 pub struct ConnectionInfo {
     /// New description of the remote node received during establishing of this connection.
-    pub remote_node_description: Option<S2NodeDescription>,
+    pub remote_node_description: Option<NodeDescription>,
     /// New description of the remote endpoint received during establishing of this connection.
-    pub remote_endpoint_description: Option<S2EndpointDescription>,
+    pub remote_endpoint_description: Option<EndpointDescription>,
     /// The version of the S2 Messages negotiated for this connection.
     pub message_version: MessageVersion,
 

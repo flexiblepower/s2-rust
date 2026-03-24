@@ -1,11 +1,11 @@
 use s2energy_connection::{
-    S2Role,
+    Role,
     discovery::{DiscoverableS2Endpoint, advertise},
 };
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
-    let endpoint = DiscoverableS2Endpoint::build_with_pairing(vec![S2Role::Cem], "https://example.com/".into())
+    let endpoint = DiscoverableS2Endpoint::build_with_pairing(vec![Role::Cem], "https://example.com/".into())
         .unwrap()
         .with_endpoint_name("test endpoint".into())
         .build();

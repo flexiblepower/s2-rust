@@ -8,15 +8,15 @@
 //! a builder pattern. For simple configuration, the builder can immediately be build:
 //! ```rust
 //! # use s2energy_connection::pairing::NodeConfig;
-//! # use s2energy_connection::{MessageVersion, S2NodeDescription, S2NodeId, S2Role};
-//! let _config = NodeConfig::builder(S2NodeDescription {
-//!     id: S2NodeId::try_from("67e55044-10b1-426f-9247-bb680e5fe0c8").unwrap(),
+//! # use s2energy_connection::{MessageVersion, NodeDescription, NodeId, Role};
+//! let _config = NodeConfig::builder(NodeDescription {
+//!     id: NodeId::try_from("67e55044-10b1-426f-9247-bb680e5fe0c8").unwrap(),
 //!     brand: String::from("super-reliable-corp"),
-//!     logo_uri: None,
+//!     logo_url: None,
 //!     type_: String::from("fancy"),
 //!     model_name: String::from("the best"),
 //!     user_defined_name: None,
-//!     role: S2Role::Rm,
+//!     role: Role::Rm,
 //! }, vec![MessageVersion("v1".into())])
 //! .build()
 //! .unwrap();
@@ -25,15 +25,15 @@
 //! Additional information can be added through methods on the builder. For example, we can add a connection initiate url through:
 //! ```rust
 //! # use s2energy_connection::pairing::NodeConfig;
-//! # use s2energy_connection::{MessageVersion, S2NodeDescription, S2NodeId, S2Role};
-//! let _config = NodeConfig::builder(S2NodeDescription {
-//!     id: S2NodeId::try_from("67e55044-10b1-426f-9247-bb680e5fe0c8").unwrap(),
+//! # use s2energy_connection::{MessageVersion, NodeDescription, NodeId, Role};
+//! let _config = NodeConfig::builder(NodeDescription {
+//!     id: NodeId::try_from("67e55044-10b1-426f-9247-bb680e5fe0c8").unwrap(),
 //!     brand: String::from("super-reliable-corp"),
-//!     logo_uri: None,
+//!     logo_url: None,
 //!     type_: String::from("fancy"),
 //!     model_name: String::from("the best"),
 //!     user_defined_name: None,
-//!     role: S2Role::Rm,
+//!     role: Role::Rm,
 //! }, vec![MessageVersion("v1".into())])
 //! .with_connection_initiate_url("https://example.com/".into())
 //! .build()
@@ -46,16 +46,16 @@
 //! server. For this, you will also need to know the id of the node, and the URL on which its pairing server is reachable.
 //! ```rust
 //! # use std::sync::Arc;
-//! # use s2energy_connection::pairing::{Client, ClientConfig, NodeConfig, PairingRemote, PairingS2NodeId};
-//! # use s2energy_connection::{Deployment, MessageVersion, S2NodeDescription, S2EndpointDescription, S2NodeId, S2Role};
-//! # let local_node = NodeConfig::builder(S2NodeDescription {
-//! #     id: S2NodeId::new(),
+//! # use s2energy_connection::pairing::{Client, ClientConfig, NodeConfig, PairingRemote, NodeIdAlias};
+//! # use s2energy_connection::{Deployment, MessageVersion, NodeDescription, EndpointDescription, NodeId, Role};
+//! # let local_node = NodeConfig::builder(NodeDescription {
+//! #     id: NodeId::new(),
 //! #     brand: String::from("super-reliable-corp"),
-//! #     logo_uri: None,
+//! #     logo_url: None,
 //! #     type_: String::from("fancy"),
 //! #     model_name: String::from("the best"),
 //! #     user_defined_name: None,
-//! #     role: S2Role::Rm,
+//! #     role: Role::Rm,
 //! # }, vec![MessageVersion("v1".into())])
 //! # .with_connection_initiate_url("https://example.com/".into())
 //! # .build()
@@ -63,13 +63,13 @@
 //!
 //! let client = Client::new(ClientConfig {
 //!     pairing_deployment: Deployment::Lan,
-//!     endpoint_description: S2EndpointDescription::default(),
+//!     endpoint_description: EndpointDescription::default(),
 //!     additional_certificates: vec![],
 //! }).unwrap();
 //!
 //! let pairing_result = client.pair(&local_node, PairingRemote {
 //!     url: "https://remote.example.com".into(),
-//!     id: Some(PairingS2NodeId("test_pairing_id".into())),
+//!     id: Some(NodeIdAlias("test_pairing_id".into())),
 //! }, b"ABCDEF0123456", async |pairing| { /* do something with pairing */ Ok::<_, std::convert::Infallible>(())});
 //! ```
 //!
@@ -80,7 +80,7 @@
 //! # use std::{path::PathBuf, net::SocketAddr};
 //! # use axum_server::tls_rustls::RustlsConfig;
 //! # use s2energy_connection::pairing::{Server, ServerConfig};
-//! # use s2energy_connection::S2EndpointDescription;
+//! # use s2energy_connection::EndpointDescription;
 //! # #[tokio::main(flavor = "current_thread")]
 //! # async fn main() {
 //! # let tls_config = RustlsConfig::from_pem_file(
@@ -94,7 +94,7 @@
 //! # let addr = SocketAddr::from(([127, 0, 0, 1], 8005));
 //! let server = Server::new(ServerConfig {
 //!     leaf_certificate: None,
-//!     endpoint_description: S2EndpointDescription::default(),
+//!     endpoint_description: EndpointDescription::default(),
 //!     advertised_nodes: vec![],
 //! });
 //! tokio::spawn(async move {
@@ -109,8 +109,8 @@
 //! ```no_run
 //! # use std::{path::PathBuf, net::SocketAddr, sync::Arc};
 //! # use axum_server::tls_rustls::RustlsConfig;
-//! # use s2energy_connection::pairing::{NodeConfig, PairingToken, Server, ServerConfig, PairingS2NodeId};
-//! # use s2energy_connection::{MessageVersion, S2NodeDescription, S2EndpointDescription, S2NodeId, S2Role};
+//! # use s2energy_connection::pairing::{NodeConfig, PairingToken, Server, ServerConfig, NodeIdAlias};
+//! # use s2energy_connection::{MessageVersion, NodeDescription, EndpointDescription, NodeId, Role};
 //! # #[tokio::main(flavor = "current_thread")]
 //! # async fn main() {
 //! # let tls_config = RustlsConfig::from_pem_file(
@@ -124,24 +124,24 @@
 //! # let addr = SocketAddr::from(([127, 0, 0, 1], 8005));
 //! # let server = Server::new(ServerConfig {
 //! #     leaf_certificate: None,
-//! #     endpoint_description: S2EndpointDescription::default(),
+//! #     endpoint_description: EndpointDescription::default(),
 //! #     advertised_nodes: vec![],
 //! # });
-//! # let config = Arc::new(NodeConfig::builder(S2NodeDescription {
-//! #     id: S2NodeId::new(),
+//! # let config = Arc::new(NodeConfig::builder(NodeDescription {
+//! #     id: NodeId::new(),
 //! #     brand: String::from("super-reliable-corp"),
-//! #     logo_uri: None,
+//! #     logo_url: None,
 //! #     type_: String::from("fancy"),
 //! #     model_name: String::from("the best"),
 //! #     user_defined_name: None,
-//! #     role: S2Role::Rm,
+//! #     role: Role::Rm,
 //! # }, vec![MessageVersion("v1".into())])
 //! # .with_connection_initiate_url("https://example.com/".into())
 //! # .build()
 //! # .unwrap());
 //! server.allow_pair_once(
 //!     config,
-//!     Some(PairingS2NodeId("XYZ".into())),
+//!     Some(NodeIdAlias("XYZ".into())),
 //!     PairingToken(b"ABCDEF0123456".as_slice().into()),
 //!     async |pairing_result| {
 //!         /* ensure the pairing becomes usable/gets used */
@@ -155,8 +155,8 @@
 //! ```no_run
 //! # use std::{path::PathBuf, net::SocketAddr, sync::Arc};
 //! # use axum_server::tls_rustls::RustlsConfig;
-//! # use s2energy_connection::pairing::{NodeConfig, PairingToken, Server, ServerConfig, PairingS2NodeId};
-//! # use s2energy_connection::{MessageVersion, S2NodeDescription, S2EndpointDescription, S2NodeId, S2Role};
+//! # use s2energy_connection::pairing::{NodeConfig, PairingToken, Server, ServerConfig, NodeIdAlias};
+//! # use s2energy_connection::{MessageVersion, NodeDescription, EndpointDescription, NodeId, Role};
 //! # #[tokio::main(flavor = "current_thread")]
 //! # async fn main() {
 //! # let tls_config = RustlsConfig::from_pem_file(
@@ -170,24 +170,24 @@
 //! # let addr = SocketAddr::from(([127, 0, 0, 1], 8005));
 //! # let server = Server::new(ServerConfig {
 //! #     leaf_certificate: None,
-//! #     endpoint_description: S2EndpointDescription::default(),
+//! #     endpoint_description: EndpointDescription::default(),
 //! #     advertised_nodes: vec![],
 //! # });
-//! # let config = Arc::new(NodeConfig::builder(S2NodeDescription {
-//! #     id: S2NodeId::new(),
+//! # let config = Arc::new(NodeConfig::builder(NodeDescription {
+//! #     id: NodeId::new(),
 //! #     brand: String::from("super-reliable-corp"),
-//! #     logo_uri: None,
+//! #     logo_url: None,
 //! #     type_: String::from("fancy"),
 //! #     model_name: String::from("the best"),
 //! #     user_defined_name: None,
-//! #     role: S2Role::Rm,
+//! #     role: Role::Rm,
 //! # }, vec![MessageVersion("v1".into())])
 //! # .with_connection_initiate_url("https://example.com/".into())
 //! # .build()
 //! # .unwrap());
 //! server.allow_pair_repeated(
 //!     config,
-//!     Some(PairingS2NodeId("XYZ".into())),
+//!     Some(NodeIdAlias("XYZ".into())),
 //!     PairingToken(b"ABCDEF0123456".as_slice().into()),
 //!     async |pairing_result| {
 //!         /* ensure the pairing becomes usable/gets used */
@@ -217,16 +217,14 @@ pub use error::{ConfigError, Error, ErrorKind};
 pub use server::{
     LongpollingHandle, NoopPrePairingHandler, PairingToken, PairingTokenError, PrePairingHandler, PrePairingResponse, Server, ServerConfig,
 };
-pub use wire::PairingS2NodeId;
+pub use wire::NodeIdAlias;
 
-use crate::{
-    CommunicationProtocol, Deployment, MessageVersion, S2EndpointDescription, S2NodeDescription, S2Role, common::wire::AccessToken,
-};
+use crate::{CommunicationProtocol, Deployment, EndpointDescription, MessageVersion, NodeDescription, Role, common::wire::AccessToken};
 
 /// Full description of an S2 node.
 #[derive(Debug, Clone)]
 pub struct NodeConfig {
-    node_description: S2NodeDescription,
+    node_description: NodeDescription,
     supported_message_versions: Vec<MessageVersion>,
     supported_communication_protocols: Vec<CommunicationProtocol>,
     connection_initiate_url: Option<String>,
@@ -234,7 +232,7 @@ pub struct NodeConfig {
 
 impl NodeConfig {
     /// Description of the S2 node.
-    pub fn node_description(&self) -> &S2NodeDescription {
+    pub fn node_description(&self) -> &NodeDescription {
         &self.node_description
     }
 
@@ -257,7 +255,7 @@ impl NodeConfig {
     ///
     /// All node configurations must at least contain description of the node and supported message versions. Additional
     /// properties can be configured through the builder.
-    pub fn builder(node_description: S2NodeDescription, supported_message_versions: Vec<MessageVersion>) -> ConfigBuilder {
+    pub fn builder(node_description: NodeDescription, supported_message_versions: Vec<MessageVersion>) -> ConfigBuilder {
         ConfigBuilder {
             node_description,
             supported_message_versions,
@@ -269,7 +267,7 @@ impl NodeConfig {
 
 /// Builder for an [`NodeConfig`].
 pub struct ConfigBuilder {
-    node_description: S2NodeDescription,
+    node_description: NodeDescription,
     supported_message_versions: Vec<MessageVersion>,
     supported_communication_protocols: Vec<CommunicationProtocol>,
     connection_initiate_url: Option<String>,
@@ -292,7 +290,7 @@ impl ConfigBuilder {
 
     /// Create the actual [`NodeConfig`], validating that it is reasonable.
     pub fn build(self) -> Result<NodeConfig, ConfigError> {
-        if self.node_description.role == S2Role::Cem && self.connection_initiate_url.is_none() {
+        if self.node_description.role == Role::Cem && self.connection_initiate_url.is_none() {
             return Err(ConfigError::MissingInitiateUrl);
         }
         Ok(NodeConfig {
@@ -322,9 +320,9 @@ pub enum PairingRole {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Pairing {
     /// Description of the remote S2 Node.
-    pub remote_node_description: S2NodeDescription,
+    pub remote_node_description: NodeDescription,
     /// Description of the remote S2 Endpoint hosting the node.
-    pub remote_endpoint_description: S2EndpointDescription,
+    pub remote_endpoint_description: EndpointDescription,
     /// Token used during communication setup.
     pub token: AccessToken,
     /// Role this node has for initiating communication.
@@ -349,7 +347,7 @@ pub enum PairingCodeParseError {
 ///
 /// It is not recommended to use this outside of testing. A much better user
 /// experience can be had by a parser more closely integrated with the UI.
-pub fn parse_pairing_code(code: &str) -> Result<(Option<PairingS2NodeId>, PairingToken), PairingCodeParseError> {
+pub fn parse_pairing_code(code: &str) -> Result<(Option<NodeIdAlias>, PairingToken), PairingCodeParseError> {
     if let Some((alias, token)) = code.split_once('-') {
         if token.contains('-') {
             return Err(PairingCodeParseError::TooManyParts);
@@ -361,7 +359,7 @@ pub fn parse_pairing_code(code: &str) -> Result<(Option<PairingS2NodeId>, Pairin
 
         let token: PairingToken = token.parse().map_err(|_| PairingCodeParseError::InvalidToken)?;
 
-        Ok((Some(PairingS2NodeId(alias.to_string())), token))
+        Ok((Some(NodeIdAlias(alias.to_string())), token))
     } else {
         Ok((None, code.parse().map_err(|_| PairingCodeParseError::InvalidToken)?))
     }
