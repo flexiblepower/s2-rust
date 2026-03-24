@@ -331,6 +331,42 @@ pub struct Pairing {
     pub role: PairingRole,
 }
 
+/// Error during the parsing of a pairing code
+#[derive(Debug, thiserror::Error, Copy, Clone, PartialEq, Eq, Hash)]
+pub enum PairingCodeParseError {
+    /// Invalid token
+    #[error("Invalid pairing token")]
+    InvalidToken,
+    /// Invalid S2 Node Alias.
+    #[error("Invalid alias for node")]
+    InvalidNodeAlias,
+    /// Pairing code consists of more than two parts.
+    #[error("Too many parts in the token")]
+    TooManyParts,
+}
+
+/// Convenience function for parsing pairing codes.
+///
+/// It is not recommended to use this outside of testing. A much better user
+/// experience can be had by a parser more closely integrated with the UI.
+pub fn parse_pairing_code(code: &str) -> Result<(Option<PairingS2NodeId>, PairingToken), PairingCodeParseError> {
+    if let Some((alias, token)) = code.split_once('-') {
+        if token.contains('-') {
+            return Err(PairingCodeParseError::TooManyParts);
+        }
+
+        if alias.chars().any(|c| !c.is_ascii_alphanumeric()) {
+            return Err(PairingCodeParseError::InvalidNodeAlias);
+        }
+
+        let token: PairingToken = token.parse().map_err(|_| PairingCodeParseError::InvalidToken)?;
+
+        Ok((Some(PairingS2NodeId(alias.to_string())), token))
+    } else {
+        Ok((None, code.parse().map_err(|_| PairingCodeParseError::InvalidToken)?))
+    }
+}
+
 impl HmacChallenge {
     pub fn new(rng: &mut impl CryptoRng, len: usize) -> Self {
         let mut bytes = vec![0u8; len];
@@ -379,5 +415,60 @@ impl Network {
 
     fn is_lan(&self) -> bool {
         matches!(self, Network::Lan { .. })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::pairing::{PairingCodeParseError, parse_pairing_code};
+
+    #[test]
+    fn test_pairing_code_plain() {
+        let (alias, token) = parse_pairing_code("aaaa").unwrap();
+        assert_eq!(alias, None);
+        assert_eq!(token.0.as_ref(), [105, 166, 154].as_slice());
+
+        let (alias, token) = parse_pairing_code("aaaabbbb").unwrap();
+        assert_eq!(alias, None);
+        assert_eq!(token.0.as_ref(), [105, 166, 154, 109, 182, 219].as_slice());
+    }
+
+    #[test]
+    fn test_pairing_code_compound() {
+        let (alias, token) = parse_pairing_code("hEll0-aaaa").unwrap();
+        assert_eq!(alias.unwrap().0, "hEll0");
+        assert_eq!(token.0.as_ref(), [105, 166, 154].as_slice());
+
+        let (alias, token) = parse_pairing_code("-aaaa").unwrap();
+        assert_eq!(alias.unwrap().0, "");
+        assert_eq!(token.0.as_ref(), [105, 166, 154].as_slice());
+    }
+
+    #[test]
+    fn test_pairing_code_invalid_token() {
+        assert_eq!(parse_pairing_code("=").unwrap_err(), PairingCodeParseError::InvalidToken);
+        assert_eq!(parse_pairing_code("(").unwrap_err(), PairingCodeParseError::InvalidToken);
+        assert_eq!(parse_pairing_code("aaa").unwrap_err(), PairingCodeParseError::InvalidToken);
+
+        assert_eq!(parse_pairing_code("bla-aaa").unwrap_err(), PairingCodeParseError::InvalidToken);
+        assert_eq!(parse_pairing_code("bla-aa=").unwrap_err(), PairingCodeParseError::InvalidToken);
+        assert_eq!(parse_pairing_code("bla-a*==").unwrap_err(), PairingCodeParseError::InvalidToken);
+    }
+
+    #[test]
+    fn test_pairing_code_invalid_alias() {
+        assert_eq!(
+            parse_pairing_code("hello_world-aaaa").unwrap_err(),
+            PairingCodeParseError::InvalidNodeAlias
+        );
+        assert_eq!(
+            parse_pairing_code("bla*-aaaa").unwrap_err(),
+            PairingCodeParseError::InvalidNodeAlias
+        );
+    }
+
+    #[test]
+    fn test_pairing_code_too_many_parst() {
+        assert_eq!(parse_pairing_code("this-is-aaaa").unwrap_err(), PairingCodeParseError::TooManyParts);
     }
 }
