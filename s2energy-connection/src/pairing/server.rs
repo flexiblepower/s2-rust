@@ -288,7 +288,7 @@ impl<H: PrePairingHandler> Server<H> {
     /// the callback.
     ///
     /// When the callback returns an error, the client will be notified of the error.
-    pub fn pair_once<E, F: Future<Output = Result<(), E>> + Send>(
+    pub fn allow_pair_once<E, F: Future<Output = Result<(), E>> + Send>(
         &self,
         config: Arc<NodeConfig>,
         pairing_node_id: Option<PairingS2NodeId>,
@@ -328,7 +328,7 @@ impl<H: PrePairingHandler> Server<H> {
     /// the callback.
     ///
     /// When the callback returns an error, the client will be notified of the error.
-    pub fn pair_repeated<E, F: Future<Output = Result<(), E>> + Send>(
+    pub fn allow_pair_repeated<E, F: Future<Output = Result<(), E>> + Send>(
         &self,
         config: Arc<NodeConfig>,
         pairing_node_id: Option<PairingS2NodeId>,
@@ -1473,7 +1473,7 @@ mod tests {
             advertised_nodes: vec![],
         });
         server
-            .pair_once(
+            .allow_pair_once(
                 Arc::new(
                     NodeConfig::builder(basic_node_description(UUID_A, S2Role::Rm), vec![MessageVersion("v1".into())])
                         .with_connection_initiate_url("https://example.com/".into())
@@ -1525,7 +1525,7 @@ mod tests {
             advertised_nodes: vec![],
         });
         server
-            .pair_once(
+            .allow_pair_once(
                 Arc::new(
                     NodeConfig::builder(basic_node_description(UUID_A, S2Role::Rm), vec![MessageVersion("v1".into())])
                         .with_connection_initiate_url("https://example.com/".into())
@@ -1576,7 +1576,7 @@ mod tests {
             advertised_nodes: vec![],
         });
         server
-            .pair_once(
+            .allow_pair_once(
                 Arc::new(
                     NodeConfig::builder(basic_node_description(UUID_A, S2Role::Rm), vec![MessageVersion("v1".into())])
                         .with_connection_initiate_url("https://example.com/".into())
@@ -1627,7 +1627,7 @@ mod tests {
             advertised_nodes: vec![],
         });
         server
-            .pair_once(
+            .allow_pair_once(
                 Arc::new(
                     NodeConfig::builder(basic_node_description(UUID_A, S2Role::Rm), vec![MessageVersion("v1".into())])
                         .with_connection_initiate_url("https://example.com/".into())
@@ -1716,7 +1716,7 @@ mod tests {
             advertised_nodes: vec![],
         });
         server
-            .pair_once(
+            .allow_pair_once(
                 Arc::new(
                     NodeConfig::builder(basic_node_description(UUID_A, S2Role::Rm), vec![MessageVersion("v1".into())])
                         .with_connection_initiate_url("https://example.com/".into())

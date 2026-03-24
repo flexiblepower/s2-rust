@@ -63,7 +63,7 @@ async fn main() {
 
     let server_clone = server.clone();
     server
-        .pair_once(
+        .allow_pair_once(
             Arc::new(config.clone()),
             Some(pairing_node_id.clone()),
             PairingToken(PAIRING_TOKEN.into()),
@@ -71,7 +71,7 @@ async fn main() {
                 let pairing = result.unwrap();
                 println!("token: {}", pairing.token.0);
                 server_clone
-                    .pair_repeated(
+                    .allow_pair_repeated(
                         Arc::new(config),
                         Some(pairing_node_id),
                         PairingToken(PAIRING_TOKEN.into()),

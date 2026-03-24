@@ -732,7 +732,7 @@ mod tests {
         let server_pair_handle = tokio::spawn(async move {
             let (tx, rx) = tokio::sync::oneshot::channel();
             server
-                .pair_once(
+                .allow_pair_once(
                     Arc::new(config),
                     Some(pairing_s2_node_id()),
                     PairingToken(b"testtoken".as_slice().into()),
