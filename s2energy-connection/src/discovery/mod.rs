@@ -261,7 +261,7 @@ impl S2Advertisement {
 pub async fn advertise(port: u16, endpoint: DiscoverableS2Endpoint) -> Result<S2Advertisement, Error> {
     // The unwrap here is fine as the arguments always contain valid characters.
     let mut service = MdnsService::new(
-        ServiceType::with_sub_types("s2emp", "tcp", endpoint.roles.iter().map(|v| v.service_subtype()).collect()).unwrap(),
+        ServiceType::with_sub_types("s2connect", "tcp", endpoint.roles.iter().map(|v| v.service_subtype()).collect()).unwrap(),
         port,
     );
 
@@ -323,7 +323,7 @@ impl S2Discoverer {
     pub async fn new(role: S2Role) -> Result<Self, Error> {
         // The unwrap on service type is fine as its arguments are always valid.
         let mut browser = MdnsBrowserAsync::new(MdnsBrowser::new(
-            ServiceType::with_sub_types("s2emp", "tcp", vec![role.service_subtype()]).unwrap(),
+            ServiceType::with_sub_types("s2connect", "tcp", vec![role.service_subtype()]).unwrap(),
         ))
         .map_err(|e| Error::new(ErrorKind::MdnsError, e))?;
 
