@@ -153,7 +153,7 @@ pub enum ErrorKind {
     AlreadyPending,
     /// Provided token was invalid.
     InvalidToken,
-    /// Remote permanently rejects longpolling
+    /// Remote permanently rejects longpolling or querying of node information.
     Rejected,
     /// The pairing or longpolling session was cancelled.
     Cancelled,
