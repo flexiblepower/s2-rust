@@ -7,10 +7,11 @@ use tokio_tungstenite::{Connector, connect_async_tls_with_config, tungstenite::C
 use tracing::{debug, trace};
 
 use crate::{
-    AccessToken, CommunicationProtocol, EndpointDescription, NodeId,
+    AccessToken, CertificateHash, CommunicationProtocol, EndpointDescription, NodeId,
     common::negotiate_version,
     communication::{
         CommunicationResult, ConnectionInfo, Error, ErrorKind, NodeConfig, WebSocketTransport,
+        transport::hash_checking_http_client,
         wire::{
             CommunicationDetails, CommunicationDetailsErrorMessage, InitiateConnectionRequest, InitiateConnectionResponse, UnpairRequest,
         },
@@ -52,6 +53,8 @@ pub trait ClientPairing: Send {
     fn access_tokens(&self) -> impl AsRef<[AccessToken]>;
     /// The communication url the client can use to contact the server.
     fn communication_url(&self) -> impl AsRef<str>;
+    /// Hash of the root certificate the server uses.
+    fn certificate_hash(&self) -> Option<CertificateHash>;
 
     /// Store a new set of access tokens for the pairing.
     fn set_access_tokens(&mut self, tokens: Vec<AccessToken>) -> impl Future<Output = Result<(), Self::Error>> + Send;
@@ -71,14 +74,17 @@ impl Client {
     /// upon success.
     #[tracing::instrument(skip_all, fields(client = %pairing.client_id(), server = %pairing.server_id()), level = tracing::Level::ERROR)]
     pub async fn unpair(&self, pairing: impl ClientPairing) -> CommunicationResult<()> {
-        let client = reqwest::Client::builder()
-            .tls_certs_merge(
-                self.additional_certificates
-                    .iter()
-                    .filter_map(|v| reqwest::Certificate::from_der(v).ok()),
-            )
-            .build()
-            .map_err(|e| Error::new(ErrorKind::TransportFailed, e))?;
+        let client = match pairing.certificate_hash() {
+            Some(hash) => hash_checking_http_client(hash)?,
+            None => reqwest::Client::builder()
+                .tls_certs_merge(
+                    self.additional_certificates
+                        .iter()
+                        .filter_map(|v| reqwest::Certificate::from_der(v).ok()),
+                )
+                .build()
+                .map_err(|e| Error::new(ErrorKind::TransportFailed, e))?,
+        };
 
         let communication_url = Url::parse(pairing.communication_url().as_ref()).map_err(|e| Error::new(ErrorKind::InvalidUrl, e))?;
 
@@ -301,7 +307,7 @@ mod tests {
     use tokio::net::TcpListener;
 
     use crate::{
-        AccessToken, CommunicationProtocol, EndpointDescription, MessageVersion, NodeId, Role,
+        AccessToken, CertificateHash, CommunicationProtocol, EndpointDescription, MessageVersion, NodeId, Role,
         common::wire::test::{UUID_A, UUID_B, basic_node_description},
         communication::{
             self, Client, ClientConfig, ClientPairing, ErrorKind, NodeConfig, PairingLookup, Server, ServerConfig, ServerPairing,
@@ -370,6 +376,7 @@ mod tests {
         server: NodeId,
         tokens: Arc<Mutex<Vec<AccessToken>>>,
         url: String,
+        certificate_hash: Option<CertificateHash>,
     }
 
     impl ClientPairing for &TestPairing {
@@ -389,6 +396,10 @@ mod tests {
 
         fn communication_url(&self) -> impl AsRef<str> {
             &self.url
+        }
+
+        fn certificate_hash(&self) -> Option<CertificateHash> {
+            self.certificate_hash.clone()
         }
 
         async fn set_access_tokens(&mut self, tokens: Vec<AccessToken>) -> Result<(), Self::Error> {
@@ -451,6 +462,7 @@ mod tests {
             server: UUID_B.into(),
             tokens: Arc::new(Mutex::new(vec![AccessToken("testtoken".into())])),
             url: format!("https://localhost:{}/", addr.port()),
+            certificate_hash: None,
         };
 
         assert!(client.unpair(&pairing).await.is_ok());
@@ -483,6 +495,7 @@ mod tests {
             server: UUID_B.into(),
             tokens: Arc::new(Mutex::new(vec![AccessToken("invalidtoken".into())])),
             url: format!("https://localhost:{}/", addr.port()),
+            certificate_hash: None,
         };
 
         let error = client.unpair(&pairing).await.unwrap_err();
@@ -511,6 +524,7 @@ mod tests {
             server: UUID_B.into(),
             tokens: Arc::new(Mutex::new(vec![AccessToken("testtoken".into())])),
             url: format!("https://localhost:{}/", addr.port()),
+            certificate_hash: None,
         };
 
         let mut client_connection = client.connect(&pairing).await.unwrap();
@@ -577,6 +591,7 @@ mod tests {
             server: UUID_B.into(),
             tokens: Arc::new(Mutex::new(vec![AccessToken("testtoken".into())])),
             url: format!("https://localhost:{}/", addr.port()),
+            certificate_hash: None,
         };
 
         let mut client_connection = client.connect(&pairing).await.unwrap();
@@ -637,6 +652,7 @@ mod tests {
             server: UUID_B.into(),
             tokens: Arc::new(Mutex::new(vec![AccessToken("testtoken".into())])),
             url: format!("https://localhost:{}/", addr.port()),
+            certificate_hash: None,
         };
 
         let mut client_connection = client.connect(&pairing).await.unwrap();
@@ -692,6 +708,7 @@ mod tests {
             server: UUID_B.into(),
             tokens: Arc::new(Mutex::new(vec![AccessToken("testtoken".into())])),
             url: format!("https://localhost:{}/", addr.port()),
+            certificate_hash: None,
         };
 
         let mut client_connection = client.connect(&pairing).await.unwrap();
@@ -740,6 +757,7 @@ mod tests {
             server: UUID_B.into(),
             tokens: Arc::new(Mutex::new(vec![AccessToken("testtoken".into())])),
             url: format!("https://localhost:{}/", addr.port()),
+            certificate_hash: None,
         };
 
         let mut client_connection = client.connect(&pairing).await.unwrap();
@@ -792,6 +810,7 @@ mod tests {
             server: UUID_B.into(),
             tokens: Arc::new(Mutex::new(vec![AccessToken("testtoken".into())])),
             url: format!("https://localhost:{}/", addr.port()),
+            certificate_hash: None,
         };
 
         assert_eq!(client.connect(&pairing).await.unwrap_err().kind(), ErrorKind::NoSupportedVersion);
@@ -830,6 +849,7 @@ mod tests {
             server: UUID_B.into(),
             tokens: Arc::new(Mutex::new(vec![AccessToken("testtoken".into())])),
             url: format!("https://localhost:{}/", addr.port()),
+            certificate_hash: None,
         };
 
         assert_eq!(client.connect(&pairing).await.unwrap_err().kind(), ErrorKind::NoSupportedVersion);
@@ -876,6 +896,7 @@ mod tests {
             server: UUID_B.into(),
             tokens: Arc::new(Mutex::new(vec![AccessToken("testtoken".into())])),
             url: format!("https://localhost:{}/", addr.port()),
+            certificate_hash: None,
         };
 
         assert_eq!(client.connect(&pairing).await.unwrap_err().kind(), ErrorKind::NoSupportedVersion);
@@ -922,6 +943,7 @@ mod tests {
             server: UUID_B.into(),
             tokens: Arc::new(Mutex::new(vec![AccessToken("testtoken".into())])),
             url: format!("https://localhost:{}/", addr.port()),
+            certificate_hash: None,
         };
 
         assert_eq!(client.connect(&pairing).await.unwrap_err().kind(), ErrorKind::NoSupportedVersion);
@@ -973,6 +995,10 @@ mod tests {
                 &self.url
             }
 
+            fn certificate_hash(&self) -> Option<CertificateHash> {
+                None
+            }
+
             async fn set_access_tokens(&mut self, _tokens: Vec<AccessToken>) -> Result<(), Self::Error> {
                 Err(std::io::ErrorKind::Other.into())
             }
@@ -995,6 +1021,7 @@ mod tests {
             server: UUID_B.into(),
             tokens: Arc::new(Mutex::new(vec![AccessToken("testtoken".into())])),
             url: format!("https://localhost:{}/", addr.port()),
+            certificate_hash: None,
         };
 
         let mut client_connection = client.connect(&pairing).await.unwrap();
@@ -1042,6 +1069,7 @@ mod tests {
             server: UUID_B.into(),
             tokens: Arc::new(Mutex::new(vec![AccessToken("testtoken".into())])),
             url: format!("https://localhost:{}/", addr.port()),
+            certificate_hash: None,
         };
 
         assert_eq!(client.connect(&pairing).await.unwrap_err().kind(), ErrorKind::ProtocolError);
@@ -1076,6 +1104,7 @@ mod tests {
             server: UUID_B.into(),
             tokens: Arc::new(Mutex::new(vec![AccessToken("testtoken".into())])),
             url: format!("https://localhost:{}/", addr.port()),
+            certificate_hash: None,
         };
 
         assert_eq!(client.connect(&pairing).await.unwrap_err().kind(), ErrorKind::ProtocolError);
