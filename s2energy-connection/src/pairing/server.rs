@@ -28,6 +28,7 @@ use tokio::{
 use tracing::{Instrument, info, trace};
 
 use crate::{
+    CertificateHash,
     common::{
         AbortingJoinHandle, root,
         wire::{AccessToken, EndpointDescription, NodeDescription, NodeId, PairingVersion},
@@ -133,7 +134,7 @@ impl<H> Clone for Server<H> {
 
 /// Configuration for the S2 pairing server.
 pub struct ServerConfig {
-    /// The root certificate of the server, if we are using a self-signed root.
+    /// The leaf certificate of the server, if we are using a self-signed root.
     /// Presence of this field indicates we are deployed on LAN.
     pub leaf_certificate: Option<CertificateDer<'static>>,
     /// Endpoint description of the server
@@ -212,13 +213,12 @@ impl<H: PrePairingHandler> Server<H> {
             network: server_config
                 .leaf_certificate
                 .map(|v| Network::Lan {
-                    fingerprint: sha2::Sha256::digest(v).into(),
+                    fingerprint: CertificateHash::sha256(&v),
                 })
                 .unwrap_or(Network::Wan),
             advertised_nodes: Mutex::new(server_config.advertised_nodes),
             endpoint_description: server_config.endpoint_description,
-            permanent_pairings: Mutex::new(HashMap::new()),
-            open_pairings: Mutex::new(HashMap::new()),
+            pending_pairings: Mutex::new(PendingPairings::default()),
             attempts: Mutex::new(HashMap::default()),
             prepairing_handler: Arc::new(handler),
             longpolling_enabled: longpolling_enabled_receiver,
@@ -303,27 +303,33 @@ impl<H: PrePairingHandler> Server<H> {
         pairing_node_id: Option<NodeIdAlias>,
         pairing_token: PairingToken,
         callback: impl (FnOnce(PairingResult<Pairing>) -> F) + Send + 'static,
-    ) -> Result<(), ErrorKind> {
+    ) -> Result<(), Error> {
         if config.connection_initiate_url.is_none() {
-            return Err(ErrorKind::InvalidConfig(super::ConfigError::MissingInitiateUrl));
+            return Err(ErrorKind::InvalidConfig(super::ConfigError::MissingInitiateUrl).into());
+        }
+
+        if pairing_node_id.as_ref().map(|v| v.0.is_empty()).unwrap_or(false) {
+            return Err(ErrorKind::InvalidNodeAlias.into());
         }
 
         let pairing_node_id = pairing_node_id.unwrap_or(NodeIdAlias(String::default()));
+        let node_id = config.node_description.id;
 
-        // We hit issues here, because the node node_description only has S2NodeId with no
-        // efficient way of mapping that back.
-        let mut open_pairings = self.state.open_pairings.lock().unwrap();
-        let mut permanent_pairings = self.state.permanent_pairings.lock().unwrap();
-        if open_pairings.contains_key(&pairing_node_id) || permanent_pairings.contains_key(&pairing_node_id) {
-            return Err(ErrorKind::AlreadyPending);
+        let mut pending_pairings = self.state.pending_pairings.lock().unwrap();
+        if pending_pairings.alias_mappings.contains_key(&pairing_node_id)
+            || pending_pairings.open_pairings.contains_key(&node_id)
+            || pending_pairings.permanent_pairings.contains_key(&node_id)
+        {
+            return Err(ErrorKind::AlreadyPending.into());
         }
-        drop(permanent_pairings);
-        open_pairings.insert(
-            pairing_node_id,
+        pending_pairings.alias_mappings.insert(pairing_node_id.clone(), node_id);
+        pending_pairings.open_pairings.insert(
+            node_id,
             PairingRequest {
                 config,
                 handler: ResultHandler::Oneshot(Box::new(|result| Box::pin(async move { callback(result).await.map_err(|_| ()) }))),
                 token: pairing_token,
+                alias: pairing_node_id,
                 age: Instant::now(),
             },
         );
@@ -344,22 +350,25 @@ impl<H: PrePairingHandler> Server<H> {
         pairing_node_id: Option<NodeIdAlias>,
         pairing_token: PairingToken,
         callback: impl (Fn(PairingResult<Pairing>) -> F) + Send + Sync + 'static,
-    ) -> Result<(), ErrorKind> {
+    ) -> Result<(), Error> {
         if config.connection_initiate_url.is_none() {
-            return Err(ErrorKind::InvalidConfig(super::ConfigError::MissingInitiateUrl));
+            return Err(ErrorKind::InvalidConfig(super::ConfigError::MissingInitiateUrl).into());
         }
 
         let pairing_node_id = pairing_node_id.unwrap_or(NodeIdAlias(String::default()));
+        let node_id = config.node_description.id;
 
-        let mut open_pairings = self.state.open_pairings.lock().unwrap();
-        let mut permanent_pairings = self.state.permanent_pairings.lock().unwrap();
-        if open_pairings.contains_key(&pairing_node_id) || permanent_pairings.contains_key(&pairing_node_id) {
-            return Err(ErrorKind::AlreadyPending);
+        let mut pending_pairings = self.state.pending_pairings.lock().unwrap();
+        if pending_pairings.alias_mappings.contains_key(&pairing_node_id)
+            || pending_pairings.open_pairings.contains_key(&node_id)
+            || pending_pairings.permanent_pairings.contains_key(&node_id)
+        {
+            return Err(ErrorKind::AlreadyPending.into());
         }
-        drop(open_pairings);
         let callback = Arc::new(callback);
-        permanent_pairings.insert(
-            pairing_node_id,
+        pending_pairings.alias_mappings.insert(pairing_node_id.clone(), node_id);
+        pending_pairings.permanent_pairings.insert(
+            node_id,
             PermanentPairingRequest {
                 config,
                 handler: Arc::new(move |result| {
@@ -533,6 +542,7 @@ struct PairingRequest {
     config: Arc<NodeConfig>,
     handler: ResultHandler,
     token: PairingToken,
+    alias: NodeIdAlias,
     age: Instant,
 }
 
@@ -599,8 +609,7 @@ struct AppStateInner<H> {
     network: Network,
     endpoint_description: EndpointDescription,
     advertised_nodes: Mutex<Vec<NodeDescription>>,
-    permanent_pairings: Mutex<HashMap<NodeIdAlias, PermanentPairingRequest>>,
-    open_pairings: Mutex<HashMap<NodeIdAlias, PairingRequest>>,
+    pending_pairings: Mutex<PendingPairings>,
     attempts: Mutex<HashMap<PairingAttemptId, ExpiringPairingState>>,
     prepairing_handler: Arc<H>,
     longpolling_enabled: tokio::sync::watch::Receiver<bool>,
@@ -612,6 +621,13 @@ struct AppStateInner<H> {
     longpolling_sessions: Mutex<HashMap<NodeId, LongpollingState>>,
     longpolling_handle_sender: tokio::sync::mpsc::Sender<LongpollingHandle>,
     cleanup_task: OnceLock<AbortingJoinHandle<()>>,
+}
+
+#[derive(Default)]
+struct PendingPairings {
+    alias_mappings: HashMap<NodeIdAlias, NodeId>,
+    permanent_pairings: HashMap<NodeId, PermanentPairingRequest>,
+    open_pairings: HashMap<NodeId, PairingRequest>,
 }
 
 // Holder for longpolling sessions during a session. Returns
@@ -688,8 +704,15 @@ async fn periodic_cleanup<H: PrePairingHandler>(state: Weak<AppStateInner<H>>) {
 
         // Open pairing sessions
         {
-            let mut open_pairings = state.open_pairings.lock().unwrap();
-            open_pairings.retain(|_, value| now.duration_since(value.age) < ONCEPAIR_TIMEOUT + TIMEOUT_SLACK);
+            let mut pending_pairings = state.pending_pairings.lock().unwrap();
+            let PendingPairings {
+                alias_mappings,
+                open_pairings,
+                ..
+            } = &mut *pending_pairings;
+            for (_, pairing) in open_pairings.extract_if(|_, value| now.duration_since(value.age) >= ONCEPAIR_TIMEOUT + TIMEOUT_SLACK) {
+                alias_mappings.remove(&pairing.alias);
+            }
         }
 
         drop(state);
@@ -870,21 +893,35 @@ async fn v1_request_pairing<H>(
 
     let server_hmac_challenge = HmacChallenge::new(&mut rand::rng(), HMAC_CHALLENGE_BYTES);
 
-    let pairing_s2_node_id = request_pairing.id.unwrap_or(NodeIdAlias(String::default()));
     let open_pairing = {
-        let mut open_pairings = state.open_pairings.lock().unwrap();
-        if let Some((_, request)) = open_pairings.remove_entry(&pairing_s2_node_id) {
+        let mut pending_pairings = state.pending_pairings.lock().unwrap();
+
+        let node_id = request_pairing.id.map(Ok).unwrap_or_else(|| {
+            let pairing_s2_node_id = request_pairing.id_alias.clone().unwrap_or(NodeIdAlias(String::default()));
+            pending_pairings
+                .alias_mappings
+                .get(&pairing_s2_node_id)
+                .copied()
+                .ok_or(if request_pairing.id_alias.is_some() {
+                    PairingResponseErrorMessage::S2NodeNotFound
+                } else {
+                    PairingResponseErrorMessage::S2NodeNotProvided
+                })
+        })?;
+
+        if let Some((_, request)) = pending_pairings.open_pairings.remove_entry(&node_id) {
+            pending_pairings.alias_mappings.remove(&request.alias);
             request
         } else {
-            drop(open_pairings);
-            let permanent_pairings = state.permanent_pairings.lock().unwrap();
-            let entry = permanent_pairings
-                .get(&pairing_s2_node_id)
+            let entry = pending_pairings
+                .permanent_pairings
+                .get(&node_id)
                 .ok_or(PairingResponseErrorMessage::S2NodeNotFound)?;
             PairingRequest {
                 config: entry.config.clone(),
                 handler: ResultHandler::Multi(entry.handler.clone()),
                 token: PairingToken(entry.token.0.clone()),
+                alias: NodeIdAlias(String::default()),
                 age: Instant::now(),
             }
         }
@@ -1021,6 +1058,7 @@ async fn v1_request_connection_details<H>(
                     None => return (Err(StatusCode::BAD_REQUEST), None),
                 },
                 access_token: AccessToken::new(&mut rng),
+                certificate_fingerprint: state.config.root_certificate.as_deref().map(CertificateHash::sha256),
             };
 
             trace!("Generated connection details");
@@ -1094,6 +1132,7 @@ async fn v1_post_connection_details<H>(
                 access_token: req.connection_details.access_token,
                 role: PairingRole::CommunicationClient {
                     initiate_url: req.connection_details.initiate_connection_url,
+                    root_hash: req.connection_details.certificate_fingerprint,
                 },
             });
 
@@ -1554,7 +1593,8 @@ mod tests {
                         serde_json::to_vec(&RequestPairing {
                             node_description: basic_node_description(UUID_B, Role::Cem),
                             endpoint_description: EndpointDescription::default(),
-                            id: Some(pairing_s2_node_id()),
+                            id: None,
+                            id_alias: Some(pairing_s2_node_id()),
                             supported_protocols: vec![CommunicationProtocol("WebSocket".into())],
                             supported_versions: vec![MessageVersion("v1".into())],
                             supported_hashing_algorithms: vec![HmacHashingAlgorithm::Sha256],
@@ -1573,6 +1613,167 @@ mod tests {
         let response_data: RequestPairingResponse = serde_json::from_slice(&body).unwrap();
         let expected_response = challenge.sha256(&Network::Wan, b"testtoken");
         assert_eq!(expected_response, response_data.client_hmac_challenge_response);
+        assert!(server.state.pending_pairings.lock().unwrap().alias_mappings.is_empty());
+    }
+
+    #[tokio::test]
+    async fn pair_attempt_node_id() {
+        let server = Server::new(ServerConfig {
+            leaf_certificate: None,
+            endpoint_description: EndpointDescription::default(),
+            advertised_nodes: vec![],
+        });
+        server
+            .allow_pair_repeated(
+                Arc::new(
+                    NodeConfig::builder(basic_node_description(UUID_A, Role::Rm), vec![MessageVersion("v1".into())])
+                        .with_connection_initiate_url("https://example.com/".into())
+                        .build()
+                        .unwrap(),
+                ),
+                Some(pairing_s2_node_id()),
+                PairingToken(b"testtoken".as_slice().into()),
+                async |_| Ok::<_, std::io::Error>(()),
+            )
+            .unwrap();
+
+        let challenge = HmacChallenge::new(&mut rand::rng(), 64);
+        let response = server
+            .get_router()
+            .oneshot(
+                http::Request::post("/v1/requestPairing")
+                    .header(http::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&RequestPairing {
+                            node_description: basic_node_description(UUID_B, Role::Cem),
+                            endpoint_description: EndpointDescription::default(),
+                            id: Some(UUID_A.into()),
+                            id_alias: None,
+                            supported_protocols: vec![CommunicationProtocol("WebSocket".into())],
+                            supported_versions: vec![MessageVersion("v1".into())],
+                            supported_hashing_algorithms: vec![HmacHashingAlgorithm::Sha256],
+                            client_hmac_challenge: challenge.clone(),
+                            force_pairing: false,
+                        })
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let response_data: RequestPairingResponse = serde_json::from_slice(&body).unwrap();
+        let expected_response = challenge.sha256(&Network::Wan, b"testtoken");
+        assert_eq!(expected_response, response_data.client_hmac_challenge_response);
+        assert!(!server.state.pending_pairings.lock().unwrap().alias_mappings.is_empty());
+    }
+
+    #[tokio::test]
+    async fn pair_attempt_no_node_identifier() {
+        let server = Server::new(ServerConfig {
+            leaf_certificate: None,
+            endpoint_description: EndpointDescription::default(),
+            advertised_nodes: vec![],
+        });
+        server
+            .allow_pair_once(
+                Arc::new(
+                    NodeConfig::builder(basic_node_description(UUID_A, Role::Rm), vec![MessageVersion("v1".into())])
+                        .with_connection_initiate_url("https://example.com/".into())
+                        .build()
+                        .unwrap(),
+                ),
+                None,
+                PairingToken(b"testtoken".as_slice().into()),
+                async |_| Ok::<_, std::io::Error>(()),
+            )
+            .unwrap();
+
+        let challenge = HmacChallenge::new(&mut rand::rng(), 64);
+        let response = server
+            .get_router()
+            .oneshot(
+                http::Request::post("/v1/requestPairing")
+                    .header(http::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&RequestPairing {
+                            node_description: basic_node_description(UUID_B, Role::Cem),
+                            endpoint_description: EndpointDescription::default(),
+                            id: None,
+                            id_alias: None,
+                            supported_protocols: vec![CommunicationProtocol("WebSocket".into())],
+                            supported_versions: vec![MessageVersion("v1".into())],
+                            supported_hashing_algorithms: vec![HmacHashingAlgorithm::Sha256],
+                            client_hmac_challenge: challenge.clone(),
+                            force_pairing: false,
+                        })
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let response_data: RequestPairingResponse = serde_json::from_slice(&body).unwrap();
+        let expected_response = challenge.sha256(&Network::Wan, b"testtoken");
+        assert_eq!(expected_response, response_data.client_hmac_challenge_response);
+        assert!(server.state.pending_pairings.lock().unwrap().alias_mappings.is_empty());
+    }
+
+    #[tokio::test]
+    async fn pair_attempt_need_node_identifier() {
+        let server = Server::new(ServerConfig {
+            leaf_certificate: None,
+            endpoint_description: EndpointDescription::default(),
+            advertised_nodes: vec![],
+        });
+        server
+            .allow_pair_once(
+                Arc::new(
+                    NodeConfig::builder(basic_node_description(UUID_A, Role::Rm), vec![MessageVersion("v1".into())])
+                        .with_connection_initiate_url("https://example.com/".into())
+                        .build()
+                        .unwrap(),
+                ),
+                Some(pairing_s2_node_id()),
+                PairingToken(b"testtoken".as_slice().into()),
+                async |_| Ok::<_, std::io::Error>(()),
+            )
+            .unwrap();
+
+        let challenge = HmacChallenge::new(&mut rand::rng(), 64);
+        let response = server
+            .get_router()
+            .oneshot(
+                http::Request::post("/v1/requestPairing")
+                    .header(http::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&RequestPairing {
+                            node_description: basic_node_description(UUID_B, Role::Cem),
+                            endpoint_description: EndpointDescription::default(),
+                            id: None,
+                            id_alias: None,
+                            supported_protocols: vec![CommunicationProtocol("WebSocket".into())],
+                            supported_versions: vec![MessageVersion("v1".into())],
+                            supported_hashing_algorithms: vec![HmacHashingAlgorithm::Sha256],
+                            client_hmac_challenge: challenge.clone(),
+                            force_pairing: false,
+                        })
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let error: PairingResponseErrorMessage = serde_json::from_slice(&body).unwrap();
+        assert_eq!(error, PairingResponseErrorMessage::S2NodeNotProvided);
     }
 
     #[tokio::test]
@@ -1606,7 +1807,8 @@ mod tests {
                         serde_json::to_vec(&RequestPairing {
                             node_description: basic_node_description(UUID_B, Role::Cem),
                             endpoint_description: EndpointDescription::default(),
-                            id: Some(pairing_s2_node_id()),
+                            id: None,
+                            id_alias: Some(pairing_s2_node_id()),
                             supported_protocols: vec![CommunicationProtocol("HTTP/3".into())],
                             supported_versions: vec![MessageVersion("v1".into())],
                             supported_hashing_algorithms: vec![HmacHashingAlgorithm::Sha256],
@@ -1657,7 +1859,8 @@ mod tests {
                         serde_json::to_vec(&RequestPairing {
                             node_description: basic_node_description(UUID_B, Role::Cem),
                             endpoint_description: EndpointDescription::default(),
-                            id: Some(pairing_s2_node_id()),
+                            id: None,
+                            id_alias: Some(pairing_s2_node_id()),
                             supported_protocols: vec![CommunicationProtocol("WebSocket".into())],
                             supported_versions: vec![MessageVersion("v0".into())],
                             supported_hashing_algorithms: vec![HmacHashingAlgorithm::Sha256],
@@ -1708,7 +1911,8 @@ mod tests {
                         serde_json::to_vec(&RequestPairing {
                             node_description: basic_node_description(UUID_B, Role::Cem),
                             endpoint_description: EndpointDescription::default(),
-                            id: Some(pairing_s2_node_id()),
+                            id: None,
+                            id_alias: Some(pairing_s2_node_id()),
                             supported_protocols: vec![CommunicationProtocol("HTTP/3".into())],
                             supported_versions: vec![MessageVersion("v0".into())],
                             supported_hashing_algorithms: vec![HmacHashingAlgorithm::Sha256],
@@ -1746,7 +1950,8 @@ mod tests {
                         serde_json::to_vec(&RequestPairing {
                             node_description: basic_node_description(UUID_A, Role::Cem),
                             endpoint_description: EndpointDescription::default(),
-                            id: Some(pairing_s2_node_id()),
+                            id: None,
+                            id_alias: Some(pairing_s2_node_id()),
                             supported_protocols: vec![CommunicationProtocol("WebSocket".into())],
                             supported_versions: vec![MessageVersion("v1".into())],
                             supported_hashing_algorithms: vec![HmacHashingAlgorithm::Sha256],
@@ -1797,7 +2002,8 @@ mod tests {
                         serde_json::to_vec(&RequestPairing {
                             node_description: basic_node_description(UUID_B, Role::Rm),
                             endpoint_description: EndpointDescription::default(),
-                            id: Some(pairing_s2_node_id()),
+                            id: None,
+                            id_alias: Some(pairing_s2_node_id()),
                             supported_protocols: vec![CommunicationProtocol("WebSocket".into())],
                             supported_versions: vec![MessageVersion("v1".into())],
                             supported_hashing_algorithms: vec![HmacHashingAlgorithm::Sha256],
@@ -2018,6 +2224,7 @@ mod tests {
                             connection_details: ConnectionDetails {
                                 initiate_connection_url: "https://example.com/".into(),
                                 access_token: AccessToken::new(&mut rand::rng()),
+                                certificate_fingerprint: None,
                             },
                         })
                         .unwrap(),
@@ -2073,6 +2280,7 @@ mod tests {
                             connection_details: ConnectionDetails {
                                 initiate_connection_url: "https://example.com/".into(),
                                 access_token: AccessToken::new(&mut rand::rng()),
+                                certificate_fingerprint: None,
                             },
                         })
                         .unwrap(),
@@ -2130,6 +2338,7 @@ mod tests {
                             connection_details: ConnectionDetails {
                                 initiate_connection_url: "https://example.com/".into(),
                                 access_token: AccessToken::new(&mut rand::rng()),
+                                certificate_fingerprint: None,
                             },
                         })
                         .unwrap(),
@@ -2677,7 +2886,8 @@ mod tests {
                         serde_json::to_vec(&RequestPairing {
                             node_description: basic_node_description(UUID_A, Role::Cem),
                             endpoint_description: EndpointDescription::default(),
-                            id: Some(pairing_s2_node_id()),
+                            id: None,
+                            id_alias: Some(pairing_s2_node_id()),
                             supported_protocols: vec![CommunicationProtocol("WebSocket".into())],
                             supported_versions: vec![MessageVersion("v1".into())],
                             supported_hashing_algorithms: vec![HmacHashingAlgorithm::Sha256],

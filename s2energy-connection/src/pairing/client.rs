@@ -8,11 +8,22 @@ use crate::common::negotiate_version;
 use crate::common::wire::{AccessToken, Deployment, PairingVersion, Role};
 use crate::pairing::transport::{HashProvider, hash_providing_https_client};
 use crate::pairing::{ConfigError, Error, Pairing, PairingRole};
-use crate::{EndpointDescription, NodeDescription, NodeId};
+use crate::{CertificateHash, EndpointDescription, NodeDescription, NodeId};
 
 use super::NodeConfig;
 use super::wire::*;
 use super::{ErrorKind, Network, PairingResult};
+
+/// Optional node identifier of a remote node
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum RemoteNodeIdentifier {
+    /// A full UUID node identifier
+    Id(NodeId),
+    /// A human-entered alias for an S2 Node
+    Alias(NodeIdAlias),
+    /// No identifier
+    None,
+}
 
 /// Remote node to pair with.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -20,7 +31,7 @@ pub struct PairingRemote {
     /// URL at which the remote node can be reached
     pub url: String,
     /// S2 node id of the remote node.
-    pub id: Option<NodeIdAlias>,
+    pub id: RemoteNodeIdentifier,
 }
 
 /// Remote node to pair with.
@@ -88,14 +99,19 @@ impl PrePairing<'_> {
     /// When the callback returns an error, the client will be notified of the error.
     pub async fn pair<E: std::error::Error + Send + 'static>(
         self,
-        remote_id: Option<NodeIdAlias>,
         pairing_token: &[u8],
         callback: impl AsyncFnOnce(Pairing) -> Result<(), E>,
     ) -> PairingResult<()> {
         async move {
             trace!("Start pairing after pre-pairing.");
             self.session
-                .pair(self.certhash, self.local_deployment, remote_id, pairing_token, callback)
+                .pair(
+                    self.certhash,
+                    self.local_deployment,
+                    RemoteNodeIdentifier::Id(self.remote_id),
+                    pairing_token,
+                    callback,
+                )
                 .await
         }
         .instrument(self.span)
@@ -392,7 +408,9 @@ impl Client {
     }
 
     fn prepare_reqwest_client(&self, url: &Url) -> Result<(reqwest::Client, Option<HashProvider>), Error> {
-        let (client, certhash) = if url.domain().map(|v| v.ends_with(".local")).unwrap_or_default() {
+        let (client, certhash) = if url.domain().map(|v| v.ends_with(".local")).unwrap_or_default()
+            || url.domain().map(|v| v.ends_with(".local.")).unwrap_or_default()
+        {
             let (client, certhash) = hash_providing_https_client()?;
             (client, Some(certhash))
         } else {
@@ -469,18 +487,18 @@ impl<'a> V1Session<'a> {
         self,
         certhash: Option<HashProvider>,
         local_deployment: Deployment,
-        id: Option<NodeIdAlias>,
+        id: RemoteNodeIdentifier,
         pairing_token: &[u8],
         callback: impl AsyncFnOnce(Pairing) -> Result<(), E>,
     ) -> PairingResult<()> {
         let our_deployment = self.endpoint_description.deployment.unwrap_or(local_deployment);
         let our_role = self.config.node_description.role;
 
-        let network = if self.base_url.domain().map(|v| v.ends_with(".local")).unwrap_or_default() {
-            if let Some(hash) = certhash.as_ref().and_then(HashProvider::hash) {
-                Network::Lan {
-                    fingerprint: hash.try_into().unwrap(),
-                }
+        let network = if self.base_url.domain().map(|v| v.ends_with(".local")).unwrap_or_default()
+            || self.base_url.domain().map(|v| v.ends_with(".local.")).unwrap_or_default()
+        {
+            if let Some(hash) = certhash.as_ref().and_then(HashProvider::leaf_hash) {
+                Network::Lan { fingerprint: hash.clone() }
             } else {
                 return Err(ErrorKind::ProtocolError.into());
             }
@@ -552,6 +570,7 @@ impl<'a> V1Session<'a> {
                         server_hmac_challenge_response,
                         initiate_connection_url.clone(),
                         access_token.clone(),
+                        self.config.root_certificate.as_deref().map(CertificateHash::sha256),
                     )
                     .await
                 {
@@ -573,12 +592,26 @@ impl<'a> V1Session<'a> {
                         return Err(e);
                     }
                 };
+
+                let initiate_url =
+                    Url::parse(&connection_details.initiate_connection_url).map_err(|e| Error::new(ErrorKind::ProtocolError, e))?;
+                let root_hash = if initiate_url.domain().map(|v| v.ends_with(".local")).unwrap_or_default()
+                    || initiate_url.domain().map(|v| v.ends_with(".local.")).unwrap_or_default()
+                {
+                    connection_details
+                        .certificate_fingerprint
+                        .or(certhash.as_ref().and_then(HashProvider::root_hash).cloned())
+                } else {
+                    None
+                };
+
                 Pairing {
                     remote_endpoint_description: request_pairing_response.server_endpoint_description,
                     remote_node_description: request_pairing_response.server_node_description,
                     token: connection_details.access_token,
                     role: PairingRole::CommunicationClient {
                         initiate_url: connection_details.initiate_connection_url,
+                        root_hash,
                     },
                 }
             }
@@ -644,12 +677,14 @@ impl<'a> V1Session<'a> {
         server_hmac_challenge_response: HmacChallengeResponse,
         initiate_connection_url: String,
         access_token: AccessToken,
+        certificate_fingerprint: Option<CertificateHash>,
     ) -> PairingResult<()> {
         let request = PostConnectionDetailsRequest {
             server_hmac_challenge_response,
             connection_details: ConnectionDetails {
                 initiate_connection_url,
                 access_token,
+                certificate_fingerprint,
             },
         };
         let response = self
@@ -670,18 +705,30 @@ impl<'a> V1Session<'a> {
 
     async fn request_pairing(
         &self,
-        id: Option<NodeIdAlias>,
+        id: RemoteNodeIdentifier,
         client_hmac_challenge: &HmacChallenge,
     ) -> PairingResult<RequestPairingResponse> {
-        let request = RequestPairing {
+        let bare_request = RequestPairing {
             node_description: self.config.node_description.clone(),
             endpoint_description: self.endpoint_description.clone(),
-            id,
+            id: None,
+            id_alias: None,
             supported_protocols: self.config.supported_communication_protocols.clone(),
             supported_versions: self.config.supported_message_versions.clone(),
             supported_hashing_algorithms: vec![HmacHashingAlgorithm::Sha256],
             client_hmac_challenge: client_hmac_challenge.clone(),
             force_pairing: false,
+        };
+        let request = match id {
+            RemoteNodeIdentifier::Id(node_id) => RequestPairing {
+                id: Some(node_id),
+                ..bare_request
+            },
+            RemoteNodeIdentifier::Alias(node_id_alias) => RequestPairing {
+                id_alias: Some(node_id_alias),
+                ..bare_request
+            },
+            RemoteNodeIdentifier::None => bare_request,
         };
         let response = self
             .client
@@ -738,7 +785,7 @@ mod tests {
         common::wire::test::{UUID_A, UUID_B, basic_node_description, pairing_s2_node_id},
         pairing::{
             Client, ClientConfig, ErrorKind, LongpollHandler, Longpoller, Network, NodeConfig, NoopPrePairingHandler, Pairing,
-            PairingRemote, PairingRole, PairingToken, PrePairingHandler, PrePairingResponse, Server, ServerConfig,
+            PairingRemote, PairingRole, PairingToken, PrePairingHandler, PrePairingResponse, RemoteNodeIdentifier, Server, ServerConfig,
             client::PrePairingRemote,
             wire::{
                 FinalizePairingRequest, HmacChallenge, HmacChallengeResponse, PairingAttemptId, PairingResponseErrorMessage,
@@ -888,12 +935,12 @@ mod tests {
     #[tokio::test]
     async fn pairing_ok_rm_initiates() {
         let server_config = NodeConfig::builder(basic_node_description(UUID_A, Role::Cem), vec![MessageVersion("v1".into())])
-            .with_connection_initiate_url("test.example.com".into())
+            .with_connection_initiate_url("https://test.example.com".into())
             .build()
             .unwrap();
 
         let client_config = NodeConfig::builder(basic_node_description(UUID_B, Role::Rm), vec![MessageVersion("v1".into())])
-            .with_connection_initiate_url("client.example.com".into())
+            .with_connection_initiate_url("https://client.example.com".into())
             .build()
             .unwrap();
 
@@ -902,7 +949,7 @@ mod tests {
         let addr = server_handle.listening().await.unwrap();
         let remote = PairingRemote {
             url: format!("https://localhost:{}/", addr.port()),
-            id: Some(pairing_s2_node_id()),
+            id: RemoteNodeIdentifier::Alias(pairing_s2_node_id()),
         };
 
         let client = Client::new(ClientConfig {
@@ -946,7 +993,7 @@ mod tests {
         let addr = server_handle.listening().await.unwrap();
         let remote = PairingRemote {
             url: format!("https://localhost:{}/", addr.port()),
-            id: Some(pairing_s2_node_id()),
+            id: RemoteNodeIdentifier::Id(UUID_A.into()),
         };
 
         let client = Client::new(ClientConfig {
@@ -1044,7 +1091,7 @@ mod tests {
         let client_prepair = client.prepair(&client_config, remote).await.unwrap();
         let (tx, rx) = tokio::sync::oneshot::channel();
         client_prepair
-            .pair(Some(pairing_s2_node_id()), b"testtoken", async |pairing| {
+            .pair(b"testtoken", async |pairing| {
                 tx.send(pairing).unwrap();
                 Ok::<_, std::io::Error>(())
             })
@@ -1193,7 +1240,7 @@ mod tests {
         let addr = server_handle.listening().await.unwrap();
         let remote = PairingRemote {
             url: format!("https://localhost:{}/", addr.port()),
-            id: Some(pairing_s2_node_id()),
+            id: RemoteNodeIdentifier::Alias(pairing_s2_node_id()),
         };
 
         let client = Client::new(ClientConfig {
@@ -1260,7 +1307,7 @@ mod tests {
         let addr = server_handle.listening().await.unwrap();
         let remote = PairingRemote {
             url: format!("https://localhost:{}/", addr.port()),
-            id: Some(pairing_s2_node_id()),
+            id: RemoteNodeIdentifier::Alias(pairing_s2_node_id()),
         };
 
         let client = Client::new(ClientConfig {
@@ -1323,7 +1370,7 @@ mod tests {
         let addr = server_handle.listening().await.unwrap();
         let remote = PairingRemote {
             url: format!("https://localhost:{}/", addr.port()),
-            id: Some(pairing_s2_node_id()),
+            id: RemoteNodeIdentifier::Alias(pairing_s2_node_id()),
         };
 
         let client = Client::new(ClientConfig {
@@ -1375,7 +1422,7 @@ mod tests {
         let addr = server_handle.listening().await.unwrap();
         let remote = PairingRemote {
             url: format!("https://localhost:{}/", addr.port()),
-            id: Some(pairing_s2_node_id()),
+            id: RemoteNodeIdentifier::Alias(pairing_s2_node_id()),
         };
 
         let client = Client::new(ClientConfig {
@@ -1427,7 +1474,7 @@ mod tests {
         let addr = server_handle.listening().await.unwrap();
         let remote = PairingRemote {
             url: format!("https://localhost:{}/", addr.port()),
-            id: Some(pairing_s2_node_id()),
+            id: RemoteNodeIdentifier::Alias(pairing_s2_node_id()),
         };
 
         let client = Client::new(ClientConfig {
@@ -1477,7 +1524,7 @@ mod tests {
         let addr = server_handle.listening().await.unwrap();
         let remote = PairingRemote {
             url: format!("https://localhost:{}/", addr.port()),
-            id: Some(pairing_s2_node_id()),
+            id: RemoteNodeIdentifier::Alias(pairing_s2_node_id()),
         };
 
         let client = Client::new(ClientConfig {
@@ -1502,7 +1549,7 @@ mod tests {
     #[tokio::test]
     async fn longpolling() {
         let server_config = NodeConfig::builder(basic_node_description(UUID_A, Role::Cem), vec![MessageVersion("v1".into())])
-            .with_connection_initiate_url("test.example.com".into())
+            .with_connection_initiate_url("https://test.example.com".into())
             .build()
             .unwrap();
 
@@ -1566,7 +1613,7 @@ mod tests {
 
             let remote = PairingRemote {
                 url: format!("https://localhost:{}/", addr.port()),
-                id: Some(pairing_s2_node_id()),
+                id: RemoteNodeIdentifier::Alias(pairing_s2_node_id()),
             };
 
             let (tx, rx) = tokio::sync::oneshot::channel();

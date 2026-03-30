@@ -4,7 +4,7 @@ use uuid::uuid;
 
 use s2energy_connection::{
     Deployment, EndpointDescription, MessageVersion, NodeDescription, Role,
-    pairing::{Client, ClientConfig, NodeConfig, NodeIdAlias, PairingRemote},
+    pairing::{Client, ClientConfig, NodeConfig, NodeIdAlias, PairingRemote, RemoteNodeIdentifier},
 };
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
@@ -29,7 +29,7 @@ async fn main() {
         },
         vec![MessageVersion("v1".into())],
     )
-    .with_connection_initiate_url("client.example.com".into())
+    .with_connection_initiate_url("https://client.example.com".into())
     .build()
     .unwrap();
 
@@ -48,7 +48,7 @@ async fn main() {
             &config,
             PairingRemote {
                 url: "https://localhost:8005".into(),
-                id: Some(NodeIdAlias("ninechars".into())),
+                id: RemoteNodeIdentifier::Alias(NodeIdAlias("ninechars".into())),
             },
             PAIRING_TOKEN,
             async |pairing| {
@@ -61,7 +61,7 @@ async fn main() {
     let pair_result = rx.await.unwrap();
 
     match pair_result.role {
-        s2energy_connection::pairing::PairingRole::CommunicationClient { initiate_url } => {
+        s2energy_connection::pairing::PairingRole::CommunicationClient { initiate_url, .. } => {
             println!("Paired as client, url: {initiate_url}, token: {}", pair_result.token.0)
         }
         s2energy_connection::pairing::PairingRole::CommunicationServer => println!("Paired as server, token: {}", pair_result.token.0),
