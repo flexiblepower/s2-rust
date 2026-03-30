@@ -6,20 +6,20 @@ use rustls::{
     pki_types::CertificateDer,
 };
 
-use crate::{CertificateHash, pairing::Error};
+use crate::CertificateHash;
 
-use super::{ErrorKind, PairingResult};
+use super::{CommunicationResult, Error, ErrorKind};
 
 #[derive(Debug)]
-struct HashingCertificateVerifier {
+struct HashedCertificateVerifier {
     inner: rustls_platform_verifier::Verifier,
-    self_signed_state: Arc<OnceLock<SelfSignedState>>,
+    self_signed_state: OnceLock<SelfSignedState>,
+    root_hash: CertificateHash,
 }
 
 #[derive(Debug)]
 struct SelfSignedState {
-    root_hash: CertificateHash,
-    leaf_hash: CertificateHash,
+    hash: CertificateHash,
     verifier: SelfVerifier,
 }
 
@@ -78,7 +78,7 @@ impl ServerCertVerifier for SelfVerifier {
     }
 }
 
-impl ServerCertVerifier for HashingCertificateVerifier {
+impl ServerCertVerifier for HashedCertificateVerifier {
     fn verify_server_cert(
         &self,
         end_entity: &rustls::pki_types::CertificateDer<'_>,
@@ -87,36 +87,26 @@ impl ServerCertVerifier for HashingCertificateVerifier {
         ocsp_response: &[u8],
         now: rustls::pki_types::UnixTime,
     ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
-        match self
-            .inner
-            .verify_server_cert(end_entity, intermediates, server_name, ocsp_response, now)
-        {
-            Ok(v) => Ok(v),
-            Err(_) => {
-                let state = self.self_signed_state.get_or_init(|| {
-                    let fallback = CertificateDer::from_slice(&[]);
-                    let root_cert = intermediates.last().unwrap_or(&fallback);
-                    let root_hash = CertificateHash::sha256(root_cert);
-                    let leaf_hash = CertificateHash::sha256(end_entity);
-                    let mut root_store = RootCertStore::empty();
-                    // conciously ignore errors here, we just want to initialize
-                    root_store.add(root_cert.clone()).ok();
-                    let verifier = match WebPkiServerVerifier::builder(Arc::new(root_store)).build() {
-                        Ok(verifier) => SelfVerifier::WebPki(Arc::try_unwrap(verifier).unwrap()),
-                        Err(_) => SelfVerifier::None,
-                    };
+        let state = self.self_signed_state.get_or_init(|| {
+            let fallback = CertificateDer::from_slice(&[]);
+            let root_cert = intermediates.last().unwrap_or(&fallback);
+            let hash = CertificateHash::sha256(root_cert);
+            let mut root_store = RootCertStore::empty();
+            // conciously ignore errors here, we just want to initialize
+            root_store.add(root_cert.clone()).ok();
+            let verifier = match WebPkiServerVerifier::builder(Arc::new(root_store)).build() {
+                Ok(verifier) => SelfVerifier::WebPki(Arc::try_unwrap(verifier).unwrap()),
+                Err(_) => SelfVerifier::None,
+            };
 
-                    SelfSignedState {
-                        root_hash,
-                        leaf_hash,
-                        verifier,
-                    }
-                });
-                state
-                    .verifier
-                    .verify_server_cert(end_entity, intermediates, server_name, ocsp_response, now)
-            }
+            SelfSignedState { hash, verifier }
+        });
+        if state.hash != self.root_hash {
+            return Err(rustls::Error::InvalidCertificate(rustls::CertificateError::UnknownIssuer));
         }
+        state
+            .verifier
+            .verify_server_cert(end_entity, intermediates, server_name, ocsp_response, now)
     }
 
     fn verify_tls12_signature(
@@ -142,34 +132,13 @@ impl ServerCertVerifier for HashingCertificateVerifier {
     }
 }
 
-pub(crate) struct HashProvider {
-    state: Arc<OnceLock<SelfSignedState>>,
-}
-
-impl HashProvider {
-    pub(crate) fn leaf_hash(&self) -> Option<&CertificateHash> {
-        match self.state.get() {
-            Some(state) => Some(&state.leaf_hash),
-            None => None,
-        }
-    }
-
-    pub(crate) fn root_hash(&self) -> Option<&CertificateHash> {
-        match self.state.get() {
-            Some(state) => Some(&state.root_hash),
-            None => None,
-        }
-    }
-}
-
-pub(crate) fn hash_providing_https_client() -> PairingResult<(reqwest::Client, HashProvider)> {
+pub(crate) fn hash_checking_http_client(root_hash: CertificateHash) -> CommunicationResult<reqwest::Client> {
     let rustls_config_builder = rustls::ClientConfig::builder();
     let crypto_provider = rustls_config_builder.crypto_provider().clone();
-    let self_signed_state = Arc::new(OnceLock::new());
-    let state = self_signed_state.clone();
-    let verifier = HashingCertificateVerifier {
+    let verifier = HashedCertificateVerifier {
         inner: rustls_platform_verifier::Verifier::new(crypto_provider).map_err(|e| Error::new(ErrorKind::TransportFailed, e))?,
-        self_signed_state,
+        self_signed_state: OnceLock::new(),
+        root_hash,
     };
     let client_config = rustls_config_builder
         .dangerous()
@@ -181,7 +150,7 @@ pub(crate) fn hash_providing_https_client() -> PairingResult<(reqwest::Client, H
         .build()
         .map_err(|e| Error::new(ErrorKind::TransportFailed, e))?;
 
-    Ok((client, HashProvider { state }))
+    Ok(client)
 }
 
 #[cfg(test)]
@@ -190,8 +159,9 @@ mod tests {
 
     use axum::{Router, routing::get};
     use axum_server::tls_rustls::RustlsConfig;
+    use rustls::pki_types::{CertificateDer, pem::PemObject};
 
-    use crate::pairing::transport::hash_providing_https_client;
+    use crate::{CertificateHash, communication::transport::hash_checking_http_client};
 
     #[tokio::test]
     async fn matching_certificates() {
@@ -213,16 +183,17 @@ mod tests {
         });
         let addr = https_server_handle.listening().await.unwrap();
 
-        let (client, hash_provider) = hash_providing_https_client().unwrap();
-        assert!(client.get(format!("https://localhost:{}/", addr.port())).send().await.is_ok());
-        assert!(hash_provider.leaf_hash().is_some());
+        let client = hash_checking_http_client(CertificateHash::sha256(
+            &CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap(),
+        ))
+        .unwrap();
         assert!(client.get(format!("https://localhost:{}/", addr.port())).send().await.is_ok());
 
         https_server_handle.shutdown();
     }
 
     #[tokio::test]
-    async fn matching_root_certificates() {
+    async fn mismatching_certificates() {
         let rustls_config = RustlsConfig::from_pem(
             include_bytes!("../../testdata/localhost.chain.pem").into(),
             include_bytes!("../../testdata/localhost.key").into(),
@@ -241,77 +212,12 @@ mod tests {
         });
         let addr = https_server_handle.listening().await.unwrap();
 
-        let (client, hash_provider) = hash_providing_https_client().unwrap();
-        assert!(client.get(format!("https://localhost:{}/", addr.port())).send().await.is_ok());
-        assert!(hash_provider.leaf_hash().is_some());
-
-        https_server_handle.shutdown();
-
-        let rustls_config = RustlsConfig::from_pem(
-            include_bytes!("../../testdata/localhost-alt.chain.pem").into(),
-            include_bytes!("../../testdata/localhost-alt.key").into(),
-        )
-        .await
+        let client = hash_checking_http_client(CertificateHash::sha256(
+            &CertificateDer::from_pem_slice(include_bytes!("../../testdata/altroot.pem")).unwrap(),
+        ))
         .unwrap();
-        let router = Router::new().route("/", get(|| async { "Hello world" }));
-        let https_server_handle = axum_server::Handle::new();
-        let https_server_handle_clone = https_server_handle.clone();
-        tokio::spawn(async move {
-            axum_server::bind_rustls(SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 0), rustls_config)
-                .handle(https_server_handle_clone)
-                .serve(router.into_make_service())
-                .await
-                .unwrap();
-        });
-        let addr = https_server_handle.listening().await.unwrap();
-
-        assert!(client.get(format!("https://localhost:{}/", addr.port())).send().await.is_ok());
-    }
-
-    #[tokio::test]
-    async fn detects_mismatched_roots() {
-        let rustls_config = RustlsConfig::from_pem(
-            include_bytes!("../../testdata/localhost.chain.pem").into(),
-            include_bytes!("../../testdata/localhost.key").into(),
-        )
-        .await
-        .unwrap();
-        let router = Router::new().route("/", get(|| async { "Hello world" }));
-        let https_server_handle = axum_server::Handle::new();
-        let https_server_handle_clone = https_server_handle.clone();
-        tokio::spawn(async move {
-            axum_server::bind_rustls(SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 0), rustls_config)
-                .handle(https_server_handle_clone)
-                .serve(router.into_make_service())
-                .await
-                .unwrap();
-        });
-        let addr = https_server_handle.listening().await.unwrap();
-
-        let (client, hash_provider) = hash_providing_https_client().unwrap();
-        assert!(client.get(format!("https://localhost:{}/", addr.port())).send().await.is_ok());
-        assert!(hash_provider.leaf_hash().is_some());
-
-        https_server_handle.shutdown();
-
-        let rustls_config = RustlsConfig::from_pem(
-            include_bytes!("../../testdata/localhost-altroot.chain.pem").into(),
-            include_bytes!("../../testdata/localhost-altroot.key").into(),
-        )
-        .await
-        .unwrap();
-        let router = Router::new().route("/", get(|| async { "Hello world" }));
-        let https_server_handle = axum_server::Handle::new();
-        let https_server_handle_clone = https_server_handle.clone();
-        tokio::spawn(async move {
-            axum_server::bind_rustls(SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 0), rustls_config)
-                .handle(https_server_handle_clone)
-                .serve(router.into_make_service())
-                .await
-                .unwrap();
-        });
-        let addr = https_server_handle.listening().await.unwrap();
-
         assert!(client.get(format!("https://localhost:{}/", addr.port())).send().await.is_err());
+
+        https_server_handle.shutdown();
     }
 }

@@ -28,6 +28,7 @@ use tokio::{
 use tracing::{Instrument, info, trace};
 
 use crate::{
+    CertificateHash,
     common::{
         AbortingJoinHandle, root,
         wire::{AccessToken, EndpointDescription, NodeDescription, NodeId, PairingVersion},
@@ -133,7 +134,7 @@ impl<H> Clone for Server<H> {
 
 /// Configuration for the S2 pairing server.
 pub struct ServerConfig {
-    /// The root certificate of the server, if we are using a self-signed root.
+    /// The leaf certificate of the server, if we are using a self-signed root.
     /// Presence of this field indicates we are deployed on LAN.
     pub leaf_certificate: Option<CertificateDer<'static>>,
     /// Endpoint description of the server
@@ -212,7 +213,7 @@ impl<H: PrePairingHandler> Server<H> {
             network: server_config
                 .leaf_certificate
                 .map(|v| Network::Lan {
-                    fingerprint: sha2::Sha256::digest(v).into(),
+                    fingerprint: CertificateHash::sha256(&v),
                 })
                 .unwrap_or(Network::Wan),
             advertised_nodes: Mutex::new(server_config.advertised_nodes),
@@ -1021,6 +1022,7 @@ async fn v1_request_connection_details<H>(
                     None => return (Err(StatusCode::BAD_REQUEST), None),
                 },
                 access_token: AccessToken::new(&mut rng),
+                certificate_fingerprint: state.config.root_certificate.as_deref().map(CertificateHash::sha256),
             };
 
             trace!("Generated connection details");
@@ -1094,6 +1096,7 @@ async fn v1_post_connection_details<H>(
                 access_token: req.connection_details.access_token,
                 role: PairingRole::CommunicationClient {
                     initiate_url: req.connection_details.initiate_connection_url,
+                    root_hash: req.connection_details.certificate_fingerprint,
                 },
             });
 
@@ -2018,6 +2021,7 @@ mod tests {
                             connection_details: ConnectionDetails {
                                 initiate_connection_url: "https://example.com/".into(),
                                 access_token: AccessToken::new(&mut rand::rng()),
+                                certificate_fingerprint: None,
                             },
                         })
                         .unwrap(),
@@ -2073,6 +2077,7 @@ mod tests {
                             connection_details: ConnectionDetails {
                                 initiate_connection_url: "https://example.com/".into(),
                                 access_token: AccessToken::new(&mut rand::rng()),
+                                certificate_fingerprint: None,
                             },
                         })
                         .unwrap(),
@@ -2130,6 +2135,7 @@ mod tests {
                             connection_details: ConnectionDetails {
                                 initiate_connection_url: "https://example.com/".into(),
                                 access_token: AccessToken::new(&mut rand::rng()),
+                                certificate_fingerprint: None,
                             },
                         })
                         .unwrap(),
