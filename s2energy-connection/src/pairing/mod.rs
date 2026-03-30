@@ -46,7 +46,7 @@
 //! server. For this, you will also need to know the id of the node, and the URL on which its pairing server is reachable.
 //! ```rust
 //! # use std::sync::Arc;
-//! # use s2energy_connection::pairing::{Client, ClientConfig, NodeConfig, PairingRemote, NodeIdAlias};
+//! # use s2energy_connection::pairing::{Client, ClientConfig, NodeConfig, PairingRemote, NodeIdAlias, RemoteNodeIdentifier};
 //! # use s2energy_connection::{Deployment, MessageVersion, NodeDescription, EndpointDescription, NodeId, Role};
 //! # let local_node = NodeConfig::builder(NodeDescription {
 //! #     id: NodeId::new(),
@@ -69,7 +69,7 @@
 //!
 //! let pairing_result = client.pair(&local_node, PairingRemote {
 //!     url: "https://remote.example.com".into(),
-//!     id: Some(NodeIdAlias("test_pairing_id".into())),
+//!     id: RemoteNodeIdentifier::Alias(NodeIdAlias("test_pairing_id".into())),
 //! }, b"ABCDEF0123456", async |pairing| { /* do something with pairing */ Ok::<_, std::convert::Infallible>(())});
 //! ```
 //!
@@ -213,7 +213,7 @@ use rand::CryptoRng;
 use rustls::pki_types::CertificateDer;
 use wire::{HmacChallenge, HmacChallengeResponse};
 
-pub use client::{Client, ClientConfig, LongpollHandler, Longpoller, PairingRemote, PrePairing};
+pub use client::{Client, ClientConfig, LongpollHandler, Longpoller, PairingRemote, PrePairing, RemoteNodeIdentifier};
 pub use error::{ConfigError, Error, ErrorKind};
 pub use server::{
     LongpollingHandle, NoopPrePairingHandler, PairingToken, PairingTokenError, PrePairingHandler, PrePairingResponse, Server, ServerConfig,
