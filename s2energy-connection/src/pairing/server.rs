@@ -871,7 +871,7 @@ async fn v1_request_pairing<H>(
 
     let server_hmac_challenge = HmacChallenge::new(&mut rand::rng(), HMAC_CHALLENGE_BYTES);
 
-    let pairing_s2_node_id = request_pairing.id.unwrap_or(NodeIdAlias(String::default()));
+    let pairing_s2_node_id = request_pairing.id_alias.unwrap_or(NodeIdAlias(String::default()));
     let open_pairing = {
         let mut open_pairings = state.open_pairings.lock().unwrap();
         if let Some((_, request)) = open_pairings.remove_entry(&pairing_s2_node_id) {
@@ -1557,7 +1557,8 @@ mod tests {
                         serde_json::to_vec(&RequestPairing {
                             node_description: basic_node_description(UUID_B, Role::Cem),
                             endpoint_description: EndpointDescription::default(),
-                            id: Some(pairing_s2_node_id()),
+                            id: None,
+                            id_alias: Some(pairing_s2_node_id()),
                             supported_protocols: vec![CommunicationProtocol("WebSocket".into())],
                             supported_versions: vec![MessageVersion("v1".into())],
                             supported_hashing_algorithms: vec![HmacHashingAlgorithm::Sha256],
@@ -1609,7 +1610,8 @@ mod tests {
                         serde_json::to_vec(&RequestPairing {
                             node_description: basic_node_description(UUID_B, Role::Cem),
                             endpoint_description: EndpointDescription::default(),
-                            id: Some(pairing_s2_node_id()),
+                            id: None,
+                            id_alias: Some(pairing_s2_node_id()),
                             supported_protocols: vec![CommunicationProtocol("HTTP/3".into())],
                             supported_versions: vec![MessageVersion("v1".into())],
                             supported_hashing_algorithms: vec![HmacHashingAlgorithm::Sha256],
@@ -1660,7 +1662,8 @@ mod tests {
                         serde_json::to_vec(&RequestPairing {
                             node_description: basic_node_description(UUID_B, Role::Cem),
                             endpoint_description: EndpointDescription::default(),
-                            id: Some(pairing_s2_node_id()),
+                            id: None,
+                            id_alias: Some(pairing_s2_node_id()),
                             supported_protocols: vec![CommunicationProtocol("WebSocket".into())],
                             supported_versions: vec![MessageVersion("v0".into())],
                             supported_hashing_algorithms: vec![HmacHashingAlgorithm::Sha256],
@@ -1711,7 +1714,8 @@ mod tests {
                         serde_json::to_vec(&RequestPairing {
                             node_description: basic_node_description(UUID_B, Role::Cem),
                             endpoint_description: EndpointDescription::default(),
-                            id: Some(pairing_s2_node_id()),
+                            id: None,
+                            id_alias: Some(pairing_s2_node_id()),
                             supported_protocols: vec![CommunicationProtocol("HTTP/3".into())],
                             supported_versions: vec![MessageVersion("v0".into())],
                             supported_hashing_algorithms: vec![HmacHashingAlgorithm::Sha256],
@@ -1749,7 +1753,8 @@ mod tests {
                         serde_json::to_vec(&RequestPairing {
                             node_description: basic_node_description(UUID_A, Role::Cem),
                             endpoint_description: EndpointDescription::default(),
-                            id: Some(pairing_s2_node_id()),
+                            id: None,
+                            id_alias: Some(pairing_s2_node_id()),
                             supported_protocols: vec![CommunicationProtocol("WebSocket".into())],
                             supported_versions: vec![MessageVersion("v1".into())],
                             supported_hashing_algorithms: vec![HmacHashingAlgorithm::Sha256],
@@ -1800,7 +1805,8 @@ mod tests {
                         serde_json::to_vec(&RequestPairing {
                             node_description: basic_node_description(UUID_B, Role::Rm),
                             endpoint_description: EndpointDescription::default(),
-                            id: Some(pairing_s2_node_id()),
+                            id: None,
+                            id_alias: Some(pairing_s2_node_id()),
                             supported_protocols: vec![CommunicationProtocol("WebSocket".into())],
                             supported_versions: vec![MessageVersion("v1".into())],
                             supported_hashing_algorithms: vec![HmacHashingAlgorithm::Sha256],
@@ -2683,7 +2689,8 @@ mod tests {
                         serde_json::to_vec(&RequestPairing {
                             node_description: basic_node_description(UUID_A, Role::Cem),
                             endpoint_description: EndpointDescription::default(),
-                            id: Some(pairing_s2_node_id()),
+                            id: None,
+                            id_alias: Some(pairing_s2_node_id()),
                             supported_protocols: vec![CommunicationProtocol("WebSocket".into())],
                             supported_versions: vec![MessageVersion("v1".into())],
                             supported_hashing_algorithms: vec![HmacHashingAlgorithm::Sha256],

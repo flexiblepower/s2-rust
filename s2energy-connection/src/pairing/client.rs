@@ -695,7 +695,8 @@ impl<'a> V1Session<'a> {
         let request = RequestPairing {
             node_description: self.config.node_description.clone(),
             endpoint_description: self.endpoint_description.clone(),
-            id,
+            id: None,
+            id_alias: id,
             supported_protocols: self.config.supported_communication_protocols.clone(),
             supported_versions: self.config.supported_message_versions.clone(),
             supported_hashing_algorithms: vec![HmacHashingAlgorithm::Sha256],

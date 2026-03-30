@@ -132,7 +132,10 @@ pub(crate) struct RequestPairing {
     /// A server-assigned identifier of the S2Node that this server represents.
     #[serde(rename = "nodeIdAlias")]
     #[serde(default)]
-    pub id: Option<NodeIdAlias>,
+    pub id_alias: Option<NodeIdAlias>,
+    #[serde(rename = "nodeId")]
+    #[serde(default)]
+    pub id: Option<NodeId>,
     #[serde(rename = "supportedCommunicationProtocols")]
     pub supported_protocols: Vec<CommunicationProtocol>,
     /// The versions of the S2 JSON message schemas this S2Node implementation currently supports.
