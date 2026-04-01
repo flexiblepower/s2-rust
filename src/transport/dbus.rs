@@ -143,7 +143,7 @@ impl DBusConnection {
             }
         };
         let abort_handle =
-            tokio::task::spawn(keep_alive.instrument(tracing::trace_span!("keep_alive_task", destination = destination.as_str())))
+            tokio::task::spawn(keep_alive.instrument(tracing::trace_span!("keep_alive", destination = destination.as_str())))
                 .abort_handle();
 
         rm_proxy.keep_alive(cem_id.clone()).await?;
@@ -181,16 +181,13 @@ impl S2Transport for DBusConnection {
     type TransportError = S2DBusError;
 
     async fn send(&mut self, message: crate::common::Message) -> Result<(), Self::TransportError> {
-        tracing::trace!("Sending S2 message over D-Bus: {message:?}");
         let serialized = serde_json::to_string(&message)?;
         self.rm_proxy.message(self.cem_id.clone(), serialized).await?;
         Ok(())
     }
 
     async fn receive(&mut self) -> Result<crate::common::Message, Self::TransportError> {
-        tracing::info!("Waiting on message stream now...");
         let serialized_contents = self.message_stream.next().await.ok_or(S2DBusError::EndOfStream)?.args()?.message;
-        tracing::trace!("Received message over D-Bus: {serialized_contents:?}");
         let msg: crate::common::Message = serde_json::from_str(&serialized_contents)?;
         Ok(msg)
     }
@@ -213,27 +210,3 @@ impl Drop for DBusConnection {
         self.keep_alive_abort.abort();
     }
 }
-
-// #[tokio::main]
-// async fn main() -> eyre::Result<()> {
-//     if std::env::var("SERVER").map(|var| var == "true").unwrap_or(false) {
-//         let mut server = DBusServer::new().await?;
-//         loop {
-//             let mut connection = server.receive_connection().await?;
-//             println!("Acquired connection :D");
-//             connection.send(frbc::StorageStatus::new(10.).into()).await?;
-//         }
-//     } else {
-//         let connection = Connection::system().await?;
-//         println!("Sleeping for 2 seconds.");
-//         tokio::time::sleep(Duration::from_secs(2)).await;
-//         println!("Acquiring name.");
-//         connection.request_name("nl.westercoenraads.S2").await?;
-//         tokio::time::sleep(Duration::from_secs(2)).await;
-//         println!("Releasing name.");
-//         connection.release_name("nl.westercoenraads.S2").await?;
-//         // S2RmProxy::new(conn, destination)
-//     }
-
-//     Ok(())
-// }
