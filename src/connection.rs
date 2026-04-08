@@ -58,6 +58,9 @@ pub enum ProtocolError {
         /// Did we already receive a [`HandshakeResponse`](crate::common::HandshakeResponse) before receiving this message?
         handshake_response_received: bool,
     },
+
+    #[error("could not find a control type that's supported by both the RM and the CEM")]
+    NoSupportedControlType,
 }
 
 /// A connection able to send and receive S2 messages.
@@ -153,8 +156,7 @@ impl<T: S2Transport> S2Connection<T> {
         }
     }
 
-    pub async fn initialize_as_cem(&mut self, for_control_type: ControlType) -> Result<(), ConnectionError<T::TransportError>> {
-        // TODO: this should support multiple control types, and a priority order between them.
+    pub async fn initialize_as_cem(&mut self, control_type_priority: &[ControlType]) -> Result<(), ConnectionError<T::TransportError>> {
         tracing::trace!("Starting handshake process as CEM");
         self.send_message(
             Handshake::builder()
@@ -183,8 +185,6 @@ impl<T: S2Transport> S2Connection<T> {
                     if let Some(version) = version {
                         message.confirm().await?;
                         self.send_message(HandshakeResponse::new(version)).await?;
-                        self.send_message(SelectControlType::new(for_control_type)).await?;
-                        return Ok(());
                     } else {
                         message
                             .error(
@@ -192,6 +192,25 @@ impl<T: S2Transport> S2Connection<T> {
                                 "Could not find a matching S2 protocol version",
                             )
                             .await?;
+                    }
+                }
+
+                Message::ResourceManagerDetails(rm_details) => {
+                    let selected_control_type = control_type_priority
+                        .iter()
+                        .find(|ct| rm_details.available_control_types.contains(*ct));
+                    if let Some(control_type) = selected_control_type {
+                        message.confirm().await?;
+                        self.send_message(SelectControlType::new(*control_type)).await?;
+                        return Ok(());
+                    } else {
+                        message
+                            .error(
+                                ReceptionStatusValues::InvalidContent,
+                                "Could not find a ControlType supported by both the RM and CEM",
+                            )
+                            .await?;
+                        return Err(ProtocolError::NoSupportedControlType.into());
                     }
                 }
 
