@@ -156,7 +156,7 @@ impl<T: S2Transport> S2Connection<T> {
         }
     }
 
-    pub async fn initialize_as_cem(&mut self, control_type_priority: &[ControlType]) -> Result<(), ConnectionError<T::TransportError>> {
+    pub async fn initialize_as_cem(&mut self, control_type_priority: &[ControlType]) -> Result<ControlType, ConnectionError<T::TransportError>> {
         tracing::trace!("Starting handshake process as CEM");
         self.send_message(
             Handshake::builder()
@@ -202,7 +202,7 @@ impl<T: S2Transport> S2Connection<T> {
                     if let Some(control_type) = selected_control_type {
                         message.confirm().await?;
                         self.send_message(SelectControlType::new(*control_type)).await?;
-                        return Ok(());
+                        return Ok(*control_type);
                     } else {
                         message
                             .error(
