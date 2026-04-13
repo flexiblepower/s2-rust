@@ -389,6 +389,7 @@ pub struct LongpollingHandle {
     node: tokio::sync::watch::Receiver<Option<NodeDescription>>,
     last_pairing_response: tokio::sync::watch::Receiver<Option<Result<(), WaitForPairingErrorMessage>>>,
     client_id: NodeId,
+    active: tokio::sync::oneshot::Receiver<()>,
 }
 
 impl LongpollingHandle {
@@ -465,6 +466,11 @@ impl LongpollingHandle {
             .await
             .map_err(|_| ErrorKind::Cancelled.into())
     }
+
+    /// Wait for the session to be dropped by the remote.
+    pub fn wait_dropped(&mut self) -> impl Future<Output = ()> {
+        poll_fn(|cx| Pin::new(&mut self.active).poll(cx).map(|_| ()))
+    }
 }
 
 enum LongpollingState {
@@ -512,6 +518,7 @@ struct LongpollingStateInner {
     endpoint: tokio::sync::watch::Sender<Option<EndpointDescription>>,
     node: tokio::sync::watch::Sender<Option<NodeDescription>>,
     last_pairing_response: tokio::sync::watch::Sender<Option<Result<(), WaitForPairingErrorMessage>>>,
+    _active_sender: tokio::sync::oneshot::Sender<()>,
 }
 
 /// These don't keep the original errors in the results to limit the amount of boxing needed here.
@@ -773,12 +780,14 @@ async fn v1_wait_for_pairing<H>(
                     let (endpoint_sender, endpoint_receiver) = tokio::sync::watch::channel(None);
                     let (node_sender, node_receiver) = tokio::sync::watch::channel(None);
                     let (last_pairing_sender, last_pairing_receiver) = tokio::sync::watch::channel(None);
+                    let (active_tx, active_rx) = tokio::sync::oneshot::channel();
                     pending_handles.push(LongpollingHandle {
                         commands: commands_sender,
                         endpoint: endpoint_receiver,
                         node: node_receiver,
                         last_pairing_response: last_pairing_receiver,
                         client_id: request.client_node_id,
+                        active: active_rx,
                     });
                     vacant_entry.insert(LongpollingState::Running {
                         since: Instant::now(),
@@ -789,6 +798,7 @@ async fn v1_wait_for_pairing<H>(
                         endpoint: endpoint_sender,
                         node: node_sender,
                         last_pairing_response: last_pairing_sender,
+                        _active_sender: active_tx,
                     }
                 }
             };
