@@ -33,7 +33,9 @@ zeroconf-tokio.workspace = true
 
 [dev-dependencies]
 axum-server.workspace = true
+clap.workspace = true
 http-body-util.workspace = true
+iocraft.workspace = true
 tokio = { workspace = true, features = ["signal", "macros", "rt", "test-util"] }
 tower.workspace = true
 tracing-subscriber.workspace = true
