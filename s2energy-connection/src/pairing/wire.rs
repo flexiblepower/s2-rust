@@ -200,12 +200,12 @@ impl<S: Sync + Send> FromRequestParts<S> for PairingAttemptId {
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RequestPairingResponse {
-    pub pairing_attempt_id: PairingAttemptId,
-    pub server_node_description: NodeDescription,
-    pub server_endpoint_description: EndpointDescription,
-    pub selected_hmac_hashing_algorithm: HmacHashingAlgorithm,
-    pub client_hmac_challenge_response: HmacChallengeResponse,
-    pub server_hmac_challenge: HmacChallenge,
+    pub(super) pairing_attempt_id: PairingAttemptId,
+    pub(super) server_node_description: NodeDescription,
+    pub(super) server_endpoint_description: EndpointDescription,
+    pub(super) selected_hmac_hashing_algorithm: HmacHashingAlgorithm,
+    pub(super) client_hmac_challenge_response: HmacChallengeResponse,
+    pub(super) server_hmac_challenge: HmacChallenge,
 }
 
 #[derive(Serialize, Deserialize)]

@@ -13,6 +13,7 @@
 pub(crate) mod common;
 pub mod communication;
 pub mod discovery;
+pub mod error;
 pub mod pairing;
 
 pub use common::wire::{

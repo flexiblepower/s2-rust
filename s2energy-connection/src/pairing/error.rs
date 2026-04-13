@@ -8,8 +8,8 @@ use crate::{
 /// An error that occured during the pairing process.
 #[derive(Debug)]
 pub struct Error {
-    kind: ErrorKind,
-    wrapped_error: WrappedError,
+    pub(crate) kind: ErrorKind,
+    pub(crate) wrapped_error: WrappedError,
 }
 
 impl Error {
@@ -65,7 +65,7 @@ impl From<BaseError> for Error {
 }
 
 #[derive(Debug)]
-enum WrappedError {
+pub(crate) enum WrappedError {
     None,
     Reqwest(reqwest::Error),
     UrlParse(url::ParseError),
