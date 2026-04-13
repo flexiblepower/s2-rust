@@ -44,6 +44,7 @@ pub struct PrePairingRemote {
 }
 
 /// Configuration for pairing clients.
+#[derive(Debug, Clone)]
 pub struct ClientConfig {
     /// Additional roots of trust for TLS connections. Useful when testing during the development of WAN endpoints.
     ///
