@@ -54,6 +54,13 @@ const TIMEOUT_SLACK: Duration = Duration::from_secs(5);
 #[derive(Debug, Clone)]
 pub struct PairingToken(pub Box<[u8]>);
 
+impl PairingToken {
+    /// Get the raw token bytes.
+    pub fn as_slice(&self) -> &[u8] {
+        &self.0
+    }
+}
+
 impl std::fmt::Display for PairingToken {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         Base64Display::new(&self.0, &BASE64_STANDARD).fmt(f)
