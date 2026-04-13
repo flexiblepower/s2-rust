@@ -189,6 +189,27 @@ impl<Store: ServerPairingStore> Server<Store> {
             .with_state(self.app_state.clone())
     }
 
+    pub(crate) fn get_internal_router(&self) -> axum::Router<()> {
+        v1_router().with_state(self.app_state.clone())
+    }
+
+    pub(crate) fn store(&self) -> impl std::ops::Deref<Target = Store> + Clone + Send + 'static {
+        struct StateWrapper<S>(AppState<S>);
+        impl<S> std::ops::Deref for StateWrapper<S> {
+            type Target = S;
+
+            fn deref(&self) -> &Self::Target {
+                &self.0.store
+            }
+        }
+        impl<S> Clone for StateWrapper<S> {
+            fn clone(&self) -> Self {
+                Self(self.0.clone())
+            }
+        }
+        StateWrapper(self.app_state.clone())
+    }
+
     /// Get the next connection which has been established with the server.
     pub async fn next_connection(&self) -> (PairingLookup, ConnectionInfo) {
         // The other end will always exist.

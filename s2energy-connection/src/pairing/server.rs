@@ -262,6 +262,10 @@ impl<H: PrePairingHandler> Server<H> {
             .with_state(self.state.clone())
     }
 
+    pub(crate) fn get_internal_router(&self) -> axum::Router<()> {
+        v1_router().with_state(self.state.clone())
+    }
+
     /// Update the nodes advertised by this server.
     ///
     /// These are only used when the server is on a LAN.

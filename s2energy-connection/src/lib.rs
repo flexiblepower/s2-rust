@@ -10,6 +10,7 @@
 //! in the examples folder of this crate.
 #![warn(missing_docs)]
 
+pub mod combined_server;
 pub(crate) mod common;
 pub mod communication;
 pub mod discovery;
