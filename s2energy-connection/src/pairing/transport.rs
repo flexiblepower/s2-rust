@@ -87,36 +87,28 @@ impl ServerCertVerifier for HashingCertificateVerifier {
         ocsp_response: &[u8],
         now: rustls::pki_types::UnixTime,
     ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
-        match self
-            .inner
-            .verify_server_cert(end_entity, intermediates, server_name, ocsp_response, now)
-        {
-            Ok(v) => Ok(v),
-            Err(_) => {
-                let state = self.self_signed_state.get_or_init(|| {
-                    let fallback = CertificateDer::from_slice(&[]);
-                    let root_cert = intermediates.last().unwrap_or(&fallback);
-                    let root_hash = CertificateHash::sha256(root_cert);
-                    let leaf_hash = CertificateHash::sha256(end_entity);
-                    let mut root_store = RootCertStore::empty();
-                    // conciously ignore errors here, we just want to initialize
-                    root_store.add(root_cert.clone()).ok();
-                    let verifier = match WebPkiServerVerifier::builder(Arc::new(root_store)).build() {
-                        Ok(verifier) => SelfVerifier::WebPki(Arc::try_unwrap(verifier).unwrap()),
-                        Err(_) => SelfVerifier::None,
-                    };
+        let state = self.self_signed_state.get_or_init(|| {
+            let fallback = CertificateDer::from_slice(&[]);
+            let root_cert = intermediates.last().unwrap_or(&fallback);
+            let root_hash = CertificateHash::sha256(root_cert);
+            let leaf_hash = CertificateHash::sha256(end_entity);
+            let mut root_store = RootCertStore::empty();
+            // conciously ignore errors here, we just want to initialize
+            root_store.add(root_cert.clone()).ok();
+            let verifier = match WebPkiServerVerifier::builder(Arc::new(root_store)).build() {
+                Ok(verifier) => SelfVerifier::WebPki(Arc::try_unwrap(verifier).unwrap()),
+                Err(_) => SelfVerifier::None,
+            };
 
-                    SelfSignedState {
-                        root_hash,
-                        leaf_hash,
-                        verifier,
-                    }
-                });
-                state
-                    .verifier
-                    .verify_server_cert(end_entity, intermediates, server_name, ocsp_response, now)
+            SelfSignedState {
+                root_hash,
+                leaf_hash,
+                verifier,
             }
-        }
+        });
+        state
+            .verifier
+            .verify_server_cert(end_entity, intermediates, server_name, ocsp_response, now)
     }
 
     fn verify_tls12_signature(
