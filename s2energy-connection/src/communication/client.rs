@@ -11,7 +11,7 @@ use crate::{
     common::negotiate_version,
     communication::{
         CommunicationResult, ConnectionInfo, Error, ErrorKind, NodeConfig, WebSocketTransport,
-        transport::hash_checking_http_client,
+        transport::{hash_checking_http_client, hash_checking_verifier},
         wire::{
             CommunicationDetails, CommunicationDetailsErrorMessage, InitiateConnectionRequest, InitiateConnectionResponse, UnpairRequest,
         },
@@ -130,14 +130,17 @@ impl Client {
     #[tracing::instrument(skip_all, fields(client = %pairing.client_id(), server = %pairing.server_id()), level = tracing::Level::ERROR)]
     pub async fn connect(&self, mut pairing: impl ClientPairing) -> CommunicationResult<ConnectionInfo> {
         trace!("Establishing new communication connection.");
-        let client = reqwest::Client::builder()
-            .tls_certs_merge(
-                self.additional_certificates
-                    .iter()
-                    .filter_map(|v| reqwest::Certificate::from_der(v).ok()),
-            )
-            .build()
-            .map_err(|e| Error::new(ErrorKind::TransportFailed, e))?;
+        let client = match pairing.certificate_hash() {
+            Some(hash) => hash_checking_http_client(hash)?,
+            None => reqwest::Client::builder()
+                .tls_certs_merge(
+                    self.additional_certificates
+                        .iter()
+                        .filter_map(|v| reqwest::Certificate::from_der(v).ok()),
+                )
+                .build()
+                .map_err(|e| Error::new(ErrorKind::TransportFailed, e))?,
+        };
 
         trace!("Prepared reqwest client.");
 
@@ -243,7 +246,7 @@ impl Client {
                 trace!("Confirmed new access token to server.");
 
                 pairing
-                    .set_access_tokens(dbg!(vec![initiate_response.access_token]))
+                    .set_access_tokens(vec![initiate_response.access_token])
                     .await
                     .map_err(|e| Error::new(ErrorKind::Storage, Box::new(e) as Box<_>))?;
 
@@ -257,10 +260,16 @@ impl Client {
                             tls_config_builder.crypto_provider().clone(),
                         )
                         .map_err(|e| Error::new(ErrorKind::TransportFailed, e))?;
-                        let tls_config = tls_config_builder
-                            .dangerous()
-                            .with_custom_certificate_verifier(Arc::new(cert_verifier))
-                            .with_no_client_auth();
+                        let tls_config = match pairing.certificate_hash() {
+                            Some(root_hash) => tls_config_builder
+                                .dangerous()
+                                .with_custom_certificate_verifier(Arc::new(hash_checking_verifier(root_hash)?))
+                                .with_no_client_auth(),
+                            None => tls_config_builder
+                                .dangerous()
+                                .with_custom_certificate_verifier(Arc::new(cert_verifier))
+                                .with_no_client_auth(),
+                        };
 
                         let request = ClientRequestBuilder::new(
                             web_socket_communication_details
@@ -361,7 +370,7 @@ mod tests {
         }
 
         async fn set_access_token(&mut self, token: crate::AccessToken) -> Result<(), Self::Error> {
-            *self.token.lock().unwrap() = dbg!(token);
+            *self.token.lock().unwrap() = token;
             Ok(())
         }
 
