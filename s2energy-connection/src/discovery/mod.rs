@@ -220,7 +220,7 @@ impl DiscoverableS2EndpointBuilder {
             Host::Domain(domain)
                 if (domain.ends_with(".local") || domain.ends_with(".local.")) == matches!(self.deployment, Deployment::Lan) =>
             {
-                self.pairing_url = Some(longpolling_url);
+                self.longpolling_url = Some(longpolling_url);
                 Ok(self)
             }
             _ => Err(BuilderError::InvalidUrl),
