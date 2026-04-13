@@ -593,14 +593,6 @@ impl ExpiringPairingState {
             Some(&mut self.state)
         }
     }
-
-    fn into_state(self) -> Option<PairingState> {
-        if self.start_time.elapsed() > Duration::from_secs(15) {
-            None
-        } else {
-            Some(self.state)
-        }
-    }
 }
 
 type AppState<H> = Arc<AppStateInner<H>>;
@@ -697,22 +689,39 @@ async fn periodic_cleanup<H: PrePairingHandler>(state: Weak<AppStateInner<H>>) {
         }
 
         // Active pairing sessions
-        {
+        let handlers: Vec<_> = {
             let mut attempts = state.attempts.lock().unwrap();
-            attempts.retain(|_, value| now.duration_since(value.start_time) < SESSION_TIMEOUT + TIMEOUT_SLACK);
+            attempts
+                .extract_if(|_, value| now.duration_since(value.start_time) >= SESSION_TIMEOUT + TIMEOUT_SLACK)
+                .filter_map(|(_, state)| match state.state {
+                    PairingState::Empty => None,
+                    PairingState::Initial(InitialPairingState { sender, .. })
+                    | PairingState::Complete(CompletePairingState { sender, .. }) => Some(sender),
+                })
+                .collect()
+        };
+        for handler in handlers {
+            handler.handle(Err(ErrorKind::Timeout.into())).await;
         }
 
         // Open pairing sessions
-        {
+        let handlers: Vec<_> = {
             let mut pending_pairings = state.pending_pairings.lock().unwrap();
             let PendingPairings {
                 alias_mappings,
                 open_pairings,
                 ..
             } = &mut *pending_pairings;
-            for (_, pairing) in open_pairings.extract_if(|_, value| now.duration_since(value.age) >= ONCEPAIR_TIMEOUT + TIMEOUT_SLACK) {
-                alias_mappings.remove(&pairing.alias);
-            }
+            open_pairings
+                .extract_if(|_, value| now.duration_since(value.age) >= ONCEPAIR_TIMEOUT + TIMEOUT_SLACK)
+                .map(|(_, request)| {
+                    alias_mappings.remove(&request.alias);
+                    request.handler
+                })
+                .collect()
+        };
+        for handler in handlers {
+            handler.handle(Err(ErrorKind::Timeout.into())).await;
         }
 
         drop(state);
@@ -940,6 +949,7 @@ async fn v1_request_pairing<H>(
         }
 
         if open_pairing.config.node_description.role == request_pairing.node_description.role {
+            open_pairing.handler.handle(Err(ErrorKind::RemoteOfSameType.into())).await;
             return Err(PairingResponseErrorMessage::InvalidCombinationOfRoles);
         }
 
@@ -952,6 +962,7 @@ async fn v1_request_pairing<H>(
                 }
             }
             if !communication_overlap {
+                open_pairing.handler.handle(Err(ErrorKind::NoSupportedVersion.into())).await;
                 return Err(PairingResponseErrorMessage::IncompatibleCommunicationProtocols);
             }
             let mut connection_overlap = false;
@@ -962,6 +973,7 @@ async fn v1_request_pairing<H>(
                 }
             }
             if !connection_overlap {
+                open_pairing.handler.handle(Err(ErrorKind::NoSupportedVersion.into())).await;
                 return Err(PairingResponseErrorMessage::IncompatibleS2MessageVersions);
             }
         }
@@ -1031,52 +1043,73 @@ async fn v1_request_connection_details<H>(
             return (Err(StatusCode::UNAUTHORIZED), None);
         };
 
-        if let Some(state_entry) = state.get_state()
-            && let PairingState::Initial(state) = std::mem::replace(state_entry, PairingState::Empty)
-        {
-            // It is ok to manually enter the span here as this closure is not async.
-            let session_span_clone = state.session_span.clone();
-            let _entered_span = session_span_clone.enter();
+        if let Some(state_entry) = state.get_state() {
+            match std::mem::replace(state_entry, PairingState::Empty) {
+                PairingState::Empty => {
+                    info!("Pairing session was in unexpected state for requesting connection details (A).");
+                    attempts.remove(&pairing_attempt_id);
+                    (Err(StatusCode::UNAUTHORIZED), None)
+                }
+                PairingState::Complete(complete_pairing_state) => {
+                    info!("Pairing session was in unexpected state for requesting connection details (B).");
+                    attempts.remove(&pairing_attempt_id);
+                    (
+                        Err(StatusCode::UNAUTHORIZED),
+                        Some(complete_pairing_state.sender.handle(Err(ErrorKind::ProtocolError.into()))),
+                    )
+                }
+                PairingState::Initial(state) => {
+                    // It is ok to manually enter the span here as this closure is not async.
+                    let session_span_clone = state.session_span.clone();
+                    let _entered_span = session_span_clone.enter();
 
-            trace!("Found pairing session.");
+                    trace!("Found pairing session.");
 
-            let expected = state.challenge.sha256(&app_state.network, &state.token.0);
-            if expected != req.server_hmac_challenge_response {
-                attempts.remove(&pairing_attempt_id);
-                return (
-                    Err(StatusCode::FORBIDDEN),
-                    Some(state.sender.handle(Err(ErrorKind::InvalidToken.into()))),
-                );
+                    let expected = state.challenge.sha256(&app_state.network, &state.token.0);
+                    if expected != req.server_hmac_challenge_response {
+                        attempts.remove(&pairing_attempt_id);
+                        return (
+                            Err(StatusCode::FORBIDDEN),
+                            Some(state.sender.handle(Err(ErrorKind::InvalidToken.into()))),
+                        );
+                    }
+
+                    trace!("Validated remote's response to pairing token challenge.");
+
+                    let mut rng = rand::rng();
+                    let connection_details = ConnectionDetails {
+                        initiate_connection_url: match &state.config.connection_initiate_url {
+                            Some(url) => url.clone(),
+                            None => return (Err(StatusCode::BAD_REQUEST), None),
+                        },
+                        access_token: AccessToken::new(&mut rng),
+                        certificate_fingerprint: state.config.root_certificate.as_deref().map(CertificateHash::sha256),
+                    };
+
+                    trace!("Generated connection details");
+
+                    *state_entry = PairingState::Complete(CompletePairingState {
+                        session_span: state.session_span,
+                        sender: state.sender,
+                        remote_node_description: state.remote_node_description,
+                        remote_endpoint_description: state.remote_endpoint_description,
+                        access_token: connection_details.access_token.clone(),
+                        role: PairingRole::CommunicationServer,
+                    });
+
+                    (Ok(Json(connection_details)), None)
+                }
             }
-
-            trace!("Validated remote's response to pairing token challenge.");
-
-            let mut rng = rand::rng();
-            let connection_details = ConnectionDetails {
-                initiate_connection_url: match &state.config.connection_initiate_url {
-                    Some(url) => url.clone(),
-                    None => return (Err(StatusCode::BAD_REQUEST), None),
-                },
-                access_token: AccessToken::new(&mut rng),
-                certificate_fingerprint: state.config.root_certificate.as_deref().map(CertificateHash::sha256),
-            };
-
-            trace!("Generated connection details");
-
-            *state_entry = PairingState::Complete(CompletePairingState {
-                session_span: state.session_span,
-                sender: state.sender,
-                remote_node_description: state.remote_node_description,
-                remote_endpoint_description: state.remote_endpoint_description,
-                access_token: connection_details.access_token.clone(),
-                role: PairingRole::CommunicationServer,
-            });
-
-            (Ok(Json(connection_details)), None)
         } else {
-            info!("Pairing session was expired, or in unexpected state for requesting connection details.");
+            info!("Pairing session was expired.");
+            let action = match std::mem::replace(&mut state.state, PairingState::Empty) {
+                PairingState::Empty => None,
+                PairingState::Initial(InitialPairingState { sender, .. }) | PairingState::Complete(CompletePairingState { sender, .. }) => {
+                    Some(sender.handle(Err(ErrorKind::Timeout.into())))
+                }
+            };
             attempts.remove(&pairing_attempt_id);
-            (Err(StatusCode::UNAUTHORIZED), None)
+            (Err(StatusCode::UNAUTHORIZED), action)
         }
     })();
 
@@ -1103,46 +1136,67 @@ async fn v1_post_connection_details<H>(
             return (StatusCode::UNAUTHORIZED, None);
         };
 
-        if let Some(state_entry) = state.get_state()
-            && let PairingState::Initial(state) = std::mem::replace(state_entry, PairingState::Empty)
-        {
-            // It is ok to manually enter the span here as this closure is not async.
-            let session_span_clone = state.session_span.clone();
-            let _entered_span = session_span_clone.enter();
+        if let Some(state_entry) = state.get_state() {
+            match std::mem::replace(state_entry, PairingState::Empty) {
+                PairingState::Empty => {
+                    info!("Pairing session was in unexpected state for posting connection details.");
+                    attempts.remove(&pairing_attempt_id);
+                    (StatusCode::UNAUTHORIZED, None)
+                }
+                PairingState::Complete(complete_pairing_state) => {
+                    info!("Pairing session was in unexpected state for posting connection details.");
+                    attempts.remove(&pairing_attempt_id);
+                    (
+                        StatusCode::UNAUTHORIZED,
+                        Some(complete_pairing_state.sender.handle(Err(ErrorKind::ProtocolError.into()))),
+                    )
+                }
+                PairingState::Initial(state) => {
+                    // It is ok to manually enter the span here as this closure is not async.
+                    let session_span_clone = state.session_span.clone();
+                    let _entered_span = session_span_clone.enter();
 
-            trace!("Found pairing session.");
+                    trace!("Found pairing session.");
 
-            let expected = state.challenge.sha256(&app_state.network, &state.token.0);
-            if expected != req.server_hmac_challenge_response {
-                attempts.remove(&pairing_attempt_id);
-                return (
-                    StatusCode::FORBIDDEN,
-                    Some(state.sender.handle(Err(ErrorKind::InvalidToken.into()))),
-                );
+                    let expected = state.challenge.sha256(&app_state.network, &state.token.0);
+                    if expected != req.server_hmac_challenge_response {
+                        attempts.remove(&pairing_attempt_id);
+                        return (
+                            StatusCode::FORBIDDEN,
+                            Some(state.sender.handle(Err(ErrorKind::InvalidToken.into()))),
+                        );
+                    }
+
+                    trace!("Validated remote's response to pairing token challenge.");
+
+                    // Do better error handling here than unwrap
+                    *state_entry = PairingState::Complete(CompletePairingState {
+                        session_span: state.session_span,
+                        sender: state.sender,
+                        remote_node_description: state.remote_node_description,
+                        remote_endpoint_description: state.remote_endpoint_description,
+                        access_token: req.connection_details.access_token,
+                        role: PairingRole::CommunicationClient {
+                            initiate_url: req.connection_details.initiate_connection_url,
+                            root_hash: req.connection_details.certificate_fingerprint,
+                        },
+                    });
+
+                    trace!("Stored received connection details in session state.");
+
+                    (StatusCode::NO_CONTENT, None)
+                }
             }
-
-            trace!("Validated remote's response to pairing token challenge.");
-
-            // Do better error handling here than unwrap
-            *state_entry = PairingState::Complete(CompletePairingState {
-                session_span: state.session_span,
-                sender: state.sender,
-                remote_node_description: state.remote_node_description,
-                remote_endpoint_description: state.remote_endpoint_description,
-                access_token: req.connection_details.access_token,
-                role: PairingRole::CommunicationClient {
-                    initiate_url: req.connection_details.initiate_connection_url,
-                    root_hash: req.connection_details.certificate_fingerprint,
-                },
-            });
-
-            trace!("Stored received connection details in session state.");
-
-            (StatusCode::NO_CONTENT, None)
         } else {
-            info!("Pairing session was expired, or in unexpected state for posting connection details.");
+            info!("Pairing session was expired.");
+            let action = match std::mem::replace(&mut state.state, PairingState::Empty) {
+                PairingState::Empty => None,
+                PairingState::Initial(InitialPairingState { sender, .. }) | PairingState::Complete(CompletePairingState { sender, .. }) => {
+                    Some(sender.handle(Err(ErrorKind::Timeout.into())))
+                }
+            };
             attempts.remove(&pairing_attempt_id);
-            (StatusCode::UNAUTHORIZED, None)
+            (StatusCode::UNAUTHORIZED, action)
         }
     })();
 
@@ -1161,7 +1215,7 @@ async fn v1_finalize_pairing<H>(
 ) -> StatusCode {
     trace!("Received request to finalize pairing session.");
 
-    let Some(state) = ({
+    let Some(mut state) = ({
         let mut attempts = state.attempts.lock().unwrap();
         attempts.remove(&pairing_attempt_id)
     }) else {
@@ -1169,33 +1223,41 @@ async fn v1_finalize_pairing<H>(
         return StatusCode::UNAUTHORIZED;
     };
 
-    if let Some(state) = state.into_state() {
+    if let Some(state) = state.get_state() {
         let session_span_clone = state.get_session_span().cloned();
         let completion = async move {
             if success {
-                if let PairingState::Complete(state) = state {
-                    let result = state
-                        .sender
-                        .handle(Ok(Pairing {
-                            remote_endpoint_description: state.remote_endpoint_description,
-                            remote_node_description: state.remote_node_description,
-                            token: state.access_token,
-                            role: state.role,
-                        }))
-                        .await;
-
-                    trace!("Finalized pairing session.");
-                    if result.is_ok() {
-                        StatusCode::NO_CONTENT
-                    } else {
-                        StatusCode::INTERNAL_SERVER_ERROR
+                match std::mem::replace(state, PairingState::Empty) {
+                    PairingState::Empty => {
+                        info!("Remote tried to finalize pairing session in invalid state.");
+                        StatusCode::BAD_REQUEST
                     }
-                } else {
-                    info!("Remote tried to finalize pairing session that did not yet have all the data exchanged.");
-                    StatusCode::BAD_REQUEST
+                    PairingState::Initial(state) => {
+                        info!("Remote tried to finalize pairing session that did not yet have all the data exchanged.");
+                        state.sender.handle(Err(ErrorKind::ProtocolError.into())).await;
+                        StatusCode::BAD_REQUEST
+                    }
+                    PairingState::Complete(state) => {
+                        let result = state
+                            .sender
+                            .handle(Ok(Pairing {
+                                remote_endpoint_description: state.remote_endpoint_description,
+                                remote_node_description: state.remote_node_description,
+                                token: state.access_token,
+                                role: state.role,
+                            }))
+                            .await;
+
+                        trace!("Finalized pairing session.");
+                        if result.is_ok() {
+                            StatusCode::NO_CONTENT
+                        } else {
+                            StatusCode::INTERNAL_SERVER_ERROR
+                        }
+                    }
                 }
             } else {
-                match state {
+                match std::mem::replace(state, PairingState::Empty) {
                     PairingState::Empty => { /* should never happen, but fine to ignore */ }
                     PairingState::Initial(InitialPairingState { sender, .. })
                     | PairingState::Complete(CompletePairingState { sender, .. }) => {
@@ -1215,6 +1277,12 @@ async fn v1_finalize_pairing<H>(
         }
     } else {
         info!("Pairing session was expired during finalization.");
+        match std::mem::replace(&mut state.state, PairingState::Empty) {
+            PairingState::Empty => { /* should never happen, but fine to ignore */ }
+            PairingState::Initial(InitialPairingState { sender, .. }) | PairingState::Complete(CompletePairingState { sender, .. }) => {
+                sender.handle(Err(ErrorKind::Cancelled.into())).await;
+            }
+        }
         StatusCode::UNAUTHORIZED
     }
 }
@@ -2018,7 +2086,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        let body = dbg!(response.into_body().collect().await.unwrap().to_bytes());
+        let body = response.into_body().collect().await.unwrap().to_bytes();
         let error: PairingResponseErrorMessage = serde_json::from_slice(&body).unwrap();
         assert_eq!(error, PairingResponseErrorMessage::InvalidCombinationOfRoles);
     }
