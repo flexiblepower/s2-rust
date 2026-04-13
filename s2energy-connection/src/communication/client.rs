@@ -517,7 +517,7 @@ mod tests {
             AccessToken("testtoken".into()),
             NodeConfig::builder(vec![MessageVersion("v1".into())]).build(),
         );
-        let (handle, mut server) = setup_server(store.clone(), None, Router::new()).await;
+        let (handle, server) = setup_server(store.clone(), None, Router::new()).await;
 
         let addr = handle.listening().await.unwrap();
         let client = Client::new(
@@ -580,7 +580,7 @@ mod tests {
             AccessToken("testtoken".into()),
             NodeConfig::builder(vec![MessageVersion("v1".into())]).build(),
         );
-        let (handle, mut server) = setup_server(store.clone(), None, Router::new()).await;
+        let (handle, server) = setup_server(store.clone(), None, Router::new()).await;
 
         let addr = handle.listening().await.unwrap();
         let client = Client::new(
@@ -636,7 +636,7 @@ mod tests {
             AccessToken("testtoken".into()),
             NodeConfig::builder(vec![MessageVersion("v1".into())]).build(),
         );
-        let (handle, mut server) = setup_server(
+        let (handle, server) = setup_server(
             store.clone(),
             Some(EndpointDescription {
                 name: Some("a".into()),
@@ -697,7 +697,7 @@ mod tests {
             AccessToken("testtoken".into()),
             NodeConfig::builder(vec![MessageVersion("v1".into())]).build(),
         );
-        let (handle, mut server) = setup_server(store.clone(), None, Router::new()).await;
+        let (handle, server) = setup_server(store.clone(), None, Router::new()).await;
 
         let addr = handle.listening().await.unwrap();
         let client = Client::new(
@@ -746,7 +746,7 @@ mod tests {
             AccessToken("testtoken".into()),
             NodeConfig::builder(vec![MessageVersion("v1".into())]).build(),
         );
-        let (handle, mut server) = setup_server(store.clone(), None, Router::new()).await;
+        let (handle, server) = setup_server(store.clone(), None, Router::new()).await;
 
         let addr = handle.listening().await.unwrap();
         let client = Client::new(
@@ -967,7 +967,7 @@ mod tests {
             AccessToken("testtoken".into()),
             NodeConfig::builder(vec![MessageVersion("v1".into())]).build(),
         );
-        let (handle, mut server) = setup_server(store.clone(), None, Router::new()).await;
+        let (handle, server) = setup_server(store.clone(), None, Router::new()).await;
 
         let addr = handle.listening().await.unwrap();
         let client = Client::new(

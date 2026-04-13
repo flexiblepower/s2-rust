@@ -92,7 +92,7 @@ async fn main() {
         .with(EnvFilter::from_default_env())
         .init();
 
-    let mut server = Server::new(
+    let server = Server::new(
         ServerConfig {
             base_url: "localhost:8005".into(),
             endpoint_description: None,

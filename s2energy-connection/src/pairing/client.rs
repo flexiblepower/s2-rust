@@ -808,7 +808,7 @@ mod tests {
         handler: impl PrePairingHandler,
         overrides: Router<()>,
     ) -> (Handle<SocketAddr>, JoinHandle<Pairing>, Server<impl PrePairingHandler>) {
-        let mut server = Server::new_with_prepairing(
+        let server = Server::new_with_prepairing(
             ServerConfig {
                 leaf_certificate: None,
                 endpoint_description: EndpointDescription::default(),

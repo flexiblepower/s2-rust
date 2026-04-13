@@ -270,12 +270,12 @@ impl<H: PrePairingHandler> Server<H> {
     }
 
     /// Enable longpolling
-    pub async fn enable_longpolling(&mut self) {
+    pub async fn enable_longpolling(&self) {
         self.longpolling_enabled.send_replace(true);
     }
 
     /// Disable longpolling
-    pub async fn disable_longpolling(&mut self) {
+    pub async fn disable_longpolling(&self) {
         self.longpolling_enabled.send_replace(false);
         let mut receiver = self.pending_longpolling_handles.lock().await;
         // Wait until all existing sessions are stopped. We need to drain any new

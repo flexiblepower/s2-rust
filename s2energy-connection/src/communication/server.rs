@@ -96,7 +96,16 @@ pub struct ServerConfig {
 /// Server for handling the S2 Communication establishment subprotocol.
 pub struct Server<Store> {
     app_state: AppState<Store>,
-    connection_receiver: tokio::sync::mpsc::Receiver<(PairingLookup, ConnectionInfo)>,
+    connection_receiver: Arc<tokio::sync::Mutex<tokio::sync::mpsc::Receiver<(PairingLookup, ConnectionInfo)>>>,
+}
+
+impl<Store> Clone for Server<Store> {
+    fn clone(&self) -> Self {
+        Self {
+            app_state: self.app_state.clone(),
+            connection_receiver: self.connection_receiver.clone(),
+        }
+    }
 }
 
 type AppState<Store> = Arc<AppStateInner<Store>>;
@@ -166,7 +175,7 @@ impl<Store: ServerPairingStore> Server<Store> {
 
         Server {
             app_state,
-            connection_receiver,
+            connection_receiver: Arc::new(tokio::sync::Mutex::new(connection_receiver)),
         }
     }
 
@@ -181,9 +190,9 @@ impl<Store: ServerPairingStore> Server<Store> {
     }
 
     /// Get the next connection which has been established with the server.
-    pub async fn next_connection(&mut self) -> (PairingLookup, ConnectionInfo) {
+    pub async fn next_connection(&self) -> (PairingLookup, ConnectionInfo) {
         // The other end will always exist.
-        self.connection_receiver.recv().await.unwrap()
+        self.connection_receiver.lock().await.recv().await.unwrap()
     }
 }
 
@@ -1137,7 +1146,7 @@ mod tests {
     async fn websocket_handling() {
         let listener = TcpListener::bind(SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 0)).await.unwrap();
         let port = listener.local_addr().unwrap().port();
-        let mut server = Server::new(
+        let server = Server::new(
             ServerConfig {
                 base_url: format!("localhost:{}", port),
                 endpoint_description: None,
