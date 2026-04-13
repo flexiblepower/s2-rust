@@ -8,6 +8,7 @@ axum.workspace = true
 axum-extra.workspace = true
 base64.workspace = true
 futures-util.workspace = true
+generic-array.workspace = true
 hmac.workspace = true
 http.workspace = true
 hyper.workspace = true
@@ -32,7 +33,9 @@ zeroconf-tokio.workspace = true
 
 [dev-dependencies]
 axum-server.workspace = true
+clap.workspace = true
 http-body-util.workspace = true
+iocraft.workspace = true
 tokio = { workspace = true, features = ["signal", "macros", "rt", "test-util"] }
 tower.workspace = true
 tracing-subscriber.workspace = true

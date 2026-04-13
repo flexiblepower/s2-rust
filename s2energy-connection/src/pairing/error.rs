@@ -8,8 +8,8 @@ use crate::{
 /// An error that occured during the pairing process.
 #[derive(Debug)]
 pub struct Error {
-    kind: ErrorKind,
-    wrapped_error: WrappedError,
+    pub(crate) kind: ErrorKind,
+    pub(crate) wrapped_error: WrappedError,
 }
 
 impl Error {
@@ -65,7 +65,7 @@ impl From<BaseError> for Error {
 }
 
 #[derive(Debug)]
-enum WrappedError {
+pub(crate) enum WrappedError {
     None,
     Reqwest(reqwest::Error),
     UrlParse(url::ParseError),
@@ -153,6 +153,8 @@ pub enum ErrorKind {
     AlreadyPending,
     /// Provided token was invalid.
     InvalidToken,
+    /// Provided node alias was invalid.
+    InvalidNodeAlias,
     /// Remote permanently rejects longpolling or querying of node information.
     Rejected,
     /// The pairing or longpolling session was cancelled.
@@ -176,6 +178,7 @@ impl std::fmt::Display for ErrorKind {
             Self::Timeout => f.write_str("Timed out"),
             Self::AlreadyPending => f.write_str("A pairing or longpolling session for this node is already pending"),
             Self::InvalidToken => f.write_str("The token used does not match with that of the remote"),
+            Self::InvalidNodeAlias => f.write_str("The node alias provided is not valid"),
             Self::Rejected => f.write_str("Longpolling was permanently rejected by remote"),
             Self::Cancelled => f.write_str("Pairing or longpolling was cancelled by remote"),
             Self::RemoteOfSameType => f.write_str("Remote is of same type of us"),

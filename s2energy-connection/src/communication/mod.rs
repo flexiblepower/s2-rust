@@ -44,12 +44,13 @@
 //! # use std::sync::Arc;
 //! # use std::convert::Infallible;
 //! # use s2energy_connection::communication::{NodeConfig, Client, ClientConfig, ClientPairing};
-//! # use s2energy_connection::{MessageVersion, AccessToken, NodeId};
+//! # use s2energy_connection::{MessageVersion, AccessToken, NodeId, CertificateHash};
 //! struct MemoryClientPairing {
 //!     client_id: NodeId,
 //!     server_id: NodeId,
 //!     communication_url: String,
 //!     access_tokens: Vec<AccessToken>,
+//!     certificate_hash: Option<CertificateHash>,
 //! }
 //!
 //! impl ClientPairing for MemoryClientPairing {
@@ -71,6 +72,10 @@
 //!         &self.access_tokens
 //!     }
 //!
+//!     fn certificate_hash(&self) -> Option<CertificateHash> {
+//!         self.certificate_hash.clone()
+//!     }
+//!
 //!     async fn set_access_tokens(&mut self, tokens: Vec<AccessToken>) -> Result<(), Infallible> {
 //!         self.access_tokens = tokens;
 //!         Ok(())
@@ -84,6 +89,7 @@
 //!     server_id: NodeId::try_from("67e55044-10b1-426f-9247-bb680e5fe0c6").unwrap(),
 //!     communication_url: "https://example.com".into(),
 //!     access_tokens: vec![AccessToken("some-token-value".into())],
+//!     certificate_hash: None,
 //! });
 //! ```
 //!
@@ -210,10 +216,12 @@ use crate::{EndpointDescription, MessageVersion, NodeDescription};
 mod client;
 mod error;
 mod server;
+mod transport;
 mod websocket;
-mod wire;
+pub(crate) mod wire;
 
 pub use client::{Client, ClientConfig, ClientPairing};
+pub(crate) use error::WrappedError;
 pub use error::{Error, ErrorKind};
 pub use server::{PairingLookup, PairingLookupResult, Server, ServerConfig, ServerPairing, ServerPairingStore};
 pub use websocket::{WebSocketError, WebSocketTransport};

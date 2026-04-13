@@ -27,5 +27,22 @@ These crates require the avahi client libraries on linux. On debian or debian-li
 sudo apt install libavahi-client-dev
 ```
 
+## Running full client and server examples
+
+The full-client and full-server examples provide complete examples of an s2-connect client and server. Both examples assume local running, which means that the server example needs certificates for the hostname of the machine it is being run on. To generate this, run
+```sh
+cd s2energy-connection/testdata
+./gen_cert <hostname>.local
+```
+
+After generating the certificates, the server can be run with
+```sh
+cargo run --example full-server -- <hostname>
+```
+and the client with
+```sh
+cargo run --example full-client
+```
+
 ## Documentation
 You can find the crate documentation at [docs.rs](https://docs.rs/s2energy). The crate documentation assumes that you are familiar with S2; if this is not the case, it may be useful to refer to [the S2 documentation website](https://docs.s2standard.org/docs/welcome/). That documentation explains S2 concepts in more detail, and contains a reference of all messages and types in the S2 specification.

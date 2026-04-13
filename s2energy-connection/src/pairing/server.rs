@@ -28,6 +28,7 @@ use tokio::{
 use tracing::{Instrument, info, trace};
 
 use crate::{
+    CertificateHash,
     common::{
         AbortingJoinHandle, root,
         wire::{AccessToken, EndpointDescription, NodeDescription, NodeId, PairingVersion},
@@ -52,6 +53,13 @@ const TIMEOUT_SLACK: Duration = Duration::from_secs(5);
 /// This token is used to validate the identity of the nodes.
 #[derive(Debug, Clone)]
 pub struct PairingToken(pub Box<[u8]>);
+
+impl PairingToken {
+    /// Get the raw token bytes.
+    pub fn as_slice(&self) -> &[u8] {
+        &self.0
+    }
+}
 
 impl std::fmt::Display for PairingToken {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -133,7 +141,7 @@ impl<H> Clone for Server<H> {
 
 /// Configuration for the S2 pairing server.
 pub struct ServerConfig {
-    /// The root certificate of the server, if we are using a self-signed root.
+    /// The leaf certificate of the server, if we are using a self-signed root.
     /// Presence of this field indicates we are deployed on LAN.
     pub leaf_certificate: Option<CertificateDer<'static>>,
     /// Endpoint description of the server
@@ -212,13 +220,12 @@ impl<H: PrePairingHandler> Server<H> {
             network: server_config
                 .leaf_certificate
                 .map(|v| Network::Lan {
-                    fingerprint: sha2::Sha256::digest(v).into(),
+                    fingerprint: CertificateHash::sha256(&v),
                 })
                 .unwrap_or(Network::Wan),
             advertised_nodes: Mutex::new(server_config.advertised_nodes),
             endpoint_description: server_config.endpoint_description,
-            permanent_pairings: Mutex::new(HashMap::new()),
-            open_pairings: Mutex::new(HashMap::new()),
+            pending_pairings: Mutex::new(PendingPairings::default()),
             attempts: Mutex::new(HashMap::default()),
             prepairing_handler: Arc::new(handler),
             longpolling_enabled: longpolling_enabled_receiver,
@@ -255,6 +262,10 @@ impl<H: PrePairingHandler> Server<H> {
             .with_state(self.state.clone())
     }
 
+    pub(crate) fn get_internal_router(&self) -> axum::Router<()> {
+        v1_router().with_state(self.state.clone())
+    }
+
     /// Update the nodes advertised by this server.
     ///
     /// These are only used when the server is on a LAN.
@@ -263,12 +274,12 @@ impl<H: PrePairingHandler> Server<H> {
     }
 
     /// Enable longpolling
-    pub async fn enable_longpolling(&mut self) {
+    pub async fn enable_longpolling(&self) {
         self.longpolling_enabled.send_replace(true);
     }
 
     /// Disable longpolling
-    pub async fn disable_longpolling(&mut self) {
+    pub async fn disable_longpolling(&self) {
         self.longpolling_enabled.send_replace(false);
         let mut receiver = self.pending_longpolling_handles.lock().await;
         // Wait until all existing sessions are stopped. We need to drain any new
@@ -303,27 +314,33 @@ impl<H: PrePairingHandler> Server<H> {
         pairing_node_id: Option<NodeIdAlias>,
         pairing_token: PairingToken,
         callback: impl (FnOnce(PairingResult<Pairing>) -> F) + Send + 'static,
-    ) -> Result<(), ErrorKind> {
+    ) -> Result<(), Error> {
         if config.connection_initiate_url.is_none() {
-            return Err(ErrorKind::InvalidConfig(super::ConfigError::MissingInitiateUrl));
+            return Err(ErrorKind::InvalidConfig(super::ConfigError::MissingInitiateUrl).into());
+        }
+
+        if pairing_node_id.as_ref().map(|v| v.0.is_empty()).unwrap_or(false) {
+            return Err(ErrorKind::InvalidNodeAlias.into());
         }
 
         let pairing_node_id = pairing_node_id.unwrap_or(NodeIdAlias(String::default()));
+        let node_id = config.node_description.id;
 
-        // We hit issues here, because the node node_description only has S2NodeId with no
-        // efficient way of mapping that back.
-        let mut open_pairings = self.state.open_pairings.lock().unwrap();
-        let mut permanent_pairings = self.state.permanent_pairings.lock().unwrap();
-        if open_pairings.contains_key(&pairing_node_id) || permanent_pairings.contains_key(&pairing_node_id) {
-            return Err(ErrorKind::AlreadyPending);
+        let mut pending_pairings = self.state.pending_pairings.lock().unwrap();
+        if pending_pairings.alias_mappings.contains_key(&pairing_node_id)
+            || pending_pairings.open_pairings.contains_key(&node_id)
+            || pending_pairings.permanent_pairings.contains_key(&node_id)
+        {
+            return Err(ErrorKind::AlreadyPending.into());
         }
-        drop(permanent_pairings);
-        open_pairings.insert(
-            pairing_node_id,
+        pending_pairings.alias_mappings.insert(pairing_node_id.clone(), node_id);
+        pending_pairings.open_pairings.insert(
+            node_id,
             PairingRequest {
                 config,
                 handler: ResultHandler::Oneshot(Box::new(|result| Box::pin(async move { callback(result).await.map_err(|_| ()) }))),
                 token: pairing_token,
+                alias: pairing_node_id,
                 age: Instant::now(),
             },
         );
@@ -344,22 +361,25 @@ impl<H: PrePairingHandler> Server<H> {
         pairing_node_id: Option<NodeIdAlias>,
         pairing_token: PairingToken,
         callback: impl (Fn(PairingResult<Pairing>) -> F) + Send + Sync + 'static,
-    ) -> Result<(), ErrorKind> {
+    ) -> Result<(), Error> {
         if config.connection_initiate_url.is_none() {
-            return Err(ErrorKind::InvalidConfig(super::ConfigError::MissingInitiateUrl));
+            return Err(ErrorKind::InvalidConfig(super::ConfigError::MissingInitiateUrl).into());
         }
 
         let pairing_node_id = pairing_node_id.unwrap_or(NodeIdAlias(String::default()));
+        let node_id = config.node_description.id;
 
-        let mut open_pairings = self.state.open_pairings.lock().unwrap();
-        let mut permanent_pairings = self.state.permanent_pairings.lock().unwrap();
-        if open_pairings.contains_key(&pairing_node_id) || permanent_pairings.contains_key(&pairing_node_id) {
-            return Err(ErrorKind::AlreadyPending);
+        let mut pending_pairings = self.state.pending_pairings.lock().unwrap();
+        if pending_pairings.alias_mappings.contains_key(&pairing_node_id)
+            || pending_pairings.open_pairings.contains_key(&node_id)
+            || pending_pairings.permanent_pairings.contains_key(&node_id)
+        {
+            return Err(ErrorKind::AlreadyPending.into());
         }
-        drop(open_pairings);
         let callback = Arc::new(callback);
-        permanent_pairings.insert(
-            pairing_node_id,
+        pending_pairings.alias_mappings.insert(pairing_node_id.clone(), node_id);
+        pending_pairings.permanent_pairings.insert(
+            node_id,
             PermanentPairingRequest {
                 config,
                 handler: Arc::new(move |result| {
@@ -380,6 +400,7 @@ pub struct LongpollingHandle {
     node: tokio::sync::watch::Receiver<Option<NodeDescription>>,
     last_pairing_response: tokio::sync::watch::Receiver<Option<Result<(), WaitForPairingErrorMessage>>>,
     client_id: NodeId,
+    active: tokio::sync::oneshot::Receiver<()>,
 }
 
 impl LongpollingHandle {
@@ -456,6 +477,11 @@ impl LongpollingHandle {
             .await
             .map_err(|_| ErrorKind::Cancelled.into())
     }
+
+    /// Wait for the session to be dropped by the remote.
+    pub fn wait_dropped(&mut self) -> impl Future<Output = ()> {
+        poll_fn(|cx| Pin::new(&mut self.active).poll(cx).map(|_| ()))
+    }
 }
 
 enum LongpollingState {
@@ -503,6 +529,7 @@ struct LongpollingStateInner {
     endpoint: tokio::sync::watch::Sender<Option<EndpointDescription>>,
     node: tokio::sync::watch::Sender<Option<NodeDescription>>,
     last_pairing_response: tokio::sync::watch::Sender<Option<Result<(), WaitForPairingErrorMessage>>>,
+    _active_sender: tokio::sync::oneshot::Sender<()>,
 }
 
 /// These don't keep the original errors in the results to limit the amount of boxing needed here.
@@ -533,6 +560,7 @@ struct PairingRequest {
     config: Arc<NodeConfig>,
     handler: ResultHandler,
     token: PairingToken,
+    alias: NodeIdAlias,
     age: Instant,
 }
 
@@ -583,14 +611,6 @@ impl ExpiringPairingState {
             Some(&mut self.state)
         }
     }
-
-    fn into_state(self) -> Option<PairingState> {
-        if self.start_time.elapsed() > Duration::from_secs(15) {
-            None
-        } else {
-            Some(self.state)
-        }
-    }
 }
 
 type AppState<H> = Arc<AppStateInner<H>>;
@@ -599,8 +619,7 @@ struct AppStateInner<H> {
     network: Network,
     endpoint_description: EndpointDescription,
     advertised_nodes: Mutex<Vec<NodeDescription>>,
-    permanent_pairings: Mutex<HashMap<NodeIdAlias, PermanentPairingRequest>>,
-    open_pairings: Mutex<HashMap<NodeIdAlias, PairingRequest>>,
+    pending_pairings: Mutex<PendingPairings>,
     attempts: Mutex<HashMap<PairingAttemptId, ExpiringPairingState>>,
     prepairing_handler: Arc<H>,
     longpolling_enabled: tokio::sync::watch::Receiver<bool>,
@@ -612,6 +631,13 @@ struct AppStateInner<H> {
     longpolling_sessions: Mutex<HashMap<NodeId, LongpollingState>>,
     longpolling_handle_sender: tokio::sync::mpsc::Sender<LongpollingHandle>,
     cleanup_task: OnceLock<AbortingJoinHandle<()>>,
+}
+
+#[derive(Default)]
+struct PendingPairings {
+    alias_mappings: HashMap<NodeIdAlias, NodeId>,
+    permanent_pairings: HashMap<NodeId, PermanentPairingRequest>,
+    open_pairings: HashMap<NodeId, PairingRequest>,
 }
 
 // Holder for longpolling sessions during a session. Returns
@@ -681,15 +707,39 @@ async fn periodic_cleanup<H: PrePairingHandler>(state: Weak<AppStateInner<H>>) {
         }
 
         // Active pairing sessions
-        {
+        let handlers: Vec<_> = {
             let mut attempts = state.attempts.lock().unwrap();
-            attempts.retain(|_, value| now.duration_since(value.start_time) < SESSION_TIMEOUT + TIMEOUT_SLACK);
+            attempts
+                .extract_if(|_, value| now.duration_since(value.start_time) >= SESSION_TIMEOUT + TIMEOUT_SLACK)
+                .filter_map(|(_, state)| match state.state {
+                    PairingState::Empty => None,
+                    PairingState::Initial(InitialPairingState { sender, .. })
+                    | PairingState::Complete(CompletePairingState { sender, .. }) => Some(sender),
+                })
+                .collect()
+        };
+        for handler in handlers {
+            handler.handle(Err(ErrorKind::Timeout.into())).await;
         }
 
         // Open pairing sessions
-        {
-            let mut open_pairings = state.open_pairings.lock().unwrap();
-            open_pairings.retain(|_, value| now.duration_since(value.age) < ONCEPAIR_TIMEOUT + TIMEOUT_SLACK);
+        let handlers: Vec<_> = {
+            let mut pending_pairings = state.pending_pairings.lock().unwrap();
+            let PendingPairings {
+                alias_mappings,
+                open_pairings,
+                ..
+            } = &mut *pending_pairings;
+            open_pairings
+                .extract_if(|_, value| now.duration_since(value.age) >= ONCEPAIR_TIMEOUT + TIMEOUT_SLACK)
+                .map(|(_, request)| {
+                    alias_mappings.remove(&request.alias);
+                    request.handler
+                })
+                .collect()
+        };
+        for handler in handlers {
+            handler.handle(Err(ErrorKind::Timeout.into())).await;
         }
 
         drop(state);
@@ -741,12 +791,14 @@ async fn v1_wait_for_pairing<H>(
                     let (endpoint_sender, endpoint_receiver) = tokio::sync::watch::channel(None);
                     let (node_sender, node_receiver) = tokio::sync::watch::channel(None);
                     let (last_pairing_sender, last_pairing_receiver) = tokio::sync::watch::channel(None);
+                    let (active_tx, active_rx) = tokio::sync::oneshot::channel();
                     pending_handles.push(LongpollingHandle {
                         commands: commands_sender,
                         endpoint: endpoint_receiver,
                         node: node_receiver,
                         last_pairing_response: last_pairing_receiver,
                         client_id: request.client_node_id,
+                        active: active_rx,
                     });
                     vacant_entry.insert(LongpollingState::Running {
                         since: Instant::now(),
@@ -757,6 +809,7 @@ async fn v1_wait_for_pairing<H>(
                         endpoint: endpoint_sender,
                         node: node_sender,
                         last_pairing_response: last_pairing_sender,
+                        _active_sender: active_tx,
                     }
                 }
             };
@@ -870,21 +923,35 @@ async fn v1_request_pairing<H>(
 
     let server_hmac_challenge = HmacChallenge::new(&mut rand::rng(), HMAC_CHALLENGE_BYTES);
 
-    let pairing_s2_node_id = request_pairing.id.unwrap_or(NodeIdAlias(String::default()));
     let open_pairing = {
-        let mut open_pairings = state.open_pairings.lock().unwrap();
-        if let Some((_, request)) = open_pairings.remove_entry(&pairing_s2_node_id) {
+        let mut pending_pairings = state.pending_pairings.lock().unwrap();
+
+        let node_id = request_pairing.id.map(Ok).unwrap_or_else(|| {
+            let pairing_s2_node_id = request_pairing.id_alias.clone().unwrap_or(NodeIdAlias(String::default()));
+            pending_pairings
+                .alias_mappings
+                .get(&pairing_s2_node_id)
+                .copied()
+                .ok_or(if request_pairing.id_alias.is_some() {
+                    PairingResponseErrorMessage::S2NodeNotFound
+                } else {
+                    PairingResponseErrorMessage::S2NodeNotProvided
+                })
+        })?;
+
+        if let Some((_, request)) = pending_pairings.open_pairings.remove_entry(&node_id) {
+            pending_pairings.alias_mappings.remove(&request.alias);
             request
         } else {
-            drop(open_pairings);
-            let permanent_pairings = state.permanent_pairings.lock().unwrap();
-            let entry = permanent_pairings
-                .get(&pairing_s2_node_id)
+            let entry = pending_pairings
+                .permanent_pairings
+                .get(&node_id)
                 .ok_or(PairingResponseErrorMessage::S2NodeNotFound)?;
             PairingRequest {
                 config: entry.config.clone(),
                 handler: ResultHandler::Multi(entry.handler.clone()),
                 token: PairingToken(entry.token.0.clone()),
+                alias: NodeIdAlias(String::default()),
                 age: Instant::now(),
             }
         }
@@ -903,6 +970,7 @@ async fn v1_request_pairing<H>(
         }
 
         if open_pairing.config.node_description.role == request_pairing.node_description.role {
+            open_pairing.handler.handle(Err(ErrorKind::RemoteOfSameType.into())).await;
             return Err(PairingResponseErrorMessage::InvalidCombinationOfRoles);
         }
 
@@ -915,6 +983,7 @@ async fn v1_request_pairing<H>(
                 }
             }
             if !communication_overlap {
+                open_pairing.handler.handle(Err(ErrorKind::NoSupportedVersion.into())).await;
                 return Err(PairingResponseErrorMessage::IncompatibleCommunicationProtocols);
             }
             let mut connection_overlap = false;
@@ -925,6 +994,7 @@ async fn v1_request_pairing<H>(
                 }
             }
             if !connection_overlap {
+                open_pairing.handler.handle(Err(ErrorKind::NoSupportedVersion.into())).await;
                 return Err(PairingResponseErrorMessage::IncompatibleS2MessageVersions);
             }
         }
@@ -994,51 +1064,73 @@ async fn v1_request_connection_details<H>(
             return (Err(StatusCode::UNAUTHORIZED), None);
         };
 
-        if let Some(state_entry) = state.get_state()
-            && let PairingState::Initial(state) = std::mem::replace(state_entry, PairingState::Empty)
-        {
-            // It is ok to manually enter the span here as this closure is not async.
-            let session_span_clone = state.session_span.clone();
-            let _entered_span = session_span_clone.enter();
+        if let Some(state_entry) = state.get_state() {
+            match std::mem::replace(state_entry, PairingState::Empty) {
+                PairingState::Empty => {
+                    info!("Pairing session was in unexpected state for requesting connection details (A).");
+                    attempts.remove(&pairing_attempt_id);
+                    (Err(StatusCode::UNAUTHORIZED), None)
+                }
+                PairingState::Complete(complete_pairing_state) => {
+                    info!("Pairing session was in unexpected state for requesting connection details (B).");
+                    attempts.remove(&pairing_attempt_id);
+                    (
+                        Err(StatusCode::UNAUTHORIZED),
+                        Some(complete_pairing_state.sender.handle(Err(ErrorKind::ProtocolError.into()))),
+                    )
+                }
+                PairingState::Initial(state) => {
+                    // It is ok to manually enter the span here as this closure is not async.
+                    let session_span_clone = state.session_span.clone();
+                    let _entered_span = session_span_clone.enter();
 
-            trace!("Found pairing session.");
+                    trace!("Found pairing session.");
 
-            let expected = state.challenge.sha256(&app_state.network, &state.token.0);
-            if expected != req.server_hmac_challenge_response {
-                attempts.remove(&pairing_attempt_id);
-                return (
-                    Err(StatusCode::FORBIDDEN),
-                    Some(state.sender.handle(Err(ErrorKind::InvalidToken.into()))),
-                );
+                    let expected = state.challenge.sha256(&app_state.network, &state.token.0);
+                    if expected != req.server_hmac_challenge_response {
+                        attempts.remove(&pairing_attempt_id);
+                        return (
+                            Err(StatusCode::FORBIDDEN),
+                            Some(state.sender.handle(Err(ErrorKind::InvalidToken.into()))),
+                        );
+                    }
+
+                    trace!("Validated remote's response to pairing token challenge.");
+
+                    let mut rng = rand::rng();
+                    let connection_details = ConnectionDetails {
+                        initiate_connection_url: match &state.config.connection_initiate_url {
+                            Some(url) => url.clone(),
+                            None => return (Err(StatusCode::BAD_REQUEST), None),
+                        },
+                        access_token: AccessToken::new(&mut rng),
+                        certificate_fingerprint: state.config.root_certificate.as_deref().map(CertificateHash::sha256),
+                    };
+
+                    trace!("Generated connection details");
+
+                    *state_entry = PairingState::Complete(CompletePairingState {
+                        session_span: state.session_span,
+                        sender: state.sender,
+                        remote_node_description: state.remote_node_description,
+                        remote_endpoint_description: state.remote_endpoint_description,
+                        access_token: connection_details.access_token.clone(),
+                        role: PairingRole::CommunicationServer,
+                    });
+
+                    (Ok(Json(connection_details)), None)
+                }
             }
-
-            trace!("Validated remote's response to pairing token challenge.");
-
-            let mut rng = rand::rng();
-            let connection_details = ConnectionDetails {
-                initiate_connection_url: match &state.config.connection_initiate_url {
-                    Some(url) => url.clone(),
-                    None => return (Err(StatusCode::BAD_REQUEST), None),
-                },
-                access_token: AccessToken::new(&mut rng),
-            };
-
-            trace!("Generated connection details");
-
-            *state_entry = PairingState::Complete(CompletePairingState {
-                session_span: state.session_span,
-                sender: state.sender,
-                remote_node_description: state.remote_node_description,
-                remote_endpoint_description: state.remote_endpoint_description,
-                access_token: connection_details.access_token.clone(),
-                role: PairingRole::CommunicationServer,
-            });
-
-            (Ok(Json(connection_details)), None)
         } else {
-            info!("Pairing session was expired, or in unexpected state for requesting connection details.");
+            info!("Pairing session was expired.");
+            let action = match std::mem::replace(&mut state.state, PairingState::Empty) {
+                PairingState::Empty => None,
+                PairingState::Initial(InitialPairingState { sender, .. }) | PairingState::Complete(CompletePairingState { sender, .. }) => {
+                    Some(sender.handle(Err(ErrorKind::Timeout.into())))
+                }
+            };
             attempts.remove(&pairing_attempt_id);
-            (Err(StatusCode::UNAUTHORIZED), None)
+            (Err(StatusCode::UNAUTHORIZED), action)
         }
     })();
 
@@ -1065,45 +1157,67 @@ async fn v1_post_connection_details<H>(
             return (StatusCode::UNAUTHORIZED, None);
         };
 
-        if let Some(state_entry) = state.get_state()
-            && let PairingState::Initial(state) = std::mem::replace(state_entry, PairingState::Empty)
-        {
-            // It is ok to manually enter the span here as this closure is not async.
-            let session_span_clone = state.session_span.clone();
-            let _entered_span = session_span_clone.enter();
+        if let Some(state_entry) = state.get_state() {
+            match std::mem::replace(state_entry, PairingState::Empty) {
+                PairingState::Empty => {
+                    info!("Pairing session was in unexpected state for posting connection details.");
+                    attempts.remove(&pairing_attempt_id);
+                    (StatusCode::UNAUTHORIZED, None)
+                }
+                PairingState::Complete(complete_pairing_state) => {
+                    info!("Pairing session was in unexpected state for posting connection details.");
+                    attempts.remove(&pairing_attempt_id);
+                    (
+                        StatusCode::UNAUTHORIZED,
+                        Some(complete_pairing_state.sender.handle(Err(ErrorKind::ProtocolError.into()))),
+                    )
+                }
+                PairingState::Initial(state) => {
+                    // It is ok to manually enter the span here as this closure is not async.
+                    let session_span_clone = state.session_span.clone();
+                    let _entered_span = session_span_clone.enter();
 
-            trace!("Found pairing session.");
+                    trace!("Found pairing session.");
 
-            let expected = state.challenge.sha256(&app_state.network, &state.token.0);
-            if expected != req.server_hmac_challenge_response {
-                attempts.remove(&pairing_attempt_id);
-                return (
-                    StatusCode::FORBIDDEN,
-                    Some(state.sender.handle(Err(ErrorKind::InvalidToken.into()))),
-                );
+                    let expected = state.challenge.sha256(&app_state.network, &state.token.0);
+                    if expected != req.server_hmac_challenge_response {
+                        attempts.remove(&pairing_attempt_id);
+                        return (
+                            StatusCode::FORBIDDEN,
+                            Some(state.sender.handle(Err(ErrorKind::InvalidToken.into()))),
+                        );
+                    }
+
+                    trace!("Validated remote's response to pairing token challenge.");
+
+                    // Do better error handling here than unwrap
+                    *state_entry = PairingState::Complete(CompletePairingState {
+                        session_span: state.session_span,
+                        sender: state.sender,
+                        remote_node_description: state.remote_node_description,
+                        remote_endpoint_description: state.remote_endpoint_description,
+                        access_token: req.connection_details.access_token,
+                        role: PairingRole::CommunicationClient {
+                            initiate_url: req.connection_details.initiate_connection_url,
+                            root_hash: req.connection_details.certificate_fingerprint,
+                        },
+                    });
+
+                    trace!("Stored received connection details in session state.");
+
+                    (StatusCode::NO_CONTENT, None)
+                }
             }
-
-            trace!("Validated remote's response to pairing token challenge.");
-
-            // Do better error handling here than unwrap
-            *state_entry = PairingState::Complete(CompletePairingState {
-                session_span: state.session_span,
-                sender: state.sender,
-                remote_node_description: state.remote_node_description,
-                remote_endpoint_description: state.remote_endpoint_description,
-                access_token: req.connection_details.access_token,
-                role: PairingRole::CommunicationClient {
-                    initiate_url: req.connection_details.initiate_connection_url,
-                },
-            });
-
-            trace!("Stored received connection details in session state.");
-
-            (StatusCode::NO_CONTENT, None)
         } else {
-            info!("Pairing session was expired, or in unexpected state for posting connection details.");
+            info!("Pairing session was expired.");
+            let action = match std::mem::replace(&mut state.state, PairingState::Empty) {
+                PairingState::Empty => None,
+                PairingState::Initial(InitialPairingState { sender, .. }) | PairingState::Complete(CompletePairingState { sender, .. }) => {
+                    Some(sender.handle(Err(ErrorKind::Timeout.into())))
+                }
+            };
             attempts.remove(&pairing_attempt_id);
-            (StatusCode::UNAUTHORIZED, None)
+            (StatusCode::UNAUTHORIZED, action)
         }
     })();
 
@@ -1122,7 +1236,7 @@ async fn v1_finalize_pairing<H>(
 ) -> StatusCode {
     trace!("Received request to finalize pairing session.");
 
-    let Some(state) = ({
+    let Some(mut state) = ({
         let mut attempts = state.attempts.lock().unwrap();
         attempts.remove(&pairing_attempt_id)
     }) else {
@@ -1130,33 +1244,41 @@ async fn v1_finalize_pairing<H>(
         return StatusCode::UNAUTHORIZED;
     };
 
-    if let Some(state) = state.into_state() {
+    if let Some(state) = state.get_state() {
         let session_span_clone = state.get_session_span().cloned();
         let completion = async move {
             if success {
-                if let PairingState::Complete(state) = state {
-                    let result = state
-                        .sender
-                        .handle(Ok(Pairing {
-                            remote_endpoint_description: state.remote_endpoint_description,
-                            remote_node_description: state.remote_node_description,
-                            token: state.access_token,
-                            role: state.role,
-                        }))
-                        .await;
-
-                    trace!("Finalized pairing session.");
-                    if result.is_ok() {
-                        StatusCode::NO_CONTENT
-                    } else {
-                        StatusCode::INTERNAL_SERVER_ERROR
+                match std::mem::replace(state, PairingState::Empty) {
+                    PairingState::Empty => {
+                        info!("Remote tried to finalize pairing session in invalid state.");
+                        StatusCode::BAD_REQUEST
                     }
-                } else {
-                    info!("Remote tried to finalize pairing session that did not yet have all the data exchanged.");
-                    StatusCode::BAD_REQUEST
+                    PairingState::Initial(state) => {
+                        info!("Remote tried to finalize pairing session that did not yet have all the data exchanged.");
+                        state.sender.handle(Err(ErrorKind::ProtocolError.into())).await;
+                        StatusCode::BAD_REQUEST
+                    }
+                    PairingState::Complete(state) => {
+                        let result = state
+                            .sender
+                            .handle(Ok(Pairing {
+                                remote_endpoint_description: state.remote_endpoint_description,
+                                remote_node_description: state.remote_node_description,
+                                token: state.access_token,
+                                role: state.role,
+                            }))
+                            .await;
+
+                        trace!("Finalized pairing session.");
+                        if result.is_ok() {
+                            StatusCode::NO_CONTENT
+                        } else {
+                            StatusCode::INTERNAL_SERVER_ERROR
+                        }
+                    }
                 }
             } else {
-                match state {
+                match std::mem::replace(state, PairingState::Empty) {
                     PairingState::Empty => { /* should never happen, but fine to ignore */ }
                     PairingState::Initial(InitialPairingState { sender, .. })
                     | PairingState::Complete(CompletePairingState { sender, .. }) => {
@@ -1176,6 +1298,12 @@ async fn v1_finalize_pairing<H>(
         }
     } else {
         info!("Pairing session was expired during finalization.");
+        match std::mem::replace(&mut state.state, PairingState::Empty) {
+            PairingState::Empty => { /* should never happen, but fine to ignore */ }
+            PairingState::Initial(InitialPairingState { sender, .. }) | PairingState::Complete(CompletePairingState { sender, .. }) => {
+                sender.handle(Err(ErrorKind::Cancelled.into())).await;
+            }
+        }
         StatusCode::UNAUTHORIZED
     }
 }
@@ -1554,7 +1682,8 @@ mod tests {
                         serde_json::to_vec(&RequestPairing {
                             node_description: basic_node_description(UUID_B, Role::Cem),
                             endpoint_description: EndpointDescription::default(),
-                            id: Some(pairing_s2_node_id()),
+                            id: None,
+                            id_alias: Some(pairing_s2_node_id()),
                             supported_protocols: vec![CommunicationProtocol("WebSocket".into())],
                             supported_versions: vec![MessageVersion("v1".into())],
                             supported_hashing_algorithms: vec![HmacHashingAlgorithm::Sha256],
@@ -1573,6 +1702,167 @@ mod tests {
         let response_data: RequestPairingResponse = serde_json::from_slice(&body).unwrap();
         let expected_response = challenge.sha256(&Network::Wan, b"testtoken");
         assert_eq!(expected_response, response_data.client_hmac_challenge_response);
+        assert!(server.state.pending_pairings.lock().unwrap().alias_mappings.is_empty());
+    }
+
+    #[tokio::test]
+    async fn pair_attempt_node_id() {
+        let server = Server::new(ServerConfig {
+            leaf_certificate: None,
+            endpoint_description: EndpointDescription::default(),
+            advertised_nodes: vec![],
+        });
+        server
+            .allow_pair_repeated(
+                Arc::new(
+                    NodeConfig::builder(basic_node_description(UUID_A, Role::Rm), vec![MessageVersion("v1".into())])
+                        .with_connection_initiate_url("https://example.com/".into())
+                        .build()
+                        .unwrap(),
+                ),
+                Some(pairing_s2_node_id()),
+                PairingToken(b"testtoken".as_slice().into()),
+                async |_| Ok::<_, std::io::Error>(()),
+            )
+            .unwrap();
+
+        let challenge = HmacChallenge::new(&mut rand::rng(), 64);
+        let response = server
+            .get_router()
+            .oneshot(
+                http::Request::post("/v1/requestPairing")
+                    .header(http::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&RequestPairing {
+                            node_description: basic_node_description(UUID_B, Role::Cem),
+                            endpoint_description: EndpointDescription::default(),
+                            id: Some(UUID_A.into()),
+                            id_alias: None,
+                            supported_protocols: vec![CommunicationProtocol("WebSocket".into())],
+                            supported_versions: vec![MessageVersion("v1".into())],
+                            supported_hashing_algorithms: vec![HmacHashingAlgorithm::Sha256],
+                            client_hmac_challenge: challenge.clone(),
+                            force_pairing: false,
+                        })
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let response_data: RequestPairingResponse = serde_json::from_slice(&body).unwrap();
+        let expected_response = challenge.sha256(&Network::Wan, b"testtoken");
+        assert_eq!(expected_response, response_data.client_hmac_challenge_response);
+        assert!(!server.state.pending_pairings.lock().unwrap().alias_mappings.is_empty());
+    }
+
+    #[tokio::test]
+    async fn pair_attempt_no_node_identifier() {
+        let server = Server::new(ServerConfig {
+            leaf_certificate: None,
+            endpoint_description: EndpointDescription::default(),
+            advertised_nodes: vec![],
+        });
+        server
+            .allow_pair_once(
+                Arc::new(
+                    NodeConfig::builder(basic_node_description(UUID_A, Role::Rm), vec![MessageVersion("v1".into())])
+                        .with_connection_initiate_url("https://example.com/".into())
+                        .build()
+                        .unwrap(),
+                ),
+                None,
+                PairingToken(b"testtoken".as_slice().into()),
+                async |_| Ok::<_, std::io::Error>(()),
+            )
+            .unwrap();
+
+        let challenge = HmacChallenge::new(&mut rand::rng(), 64);
+        let response = server
+            .get_router()
+            .oneshot(
+                http::Request::post("/v1/requestPairing")
+                    .header(http::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&RequestPairing {
+                            node_description: basic_node_description(UUID_B, Role::Cem),
+                            endpoint_description: EndpointDescription::default(),
+                            id: None,
+                            id_alias: None,
+                            supported_protocols: vec![CommunicationProtocol("WebSocket".into())],
+                            supported_versions: vec![MessageVersion("v1".into())],
+                            supported_hashing_algorithms: vec![HmacHashingAlgorithm::Sha256],
+                            client_hmac_challenge: challenge.clone(),
+                            force_pairing: false,
+                        })
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let response_data: RequestPairingResponse = serde_json::from_slice(&body).unwrap();
+        let expected_response = challenge.sha256(&Network::Wan, b"testtoken");
+        assert_eq!(expected_response, response_data.client_hmac_challenge_response);
+        assert!(server.state.pending_pairings.lock().unwrap().alias_mappings.is_empty());
+    }
+
+    #[tokio::test]
+    async fn pair_attempt_need_node_identifier() {
+        let server = Server::new(ServerConfig {
+            leaf_certificate: None,
+            endpoint_description: EndpointDescription::default(),
+            advertised_nodes: vec![],
+        });
+        server
+            .allow_pair_once(
+                Arc::new(
+                    NodeConfig::builder(basic_node_description(UUID_A, Role::Rm), vec![MessageVersion("v1".into())])
+                        .with_connection_initiate_url("https://example.com/".into())
+                        .build()
+                        .unwrap(),
+                ),
+                Some(pairing_s2_node_id()),
+                PairingToken(b"testtoken".as_slice().into()),
+                async |_| Ok::<_, std::io::Error>(()),
+            )
+            .unwrap();
+
+        let challenge = HmacChallenge::new(&mut rand::rng(), 64);
+        let response = server
+            .get_router()
+            .oneshot(
+                http::Request::post("/v1/requestPairing")
+                    .header(http::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&RequestPairing {
+                            node_description: basic_node_description(UUID_B, Role::Cem),
+                            endpoint_description: EndpointDescription::default(),
+                            id: None,
+                            id_alias: None,
+                            supported_protocols: vec![CommunicationProtocol("WebSocket".into())],
+                            supported_versions: vec![MessageVersion("v1".into())],
+                            supported_hashing_algorithms: vec![HmacHashingAlgorithm::Sha256],
+                            client_hmac_challenge: challenge.clone(),
+                            force_pairing: false,
+                        })
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let error: PairingResponseErrorMessage = serde_json::from_slice(&body).unwrap();
+        assert_eq!(error, PairingResponseErrorMessage::S2NodeNotProvided);
     }
 
     #[tokio::test]
@@ -1606,7 +1896,8 @@ mod tests {
                         serde_json::to_vec(&RequestPairing {
                             node_description: basic_node_description(UUID_B, Role::Cem),
                             endpoint_description: EndpointDescription::default(),
-                            id: Some(pairing_s2_node_id()),
+                            id: None,
+                            id_alias: Some(pairing_s2_node_id()),
                             supported_protocols: vec![CommunicationProtocol("HTTP/3".into())],
                             supported_versions: vec![MessageVersion("v1".into())],
                             supported_hashing_algorithms: vec![HmacHashingAlgorithm::Sha256],
@@ -1657,7 +1948,8 @@ mod tests {
                         serde_json::to_vec(&RequestPairing {
                             node_description: basic_node_description(UUID_B, Role::Cem),
                             endpoint_description: EndpointDescription::default(),
-                            id: Some(pairing_s2_node_id()),
+                            id: None,
+                            id_alias: Some(pairing_s2_node_id()),
                             supported_protocols: vec![CommunicationProtocol("WebSocket".into())],
                             supported_versions: vec![MessageVersion("v0".into())],
                             supported_hashing_algorithms: vec![HmacHashingAlgorithm::Sha256],
@@ -1708,7 +2000,8 @@ mod tests {
                         serde_json::to_vec(&RequestPairing {
                             node_description: basic_node_description(UUID_B, Role::Cem),
                             endpoint_description: EndpointDescription::default(),
-                            id: Some(pairing_s2_node_id()),
+                            id: None,
+                            id_alias: Some(pairing_s2_node_id()),
                             supported_protocols: vec![CommunicationProtocol("HTTP/3".into())],
                             supported_versions: vec![MessageVersion("v0".into())],
                             supported_hashing_algorithms: vec![HmacHashingAlgorithm::Sha256],
@@ -1746,7 +2039,8 @@ mod tests {
                         serde_json::to_vec(&RequestPairing {
                             node_description: basic_node_description(UUID_A, Role::Cem),
                             endpoint_description: EndpointDescription::default(),
-                            id: Some(pairing_s2_node_id()),
+                            id: None,
+                            id_alias: Some(pairing_s2_node_id()),
                             supported_protocols: vec![CommunicationProtocol("WebSocket".into())],
                             supported_versions: vec![MessageVersion("v1".into())],
                             supported_hashing_algorithms: vec![HmacHashingAlgorithm::Sha256],
@@ -1797,7 +2091,8 @@ mod tests {
                         serde_json::to_vec(&RequestPairing {
                             node_description: basic_node_description(UUID_B, Role::Rm),
                             endpoint_description: EndpointDescription::default(),
-                            id: Some(pairing_s2_node_id()),
+                            id: None,
+                            id_alias: Some(pairing_s2_node_id()),
                             supported_protocols: vec![CommunicationProtocol("WebSocket".into())],
                             supported_versions: vec![MessageVersion("v1".into())],
                             supported_hashing_algorithms: vec![HmacHashingAlgorithm::Sha256],
@@ -1812,7 +2107,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        let body = dbg!(response.into_body().collect().await.unwrap().to_bytes());
+        let body = response.into_body().collect().await.unwrap().to_bytes();
         let error: PairingResponseErrorMessage = serde_json::from_slice(&body).unwrap();
         assert_eq!(error, PairingResponseErrorMessage::InvalidCombinationOfRoles);
     }
@@ -2018,6 +2313,7 @@ mod tests {
                             connection_details: ConnectionDetails {
                                 initiate_connection_url: "https://example.com/".into(),
                                 access_token: AccessToken::new(&mut rand::rng()),
+                                certificate_fingerprint: None,
                             },
                         })
                         .unwrap(),
@@ -2073,6 +2369,7 @@ mod tests {
                             connection_details: ConnectionDetails {
                                 initiate_connection_url: "https://example.com/".into(),
                                 access_token: AccessToken::new(&mut rand::rng()),
+                                certificate_fingerprint: None,
                             },
                         })
                         .unwrap(),
@@ -2130,6 +2427,7 @@ mod tests {
                             connection_details: ConnectionDetails {
                                 initiate_connection_url: "https://example.com/".into(),
                                 access_token: AccessToken::new(&mut rand::rng()),
+                                certificate_fingerprint: None,
                             },
                         })
                         .unwrap(),
@@ -2677,7 +2975,8 @@ mod tests {
                         serde_json::to_vec(&RequestPairing {
                             node_description: basic_node_description(UUID_A, Role::Cem),
                             endpoint_description: EndpointDescription::default(),
-                            id: Some(pairing_s2_node_id()),
+                            id: None,
+                            id_alias: Some(pairing_s2_node_id()),
                             supported_protocols: vec![CommunicationProtocol("WebSocket".into())],
                             supported_versions: vec![MessageVersion("v1".into())],
                             supported_hashing_algorithms: vec![HmacHashingAlgorithm::Sha256],

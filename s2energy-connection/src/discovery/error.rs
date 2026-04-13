@@ -1,7 +1,8 @@
+/// Error that occurs during discovery.
 #[derive(Debug)]
 pub struct Error {
-    kind: ErrorKind,
-    wrapped_error: WrappedError,
+    pub(crate) kind: ErrorKind,
+    pub(crate) wrapped_error: WrappedError,
 }
 
 impl Error {
@@ -16,6 +17,7 @@ impl Error {
         }
     }
 
+    /// Indiciation of what kind of error occurred.
     pub fn kind(&self) -> ErrorKind {
         self.kind
     }
@@ -47,7 +49,7 @@ impl From<ErrorKind> for Error {
 }
 
 #[derive(Debug)]
-enum WrappedError {
+pub(crate) enum WrappedError {
     None,
     Zeroconf(zeroconf_tokio::error::Error),
 }

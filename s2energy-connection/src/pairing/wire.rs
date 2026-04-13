@@ -2,13 +2,13 @@ use axum::{Json, extract::FromRequestParts, response::IntoResponse};
 use axum_extra::{TypedHeader, headers};
 use http::StatusCode;
 use rand::distr::{Alphanumeric, SampleString};
-use serde::*;
+use serde::{ser::SerializeMap, *};
 use subtle::ConstantTimeEq;
 use thiserror::Error;
 use tracing::info;
 
 use crate::{
-    NodeId,
+    CertificateHash, CertificateHashInner, NodeId,
     common::wire::{AccessToken, CommunicationProtocol, EndpointDescription, MessageVersion, NodeDescription},
 };
 
@@ -132,7 +132,10 @@ pub(crate) struct RequestPairing {
     /// A server-assigned identifier of the S2Node that this server represents.
     #[serde(rename = "nodeIdAlias")]
     #[serde(default)]
-    pub id: Option<NodeIdAlias>,
+    pub id_alias: Option<NodeIdAlias>,
+    #[serde(rename = "nodeId")]
+    #[serde(default)]
+    pub id: Option<NodeId>,
     #[serde(rename = "supportedCommunicationProtocols")]
     pub supported_protocols: Vec<CommunicationProtocol>,
     /// The versions of the S2 JSON message schemas this S2Node implementation currently supports.
@@ -197,12 +200,12 @@ impl<S: Sync + Send> FromRequestParts<S> for PairingAttemptId {
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RequestPairingResponse {
-    pub pairing_attempt_id: PairingAttemptId,
-    pub server_node_description: NodeDescription,
-    pub server_endpoint_description: EndpointDescription,
-    pub selected_hmac_hashing_algorithm: HmacHashingAlgorithm,
-    pub client_hmac_challenge_response: HmacChallengeResponse,
-    pub server_hmac_challenge: HmacChallenge,
+    pub(super) pairing_attempt_id: PairingAttemptId,
+    pub(super) server_node_description: NodeDescription,
+    pub(super) server_endpoint_description: EndpointDescription,
+    pub(super) selected_hmac_hashing_algorithm: HmacHashingAlgorithm,
+    pub(super) client_hmac_challenge_response: HmacChallengeResponse,
+    pub(super) server_hmac_challenge: HmacChallenge,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -234,6 +237,38 @@ pub(crate) struct CancelPrePairingRequest {
 pub(crate) struct ConnectionDetails {
     pub initiate_connection_url: String,
     pub access_token: AccessToken,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "serialize_fingerprint",
+        deserialize_with = "deserialize_fingerprint"
+    )]
+    pub certificate_fingerprint: Option<CertificateHash>,
+}
+
+pub(crate) fn serialize_fingerprint<S: Serializer>(value: &Option<CertificateHash>, serializer: S) -> Result<S::Ok, S::Error> {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    // Unwrap is ok here as we serialize only when not none.
+    let encoded = STANDARD.encode(value.as_deref().unwrap() as &[u8]);
+    let mut map = serializer.serialize_map(Some(1))?;
+    map.serialize_entry("SHA256", &encoded)?;
+    map.end()
+}
+
+pub(crate) fn deserialize_fingerprint<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<CertificateHash>, D::Error> {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    use std::{borrow::Cow, collections::HashMap};
+    let data = HashMap::<Cow<'de, str>, Cow<'de, str>>::deserialize(deserializer)?;
+    if let Some(hash) = data.get("SHA256") {
+        let decoded = STANDARD.decode(hash.as_ref()).map_err(de::Error::custom)?;
+        Ok(Some(CertificateHash(CertificateHashInner::Sha256(
+            <[u8; 32]>::try_from(decoded)
+                .map_err(|_| de::Error::custom("Hash is wrong length"))?
+                .into(),
+        ))))
+    } else {
+        Err(de::Error::custom("Missing SHA256 hash"))
+    }
 }
 
 #[derive(Serialize, Deserialize)]
