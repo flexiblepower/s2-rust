@@ -108,7 +108,7 @@ pub struct DBusConnection {
 }
 
 impl DBusConnection {
-    const KEEP_ALIVE_INTERVAL: i32 = 30;
+    const KEEP_ALIVE_INTERVAL: i32 = 5;
 
     async fn new(cem_id: impl Into<String>, connection: &Connection, destination: OwnedBusName) -> Result<Self, S2DBusError> {
         let cem_id = cem_id.into();
@@ -127,7 +127,7 @@ impl DBusConnection {
         if !connected {
             return Err(S2DBusError::AlreadyConnectedCem);
         }
-        
+
         let keep_alive = async move {
             loop {
                 match keep_alive_proxy.keep_alive(cloned_id.clone()).await {
