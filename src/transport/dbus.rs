@@ -119,15 +119,15 @@ impl DBusConnection {
             return Err(S2DBusError::DiscoverReturnedFalse);
         }
 
-        let connected = rm_proxy.connect(cem_id.clone(), Self::KEEP_ALIVE_INTERVAL).await?;
-        if !connected {
-            return Err(S2DBusError::AlreadyConnectedCem);
-        }
-
         let message_stream = rm_proxy.receive_message().await?;
         let keep_alive_proxy = rm_proxy.clone();
         let cloned_id = cem_id.clone();
         let cloned_destination = destination.clone();
+        let connected = rm_proxy.connect(cem_id.clone(), Self::KEEP_ALIVE_INTERVAL).await?;
+        if !connected {
+            return Err(S2DBusError::AlreadyConnectedCem);
+        }
+        
         let keep_alive = async move {
             loop {
                 match keep_alive_proxy.keep_alive(cloned_id.clone()).await {
