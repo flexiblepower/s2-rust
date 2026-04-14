@@ -156,7 +156,10 @@ impl<T: S2Transport> S2Connection<T> {
         }
     }
 
-    pub async fn initialize_as_cem(&mut self, control_type_priority: &[ControlType]) -> Result<ControlType, ConnectionError<T::TransportError>> {
+    pub async fn initialize_as_cem(
+        &mut self,
+        control_type_priority: &[ControlType],
+    ) -> Result<ControlType, ConnectionError<T::TransportError>> {
         tracing::trace!("Starting handshake process as CEM");
         self.send_message(
             Handshake::builder()
@@ -238,11 +241,21 @@ impl<T: S2Transport> S2Connection<T> {
 
     /// Waits for a message to come over the websocket, and returns it.
     ///
-    /// This function sends back a [`ReceptionStatus`] when it receives a message, so you don't need to do that yourself. Additionally, it filters out any received `ReceptionStatus` messages.
+    /// This function filters out any received `ReceptionStatus` messages with an OK status. You will still receive `ReceptionStatus` messages
+    /// with a non-OK status.
     pub async fn receive_message<'connection>(
         &'connection mut self,
     ) -> Result<UnconfirmedMessage<'connection, T>, ConnectionError<T::TransportError>> {
-        let message = self.transport.receive().await.map_err(ConnectionError::TransportError)?;
+        let message = loop {
+            let message = self.transport.receive().await.map_err(ConnectionError::TransportError)?;
+            match message {
+                Message::ReceptionStatus(status) if status.status == ReceptionStatusValues::Ok => {
+                    tracing::trace!("Received OK reception status for message {}", status.subject_message_id)
+                }
+                _ => break message,
+            }
+        };
+
         tracing::trace!("Received S2 message: {message:?}");
         Ok(UnconfirmedMessage::new(message, self))
     }
@@ -261,6 +274,7 @@ impl<T: S2Transport> S2Connection<T> {
         self.transport.disconnect().await
     }
 
+    /// Get a reference to the inner `S2Transport`.
     pub fn inner(&self) -> &T {
         &self.transport
     }
