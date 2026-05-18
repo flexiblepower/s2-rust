@@ -206,7 +206,7 @@ mod client;
 mod error;
 mod server;
 mod transport;
-mod wire;
+pub(crate) mod wire;
 
 use rand::CryptoRng;
 
@@ -214,6 +214,7 @@ use rustls::pki_types::CertificateDer;
 use wire::{HmacChallenge, HmacChallengeResponse};
 
 pub use client::{Client, ClientConfig, LongpollHandler, Longpoller, PairingRemote, PrePairing, RemoteNodeIdentifier};
+pub(crate) use error::WrappedError;
 pub use error::{ConfigError, Error, ErrorKind};
 pub use server::{
     LongpollingHandle, NoopPrePairingHandler, PairingToken, PairingTokenError, PrePairingHandler, PrePairingResponse, Server, ServerConfig,
@@ -228,11 +229,11 @@ use crate::{
 /// Full description of an S2 node.
 #[derive(Debug, Clone)]
 pub struct NodeConfig {
-    node_description: NodeDescription,
-    supported_message_versions: Vec<MessageVersion>,
-    supported_communication_protocols: Vec<CommunicationProtocol>,
-    connection_initiate_url: Option<String>,
-    root_certificate: Option<CertificateDer<'static>>,
+    pub(crate) node_description: NodeDescription,
+    pub(crate) supported_message_versions: Vec<MessageVersion>,
+    pub(crate) supported_communication_protocols: Vec<CommunicationProtocol>,
+    pub(crate) connection_initiate_url: Option<String>,
+    pub(crate) root_certificate: Option<CertificateDer<'static>>,
 }
 
 impl NodeConfig {
@@ -393,7 +394,7 @@ impl HmacChallenge {
         Self(bytes)
     }
 
-    pub fn sha256(&self, network: &Network, pairing_token: &[u8]) -> HmacChallengeResponse {
+    fn sha256(&self, network: &Network, pairing_token: &[u8]) -> HmacChallengeResponse {
         use hmac::{Hmac, Mac};
         use sha2::Sha256;
 

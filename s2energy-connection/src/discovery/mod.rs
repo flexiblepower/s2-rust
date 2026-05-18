@@ -23,10 +23,9 @@ use zeroconf_tokio::{
     prelude::{TMdnsBrowser, TMdnsService, TTxtRecord},
 };
 
-use crate::{
-    Deployment, Role,
-    discovery::error::{Error, ErrorKind},
-};
+use crate::{Deployment, Role};
+pub(crate) use error::WrappedError;
+pub use error::{Error, ErrorKind};
 
 /// Error that occurred during the process of creating a [`DiscoverableS2Endpoint`].
 #[derive(Debug, Clone, Error, Eq, PartialEq)]
@@ -220,7 +219,7 @@ impl DiscoverableS2EndpointBuilder {
             Host::Domain(domain)
                 if (domain.ends_with(".local") || domain.ends_with(".local.")) == matches!(self.deployment, Deployment::Lan) =>
             {
-                self.pairing_url = Some(longpolling_url);
+                self.longpolling_url = Some(longpolling_url);
                 Ok(self)
             }
             _ => Err(BuilderError::InvalidUrl),

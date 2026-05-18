@@ -8,8 +8,8 @@ use crate::{
 /// Error that occurred during the communication subprotocol.
 #[derive(Debug)]
 pub struct Error {
-    kind: ErrorKind,
-    wrapped_error: WrappedError,
+    pub(crate) kind: ErrorKind,
+    pub(crate) wrapped_error: WrappedError,
 }
 
 impl Error {
@@ -65,7 +65,7 @@ impl From<BaseError> for Error {
 }
 
 #[derive(Debug)]
-enum WrappedError {
+pub(crate) enum WrappedError {
     None,
     Reqwest(reqwest::Error),
     Rustls(rustls::Error),
@@ -73,7 +73,7 @@ enum WrappedError {
     UrlParse(url::ParseError),
     UriParse(http::uri::InvalidUri),
     Remote(CommunicationDetailsErrorMessage),
-    Store(Box<dyn std::error::Error + 'static>),
+    Store(Box<dyn std::error::Error + Send + 'static>),
 }
 
 impl WrappedError {
@@ -136,8 +136,8 @@ impl From<CommunicationDetailsErrorMessage> for WrappedError {
     }
 }
 
-impl From<Box<dyn std::error::Error + 'static>> for WrappedError {
-    fn from(value: Box<dyn std::error::Error + 'static>) -> Self {
+impl From<Box<dyn std::error::Error + Send + 'static>> for WrappedError {
+    fn from(value: Box<dyn std::error::Error + Send + 'static>) -> Self {
         WrappedError::Store(value)
     }
 }

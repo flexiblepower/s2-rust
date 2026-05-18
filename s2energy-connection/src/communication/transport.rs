@@ -153,6 +153,16 @@ pub(crate) fn hash_checking_http_client(root_hash: CertificateHash) -> Communica
     Ok(client)
 }
 
+pub(crate) fn hash_checking_verifier(root_hash: CertificateHash) -> CommunicationResult<impl ServerCertVerifier> {
+    let rustls_config_builder = rustls::ClientConfig::builder();
+    let crypto_provider = rustls_config_builder.crypto_provider().clone();
+    Ok(HashedCertificateVerifier {
+        inner: rustls_platform_verifier::Verifier::new(crypto_provider).map_err(|e| Error::new(ErrorKind::TransportFailed, e))?,
+        self_signed_state: OnceLock::new(),
+        root_hash,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::net::{Ipv4Addr, SocketAddr};

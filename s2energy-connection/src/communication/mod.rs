@@ -218,9 +218,10 @@ mod error;
 mod server;
 mod transport;
 mod websocket;
-mod wire;
+pub(crate) mod wire;
 
 pub use client::{Client, ClientConfig, ClientPairing};
+pub(crate) use error::WrappedError;
 pub use error::{Error, ErrorKind};
 pub use server::{PairingLookup, PairingLookupResult, Server, ServerConfig, ServerPairing, ServerPairingStore};
 pub use websocket::{WebSocketError, WebSocketTransport};
