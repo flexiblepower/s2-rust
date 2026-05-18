@@ -35,6 +35,10 @@ impl ClientPairing for &mut MemoryPairing {
         &self.communication_url
     }
 
+    fn certificate_hash(&self) -> Option<s2energy_connection::CertificateHash> {
+        None
+    }
+
     async fn set_access_tokens(&mut self, tokens: Vec<AccessToken>) -> Result<(), Self::Error> {
         self.tokens = tokens;
         Ok(())

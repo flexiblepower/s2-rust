@@ -210,6 +210,7 @@ mod wire;
 
 use rand::CryptoRng;
 
+use rustls::pki_types::CertificateDer;
 use wire::{HmacChallenge, HmacChallengeResponse};
 
 pub use client::{Client, ClientConfig, LongpollHandler, Longpoller, PairingRemote, PrePairing};
@@ -219,7 +220,10 @@ pub use server::{
 };
 pub use wire::NodeIdAlias;
 
-use crate::{CommunicationProtocol, Deployment, EndpointDescription, MessageVersion, NodeDescription, Role, common::wire::AccessToken};
+use crate::{
+    CertificateHash, CommunicationProtocol, Deployment, EndpointDescription, MessageVersion, NodeDescription, Role,
+    common::wire::AccessToken,
+};
 
 /// Full description of an S2 node.
 #[derive(Debug, Clone)]
@@ -228,6 +232,7 @@ pub struct NodeConfig {
     supported_message_versions: Vec<MessageVersion>,
     supported_communication_protocols: Vec<CommunicationProtocol>,
     connection_initiate_url: Option<String>,
+    root_certificate: Option<CertificateDer<'static>>,
 }
 
 impl NodeConfig {
@@ -251,6 +256,11 @@ impl NodeConfig {
         self.connection_initiate_url.as_deref()
     }
 
+    /// Root certificate used by the node in communication, if known.
+    pub fn root_certificate(&self) -> Option<&CertificateDer<'static>> {
+        self.root_certificate.as_ref()
+    }
+
     /// Create a builder for a new [`NodeConfig`].
     ///
     /// All node configurations must at least contain description of the node and supported message versions. Additional
@@ -261,6 +271,7 @@ impl NodeConfig {
             supported_message_versions,
             supported_communication_protocols: vec![CommunicationProtocol("WebSocket".into())],
             connection_initiate_url: None,
+            root_certificate: None,
         }
     }
 }
@@ -271,6 +282,7 @@ pub struct ConfigBuilder {
     supported_message_versions: Vec<MessageVersion>,
     supported_communication_protocols: Vec<CommunicationProtocol>,
     connection_initiate_url: Option<String>,
+    root_certificate: Option<CertificateDer<'static>>,
 }
 
 impl ConfigBuilder {
@@ -288,6 +300,12 @@ impl ConfigBuilder {
         self
     }
 
+    /// Set the root certificate used in communication by this node.
+    pub fn with_root_certificate(mut self, root_certificate: CertificateDer<'static>) -> Self {
+        self.root_certificate = Some(root_certificate);
+        self
+    }
+
     /// Create the actual [`NodeConfig`], validating that it is reasonable.
     pub fn build(self) -> Result<NodeConfig, ConfigError> {
         if self.node_description.role == Role::Cem && self.connection_initiate_url.is_none() {
@@ -298,6 +316,7 @@ impl ConfigBuilder {
             supported_message_versions: self.supported_message_versions,
             supported_communication_protocols: self.supported_communication_protocols,
             connection_initiate_url: self.connection_initiate_url,
+            root_certificate: self.root_certificate,
         })
     }
 }
@@ -309,6 +328,8 @@ pub enum PairingRole {
     CommunicationClient {
         /// URL to be used for initiating the connection.
         initiate_url: String,
+        /// Hash of the root certificate of the communication server
+        root_hash: Option<CertificateHash>,
     },
     /// This node gets contacted by the other node to initiate a connection.
     CommunicationServer,
@@ -400,7 +421,7 @@ pub type PairingResult<T> = Result<T, Error>;
 #[derive(Debug)]
 enum Network {
     Wan,
-    Lan { fingerprint: [u8; 32] },
+    Lan { fingerprint: CertificateHash },
 }
 
 impl Network {

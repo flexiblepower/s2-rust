@@ -8,7 +8,7 @@ use crate::common::negotiate_version;
 use crate::common::wire::{AccessToken, Deployment, PairingVersion, Role};
 use crate::pairing::transport::{HashProvider, hash_providing_https_client};
 use crate::pairing::{ConfigError, Error, Pairing, PairingRole};
-use crate::{EndpointDescription, NodeDescription, NodeId};
+use crate::{CertificateHash, EndpointDescription, NodeDescription, NodeId};
 
 use super::NodeConfig;
 use super::wire::*;
@@ -392,7 +392,9 @@ impl Client {
     }
 
     fn prepare_reqwest_client(&self, url: &Url) -> Result<(reqwest::Client, Option<HashProvider>), Error> {
-        let (client, certhash) = if url.domain().map(|v| v.ends_with(".local")).unwrap_or_default() {
+        let (client, certhash) = if url.domain().map(|v| v.ends_with(".local")).unwrap_or_default()
+            || url.domain().map(|v| v.ends_with(".local.")).unwrap_or_default()
+        {
             let (client, certhash) = hash_providing_https_client()?;
             (client, Some(certhash))
         } else {
@@ -476,11 +478,11 @@ impl<'a> V1Session<'a> {
         let our_deployment = self.endpoint_description.deployment.unwrap_or(local_deployment);
         let our_role = self.config.node_description.role;
 
-        let network = if self.base_url.domain().map(|v| v.ends_with(".local")).unwrap_or_default() {
-            if let Some(hash) = certhash.as_ref().and_then(HashProvider::hash) {
-                Network::Lan {
-                    fingerprint: hash.try_into().unwrap(),
-                }
+        let network = if self.base_url.domain().map(|v| v.ends_with(".local")).unwrap_or_default()
+            || self.base_url.domain().map(|v| v.ends_with(".local.")).unwrap_or_default()
+        {
+            if let Some(hash) = certhash.as_ref().and_then(HashProvider::leaf_hash) {
+                Network::Lan { fingerprint: hash.clone() }
             } else {
                 return Err(ErrorKind::ProtocolError.into());
             }
@@ -552,6 +554,7 @@ impl<'a> V1Session<'a> {
                         server_hmac_challenge_response,
                         initiate_connection_url.clone(),
                         access_token.clone(),
+                        self.config.root_certificate.as_deref().map(CertificateHash::sha256),
                     )
                     .await
                 {
@@ -573,12 +576,26 @@ impl<'a> V1Session<'a> {
                         return Err(e);
                     }
                 };
+
+                let initiate_url =
+                    Url::parse(&connection_details.initiate_connection_url).map_err(|e| Error::new(ErrorKind::ProtocolError, e))?;
+                let root_hash = if initiate_url.domain().map(|v| v.ends_with(".local")).unwrap_or_default()
+                    || initiate_url.domain().map(|v| v.ends_with(".local.")).unwrap_or_default()
+                {
+                    connection_details
+                        .certificate_fingerprint
+                        .or(certhash.as_ref().and_then(HashProvider::root_hash).cloned())
+                } else {
+                    None
+                };
+
                 Pairing {
                     remote_endpoint_description: request_pairing_response.server_endpoint_description,
                     remote_node_description: request_pairing_response.server_node_description,
                     token: connection_details.access_token,
                     role: PairingRole::CommunicationClient {
                         initiate_url: connection_details.initiate_connection_url,
+                        root_hash,
                     },
                 }
             }
@@ -644,12 +661,14 @@ impl<'a> V1Session<'a> {
         server_hmac_challenge_response: HmacChallengeResponse,
         initiate_connection_url: String,
         access_token: AccessToken,
+        certificate_fingerprint: Option<CertificateHash>,
     ) -> PairingResult<()> {
         let request = PostConnectionDetailsRequest {
             server_hmac_challenge_response,
             connection_details: ConnectionDetails {
                 initiate_connection_url,
                 access_token,
+                certificate_fingerprint,
             },
         };
         let response = self
@@ -888,12 +907,12 @@ mod tests {
     #[tokio::test]
     async fn pairing_ok_rm_initiates() {
         let server_config = NodeConfig::builder(basic_node_description(UUID_A, Role::Cem), vec![MessageVersion("v1".into())])
-            .with_connection_initiate_url("test.example.com".into())
+            .with_connection_initiate_url("https://test.example.com".into())
             .build()
             .unwrap();
 
         let client_config = NodeConfig::builder(basic_node_description(UUID_B, Role::Rm), vec![MessageVersion("v1".into())])
-            .with_connection_initiate_url("client.example.com".into())
+            .with_connection_initiate_url("https://client.example.com".into())
             .build()
             .unwrap();
 
@@ -1502,7 +1521,7 @@ mod tests {
     #[tokio::test]
     async fn longpolling() {
         let server_config = NodeConfig::builder(basic_node_description(UUID_A, Role::Cem), vec![MessageVersion("v1".into())])
-            .with_connection_initiate_url("test.example.com".into())
+            .with_connection_initiate_url("https://test.example.com".into())
             .build()
             .unwrap();
 
