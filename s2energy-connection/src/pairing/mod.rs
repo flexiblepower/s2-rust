@@ -142,7 +142,7 @@
 //! server.allow_pair_once(
 //!     config,
 //!     Some(NodeIdAlias("XYZ".into())),
-//!     PairingToken(b"ABCDEF0123456".as_slice().into()),
+//!     PairingToken::new(),
 //!     async |pairing_result| {
 //!         /* ensure the pairing becomes usable/gets used */
 //!         Ok::<_, std::io::Error>(())
@@ -153,7 +153,7 @@
 //!
 //! Or to enable repeated pairing using the same fixed pairing token:
 //! ```no_run
-//! # use std::{path::PathBuf, net::SocketAddr, sync::Arc};
+//! # use std::{path::PathBuf, net::SocketAddr, sync::Arc, str::FromStr};
 //! # use axum_server::tls_rustls::RustlsConfig;
 //! # use s2energy_connection::pairing::{NodeConfig, PairingToken, Server, ServerConfig, NodeIdAlias};
 //! # use s2energy_connection::{MessageVersion, NodeDescription, EndpointDescription, NodeId, Role};
@@ -188,7 +188,7 @@
 //! server.allow_pair_repeated(
 //!     config,
 //!     Some(NodeIdAlias("XYZ".into())),
-//!     PairingToken(b"ABCDEF0123456".as_slice().into()),
+//!     PairingToken::from_str("ABCDEF0123456").unwrap(),
 //!     async |pairing_result| {
 //!         /* ensure the pairing becomes usable/gets used */
 //!         Ok::<_, std::io::Error>(())
@@ -446,22 +446,24 @@ mod tests {
     fn test_pairing_code_plain() {
         let (alias, token) = parse_pairing_code("aaaa").unwrap();
         assert_eq!(alias, None);
-        assert_eq!(token.0.as_ref(), [105, 166, 154].as_slice());
+        assert_eq!(token.0, "aaaa");
+        assert_eq!(token.as_bytes(), [97, 97, 97, 97]);
 
         let (alias, token) = parse_pairing_code("aaaabbbb").unwrap();
         assert_eq!(alias, None);
-        assert_eq!(token.0.as_ref(), [105, 166, 154, 109, 182, 219].as_slice());
+        assert_eq!(token.0, "aaaabbbb");
+        assert_eq!(token.as_bytes(), [97, 97, 97, 97, 98, 98, 98, 98]);
     }
 
     #[test]
     fn test_pairing_code_compound() {
         let (alias, token) = parse_pairing_code("hEll0-aaaa").unwrap();
         assert_eq!(alias.unwrap().0, "hEll0");
-        assert_eq!(token.0.as_ref(), [105, 166, 154].as_slice());
+        assert_eq!(token.0, "aaaa");
 
         let (alias, token) = parse_pairing_code("-aaaa").unwrap();
         assert_eq!(alias.unwrap().0, "");
-        assert_eq!(token.0.as_ref(), [105, 166, 154].as_slice());
+        assert_eq!(token.0, "aaaa");
     }
 
     #[test]
@@ -469,9 +471,10 @@ mod tests {
         assert_eq!(parse_pairing_code("=").unwrap_err(), PairingCodeParseError::InvalidToken);
         assert_eq!(parse_pairing_code("(").unwrap_err(), PairingCodeParseError::InvalidToken);
         assert_eq!(parse_pairing_code("aaa").unwrap_err(), PairingCodeParseError::InvalidToken);
+        assert_eq!(parse_pairing_code("aaa=").unwrap_err(), PairingCodeParseError::InvalidToken);
 
         assert_eq!(parse_pairing_code("bla-aaa").unwrap_err(), PairingCodeParseError::InvalidToken);
-        assert_eq!(parse_pairing_code("bla-aa=").unwrap_err(), PairingCodeParseError::InvalidToken);
+        assert_eq!(parse_pairing_code("bla-aa=bbbb").unwrap_err(), PairingCodeParseError::InvalidToken);
         assert_eq!(parse_pairing_code("bla-a*==").unwrap_err(), PairingCodeParseError::InvalidToken);
     }
 

@@ -16,7 +16,10 @@ use axum::{
     routing::{get, post},
 };
 use base64::{DecodeError, Engine, display::Base64Display, prelude::BASE64_STANDARD};
-use rand::RngCore;
+use rand::{
+    RngCore,
+    distr::{Alphanumeric, SampleString},
+};
 use reqwest::StatusCode;
 use rustls::pki_types::CertificateDer;
 use sha2::Digest;
@@ -52,48 +55,45 @@ const TIMEOUT_SLACK: Duration = Duration::from_secs(5);
 ///
 /// This token is used to validate the identity of the nodes.
 #[derive(Debug, Clone)]
-pub struct PairingToken(pub Box<[u8]>);
+pub struct PairingToken(pub(crate) String);
 
 impl PairingToken {
     /// Get the raw token bytes.
-    pub fn as_slice(&self) -> &[u8] {
-        &self.0
+    pub fn as_bytes(&self) -> &[u8] {
+        self.0.as_bytes()
     }
 }
 
 impl std::fmt::Display for PairingToken {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        Base64Display::new(&self.0, &BASE64_STANDARD).fmt(f)
+        write!(f, "{}", self.0)
     }
 }
 
 /// Error that occurred when parsing a pairing token.
-#[derive(Debug, PartialEq, Eq)]
-pub struct PairingTokenError(DecodeError);
-
-impl std::fmt::Display for PairingTokenError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Invalid pairing token: {}", self.0)
-    }
-}
-
-impl std::error::Error for PairingTokenError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(&self.0)
-    }
-}
-
-impl From<DecodeError> for PairingTokenError {
-    fn from(value: DecodeError) -> Self {
-        Self(value)
-    }
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
+pub enum PairingTokenError {
+    /// Token contains non-alphanumeric characters.
+    #[error("token contains non-alphanumeric characters")]
+    NotAlphanumeric,
+    /// Token does not have enough characters (minimum 4).
+    #[error("token does not have enough characters (minimum 4)")]
+    TooShort,
 }
 
 impl FromStr for PairingToken {
     type Err = PairingTokenError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(PairingToken(BASE64_STANDARD.decode(s)?.into()))
+        if s.len() < 4 {
+            return Err(PairingTokenError::TooShort);
+        }
+        
+        if s.chars().any(|c| !c.is_alphanumeric()) {
+            return Err(PairingTokenError::NotAlphanumeric);
+        }
+
+        Ok(PairingToken(s.to_owned()))
     }
 }
 
@@ -101,16 +101,12 @@ impl PairingToken {
     /// Generate a new pairing token suitable for short-lived use.
     #[expect(clippy::new_without_default, reason = "Uses non-trivial randomness")]
     pub fn new() -> Self {
-        let mut result = Self(Box::new([0; 9]));
-        rand::rng().fill_bytes(&mut result.0);
-        result
+        Self(Alphanumeric.sample_string(&mut rand::rng(), 4))
     }
 
     /// Generate a new pairing token suitable for long-term use.
     pub fn new_static() -> Self {
-        let mut result = Self(Box::new([0; 12]));
-        rand::rng().fill_bytes(&mut result.0);
-        result
+        Self(Alphanumeric.sample_string(&mut rand::rng(), 6))
     }
 }
 
@@ -1002,7 +998,9 @@ async fn v1_request_pairing<H>(
         trace!("Checked communication protocol and s2 message version compatibility.");
 
         debug_assert!(request_pairing.client_hmac_challenge.0.len() >= 32);
-        let client_hmac_challenge_response = request_pairing.client_hmac_challenge.sha256(&state.network, &open_pairing.token.0);
+        let client_hmac_challenge_response = request_pairing
+            .client_hmac_challenge
+            .sha256(&state.network, open_pairing.token.as_bytes());
 
         trace!("Calculated response to remote challenge.");
 
@@ -1086,7 +1084,7 @@ async fn v1_request_connection_details<H>(
 
                     trace!("Found pairing session.");
 
-                    let expected = state.challenge.sha256(&app_state.network, &state.token.0);
+                    let expected = state.challenge.sha256(&app_state.network, state.token.as_bytes());
                     if expected != req.server_hmac_challenge_response {
                         attempts.remove(&pairing_attempt_id);
                         return (
@@ -1179,7 +1177,7 @@ async fn v1_post_connection_details<H>(
 
                     trace!("Found pairing session.");
 
-                    let expected = state.challenge.sha256(&app_state.network, &state.token.0);
+                    let expected = state.challenge.sha256(&app_state.network, state.token.as_bytes());
                     if expected != req.server_hmac_challenge_response {
                         attempts.remove(&pairing_attempt_id);
                         return (
@@ -1341,13 +1339,6 @@ mod tests {
             },
         },
     };
-
-    #[test]
-    fn token_encode_decode() {
-        let token = PairingToken(Box::new([0, 1, 2, 3, 4, 5, 6, 7, 8]));
-        assert_eq!(token.to_string(), "AAECAwQFBgcI");
-        assert_eq!(token.0, "AAECAwQFBgcI".parse::<PairingToken>().unwrap().0);
-    }
 
     #[tokio::test]
     async fn version_negotiation() {
@@ -1667,7 +1658,7 @@ mod tests {
                         .unwrap(),
                 ),
                 Some(pairing_s2_node_id()),
-                PairingToken(b"testtoken".as_slice().into()),
+                PairingToken(String::from("testtoken")),
                 async |_| Ok::<_, std::io::Error>(()),
             )
             .unwrap();
@@ -1721,7 +1712,7 @@ mod tests {
                         .unwrap(),
                 ),
                 Some(pairing_s2_node_id()),
-                PairingToken(b"testtoken".as_slice().into()),
+                PairingToken(String::from("testtoken")),
                 async |_| Ok::<_, std::io::Error>(()),
             )
             .unwrap();
@@ -1775,7 +1766,7 @@ mod tests {
                         .unwrap(),
                 ),
                 None,
-                PairingToken(b"testtoken".as_slice().into()),
+                PairingToken(String::from("testtoken")),
                 async |_| Ok::<_, std::io::Error>(()),
             )
             .unwrap();
@@ -1829,7 +1820,7 @@ mod tests {
                         .unwrap(),
                 ),
                 Some(pairing_s2_node_id()),
-                PairingToken(b"testtoken".as_slice().into()),
+                PairingToken(String::from("testtoken")),
                 async |_| Ok::<_, std::io::Error>(()),
             )
             .unwrap();
@@ -1881,7 +1872,7 @@ mod tests {
                         .unwrap(),
                 ),
                 Some(pairing_s2_node_id()),
-                PairingToken(b"testtoken".as_slice().into()),
+                PairingToken(String::from("testtoken")),
                 async |_| Ok::<_, std::io::Error>(()),
             )
             .unwrap();
@@ -1933,7 +1924,7 @@ mod tests {
                         .unwrap(),
                 ),
                 Some(pairing_s2_node_id()),
-                PairingToken(b"testtoken".as_slice().into()),
+                PairingToken(String::from("testtoken")),
                 async |_| Ok::<_, std::io::Error>(()),
             )
             .unwrap();
@@ -1985,7 +1976,7 @@ mod tests {
                         .unwrap(),
                 ),
                 Some(pairing_s2_node_id()),
-                PairingToken(b"testtoken".as_slice().into()),
+                PairingToken(String::from("testtoken")),
                 async |_| Ok::<_, std::io::Error>(()),
             )
             .unwrap();
@@ -2076,7 +2067,7 @@ mod tests {
                         .unwrap(),
                 ),
                 Some(pairing_s2_node_id()),
-                PairingToken(b"testtoken".as_slice().into()),
+                PairingToken(String::from("testtoken")),
                 async |_| Ok::<_, std::io::Error>(()),
             )
             .unwrap();
@@ -2135,7 +2126,7 @@ mod tests {
                     ),
                     sender: ResultHandler::Oneshot(Box::new(|_| Box::pin(async { Ok(()) }))),
                     challenge: challenge.clone(),
-                    token: PairingToken(b"testtoken".as_slice().into()),
+                    token: PairingToken(String::from("testtoken")),
                     remote_node_description: basic_node_description(UUID_B, Role::Cem),
                     remote_endpoint_description: EndpointDescription::default(),
                 }),
@@ -2189,7 +2180,7 @@ mod tests {
                     ),
                     sender: ResultHandler::Oneshot(Box::new(|_| Box::pin(async { Ok(()) }))),
                     challenge: challenge.clone(),
-                    token: PairingToken(b"testtoken".as_slice().into()),
+                    token: PairingToken(String::from("testtoken")),
                     remote_node_description: basic_node_description(UUID_B, Role::Cem),
                     remote_endpoint_description: EndpointDescription::default(),
                 }),
@@ -2240,7 +2231,7 @@ mod tests {
                     ),
                     sender: ResultHandler::Oneshot(Box::new(|_| Box::pin(async { Ok(()) }))),
                     challenge: challenge.clone(),
-                    token: PairingToken(b"testtoken".as_slice().into()),
+                    token: PairingToken(String::from("testtoken")),
                     remote_node_description: basic_node_description(UUID_B, Role::Cem),
                     remote_endpoint_description: EndpointDescription::default(),
                 }),
@@ -2293,7 +2284,7 @@ mod tests {
                     ),
                     sender: ResultHandler::Oneshot(Box::new(|_| Box::pin(async { Ok(()) }))),
                     challenge: challenge.clone(),
-                    token: PairingToken(b"testtoken".as_slice().into()),
+                    token: PairingToken(String::from("testtoken")),
                     remote_node_description: basic_node_description(UUID_B, Role::Cem),
                     remote_endpoint_description: EndpointDescription::default(),
                 }),
@@ -2349,7 +2340,7 @@ mod tests {
                     ),
                     sender: ResultHandler::Oneshot(Box::new(|_| Box::pin(async { Ok(()) }))),
                     challenge: challenge.clone(),
-                    token: PairingToken(b"testtoken".as_slice().into()),
+                    token: PairingToken(String::from("testtoken")),
                     remote_node_description: basic_node_description(UUID_B, Role::Cem),
                     remote_endpoint_description: EndpointDescription::default(),
                 }),
@@ -2405,7 +2396,7 @@ mod tests {
                     ),
                     sender: ResultHandler::Oneshot(Box::new(|_| Box::pin(async { Ok(()) }))),
                     challenge: challenge.clone(),
-                    token: PairingToken(b"testtoken".as_slice().into()),
+                    token: PairingToken(String::from("testtoken")),
                     remote_node_description: basic_node_description(UUID_B, Role::Cem),
                     remote_endpoint_description: EndpointDescription::default(),
                 }),
@@ -2565,7 +2556,7 @@ mod tests {
                         })
                     })),
                     challenge: challenge.clone(),
-                    token: PairingToken(b"testtoken".as_slice().into()),
+                    token: PairingToken(String::from("testtoken")),
                     remote_node_description: basic_node_description(UUID_B, Role::Cem),
                     remote_endpoint_description: EndpointDescription::default(),
                 }),

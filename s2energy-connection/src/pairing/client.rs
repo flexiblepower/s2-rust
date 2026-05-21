@@ -841,7 +841,7 @@ mod tests {
                 .allow_pair_once(
                     Arc::new(config),
                     Some(pairing_s2_node_id()),
-                    PairingToken(b"testtoken".as_slice().into()),
+                    PairingToken(String::from("testtoken")),
                     async |result| {
                         tx.send(result).ok();
                         Ok::<_, std::io::Error>(())

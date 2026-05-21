@@ -426,7 +426,7 @@ fn Root(mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
                 .pair(
                     &pairing_node_config,
                     trigger.remote,
-                    trigger.token.as_slice(),
+                    trigger.token.as_bytes(),
                     async move |pairing| {
                         match pairing.role {
                             pairing::PairingRole::CommunicationClient { initiate_url, root_hash } => {
