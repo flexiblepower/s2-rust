@@ -311,7 +311,7 @@ impl<H: PrePairingHandler> Server<H> {
         pairing_token: PairingToken,
         callback: impl (FnOnce(PairingResult<Pairing>) -> F) + Send + 'static,
     ) -> Result<(), Error> {
-        if config.connection_initiate_url.is_none() {
+        if config.session_initiate_url.is_none() {
             return Err(ErrorKind::InvalidConfig(super::ConfigError::MissingInitiateUrl).into());
         }
 
@@ -358,7 +358,7 @@ impl<H: PrePairingHandler> Server<H> {
         pairing_token: PairingToken,
         callback: impl (Fn(PairingResult<Pairing>) -> F) + Send + Sync + 'static,
     ) -> Result<(), Error> {
-        if config.connection_initiate_url.is_none() {
+        if config.session_initiate_url.is_none() {
             return Err(ErrorKind::InvalidConfig(super::ConfigError::MissingInitiateUrl).into());
         }
 
@@ -1097,7 +1097,7 @@ async fn v1_request_connection_details<H>(
 
                     let mut rng = rand::rng();
                     let connection_details = ConnectionDetails {
-                        initiate_session_url: match &state.config.connection_initiate_url {
+                        initiate_session_url: match &state.config.session_initiate_url {
                             Some(url) => url.clone(),
                             None => return (Err(StatusCode::BAD_REQUEST), None),
                         },
@@ -1653,7 +1653,7 @@ mod tests {
             .allow_pair_once(
                 Arc::new(
                     NodeConfig::builder(basic_node_description(UUID_A, Role::Rm), vec![MessageVersion("v1".into())])
-                        .with_connection_initiate_url("https://example.com/".into())
+                        .with_session_initiate_url("https://example.com/".into())
                         .build()
                         .unwrap(),
                 ),
@@ -1707,7 +1707,7 @@ mod tests {
             .allow_pair_repeated(
                 Arc::new(
                     NodeConfig::builder(basic_node_description(UUID_A, Role::Rm), vec![MessageVersion("v1".into())])
-                        .with_connection_initiate_url("https://example.com/".into())
+                        .with_session_initiate_url("https://example.com/".into())
                         .build()
                         .unwrap(),
                 ),
@@ -1761,7 +1761,7 @@ mod tests {
             .allow_pair_once(
                 Arc::new(
                     NodeConfig::builder(basic_node_description(UUID_A, Role::Rm), vec![MessageVersion("v1".into())])
-                        .with_connection_initiate_url("https://example.com/".into())
+                        .with_session_initiate_url("https://example.com/".into())
                         .build()
                         .unwrap(),
                 ),
@@ -1815,7 +1815,7 @@ mod tests {
             .allow_pair_once(
                 Arc::new(
                     NodeConfig::builder(basic_node_description(UUID_A, Role::Rm), vec![MessageVersion("v1".into())])
-                        .with_connection_initiate_url("https://example.com/".into())
+                        .with_session_initiate_url("https://example.com/".into())
                         .build()
                         .unwrap(),
                 ),
@@ -1867,7 +1867,7 @@ mod tests {
             .allow_pair_once(
                 Arc::new(
                     NodeConfig::builder(basic_node_description(UUID_A, Role::Rm), vec![MessageVersion("v1".into())])
-                        .with_connection_initiate_url("https://example.com/".into())
+                        .with_session_initiate_url("https://example.com/".into())
                         .build()
                         .unwrap(),
                 ),
@@ -1919,7 +1919,7 @@ mod tests {
             .allow_pair_once(
                 Arc::new(
                     NodeConfig::builder(basic_node_description(UUID_A, Role::Rm), vec![MessageVersion("v1".into())])
-                        .with_connection_initiate_url("https://example.com/".into())
+                        .with_session_initiate_url("https://example.com/".into())
                         .build()
                         .unwrap(),
                 ),
@@ -1971,7 +1971,7 @@ mod tests {
             .allow_pair_once(
                 Arc::new(
                     NodeConfig::builder(basic_node_description(UUID_A, Role::Rm), vec![MessageVersion("v1".into())])
-                        .with_connection_initiate_url("https://example.com/".into())
+                        .with_session_initiate_url("https://example.com/".into())
                         .build()
                         .unwrap(),
                 ),
@@ -2062,7 +2062,7 @@ mod tests {
             .allow_pair_once(
                 Arc::new(
                     NodeConfig::builder(basic_node_description(UUID_A, Role::Rm), vec![MessageVersion("v1".into())])
-                        .with_connection_initiate_url("https://example.com/".into())
+                        .with_session_initiate_url("https://example.com/".into())
                         .build()
                         .unwrap(),
                 ),
@@ -2120,7 +2120,7 @@ mod tests {
                     session_span: span!(Level::TRACE, "testspan"),
                     config: Arc::new(
                         NodeConfig::builder(basic_node_description(UUID_A, Role::Rm), vec![MessageVersion("v1".into())])
-                            .with_connection_initiate_url("https://example.com/".into())
+                            .with_session_initiate_url("https://example.com/".into())
                             .build()
                             .unwrap(),
                     ),
@@ -2174,7 +2174,7 @@ mod tests {
                     session_span: span!(Level::TRACE, "testspan"),
                     config: Arc::new(
                         NodeConfig::builder(basic_node_description(UUID_A, Role::Rm), vec![MessageVersion("v1".into())])
-                            .with_connection_initiate_url("https://example.com/".into())
+                            .with_session_initiate_url("https://example.com/".into())
                             .build()
                             .unwrap(),
                     ),
@@ -2225,7 +2225,7 @@ mod tests {
                     session_span: span!(Level::TRACE, "testspan"),
                     config: Arc::new(
                         NodeConfig::builder(basic_node_description(UUID_A, Role::Rm), vec![MessageVersion("v1".into())])
-                            .with_connection_initiate_url("https://example.com/".into())
+                            .with_session_initiate_url("https://example.com/".into())
                             .build()
                             .unwrap(),
                     ),
@@ -2278,7 +2278,7 @@ mod tests {
                     session_span: span!(Level::TRACE, "testspan"),
                     config: Arc::new(
                         NodeConfig::builder(basic_node_description(UUID_A, Role::Rm), vec![MessageVersion("v1".into())])
-                            .with_connection_initiate_url("https://example.com/".into())
+                            .with_session_initiate_url("https://example.com/".into())
                             .build()
                             .unwrap(),
                     ),
@@ -2334,7 +2334,7 @@ mod tests {
                     session_span: span!(Level::TRACE, "testspan"),
                     config: Arc::new(
                         NodeConfig::builder(basic_node_description(UUID_A, Role::Rm), vec![MessageVersion("v1".into())])
-                            .with_connection_initiate_url("https://example.com/".into())
+                            .with_session_initiate_url("https://example.com/".into())
                             .build()
                             .unwrap(),
                     ),
@@ -2390,7 +2390,7 @@ mod tests {
                     session_span: span!(Level::TRACE, "testspan"),
                     config: Arc::new(
                         NodeConfig::builder(basic_node_description(UUID_A, Role::Rm), vec![MessageVersion("v1".into())])
-                            .with_connection_initiate_url("https://example.com/".into())
+                            .with_session_initiate_url("https://example.com/".into())
                             .build()
                             .unwrap(),
                     ),
@@ -2545,7 +2545,7 @@ mod tests {
                     session_span: span!(Level::TRACE, "testspan"),
                     config: Arc::new(
                         NodeConfig::builder(basic_node_description(UUID_A, Role::Rm), vec![MessageVersion("v1".into())])
-                            .with_connection_initiate_url("https://example.com/".into())
+                            .with_session_initiate_url("https://example.com/".into())
                             .build()
                             .unwrap(),
                     ),

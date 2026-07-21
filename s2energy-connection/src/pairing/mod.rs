@@ -35,7 +35,7 @@
 //!     user_defined_name: None,
 //!     role: Role::Rm,
 //! }, vec![MessageVersion("v1".into())])
-//! .with_connection_initiate_url("https://example.com/".into())
+//! .with_session_initiate_url("https://example.com/".into())
 //! .build()
 //! .unwrap();
 //! ```
@@ -57,7 +57,7 @@
 //! #     user_defined_name: None,
 //! #     role: Role::Rm,
 //! # }, vec![MessageVersion("v1".into())])
-//! # .with_connection_initiate_url("https://example.com/".into())
+//! # .with_session_initiate_url("https://example.com/".into())
 //! # .build()
 //! # .unwrap();
 //!
@@ -136,7 +136,7 @@
 //! #     user_defined_name: None,
 //! #     role: Role::Rm,
 //! # }, vec![MessageVersion("v1".into())])
-//! # .with_connection_initiate_url("https://example.com/".into())
+//! # .with_session_initiate_url("https://example.com/".into())
 //! # .build()
 //! # .unwrap());
 //! server.allow_pair_once(
@@ -182,7 +182,7 @@
 //! #     user_defined_name: None,
 //! #     role: Role::Rm,
 //! # }, vec![MessageVersion("v1".into())])
-//! # .with_connection_initiate_url("https://example.com/".into())
+//! # .with_session_initiate_url("https://example.com/".into())
 //! # .build()
 //! # .unwrap());
 //! server.allow_pair_repeated(
@@ -232,7 +232,7 @@ pub struct NodeConfig {
     pub(crate) node_description: NodeDescription,
     pub(crate) supported_message_versions: Vec<MessageVersion>,
     pub(crate) supported_communication_protocols: Vec<CommunicationProtocol>,
-    pub(crate) connection_initiate_url: Option<String>,
+    pub(crate) session_initiate_url: Option<String>,
     pub(crate) root_certificate: Option<CertificateDer<'static>>,
 }
 
@@ -253,8 +253,8 @@ impl NodeConfig {
     }
 
     /// Connection initiate url used for this node, if configured.
-    pub fn connection_initiate_url(&self) -> Option<&str> {
-        self.connection_initiate_url.as_deref()
+    pub fn session_initiate_url(&self) -> Option<&str> {
+        self.session_initiate_url.as_deref()
     }
 
     /// Root certificate used by the node in communication, if known.
@@ -271,7 +271,7 @@ impl NodeConfig {
             node_description,
             supported_message_versions,
             supported_communication_protocols: vec![CommunicationProtocol("WebSocket".into())],
-            connection_initiate_url: None,
+            session_initiate_url: None,
             root_certificate: None,
         }
     }
@@ -282,7 +282,7 @@ pub struct ConfigBuilder {
     node_description: NodeDescription,
     supported_message_versions: Vec<MessageVersion>,
     supported_communication_protocols: Vec<CommunicationProtocol>,
-    connection_initiate_url: Option<String>,
+    session_initiate_url: Option<String>,
     root_certificate: Option<CertificateDer<'static>>,
 }
 
@@ -290,8 +290,8 @@ impl ConfigBuilder {
     /// Set a url for initiating new connections.
     ///
     /// By default, this URL is not present. It is however required for CEM nodes, or RM nodes with a WAN deployment.
-    pub fn with_connection_initiate_url(mut self, connection_initiate_url: String) -> Self {
-        self.connection_initiate_url = Some(connection_initiate_url);
+    pub fn with_session_initiate_url(mut self, session_initiate_url: String) -> Self {
+        self.session_initiate_url = Some(session_initiate_url);
         self
     }
 
@@ -309,14 +309,14 @@ impl ConfigBuilder {
 
     /// Create the actual [`NodeConfig`], validating that it is reasonable.
     pub fn build(self) -> Result<NodeConfig, ConfigError> {
-        if self.node_description.role == Role::Cem && self.connection_initiate_url.is_none() {
+        if self.node_description.role == Role::Cem && self.session_initiate_url.is_none() {
             return Err(ConfigError::MissingInitiateUrl);
         }
         Ok(NodeConfig {
             node_description: self.node_description,
             supported_message_versions: self.supported_message_versions,
             supported_communication_protocols: self.supported_communication_protocols,
-            connection_initiate_url: self.connection_initiate_url,
+            session_initiate_url: self.session_initiate_url,
             root_certificate: self.root_certificate,
         })
     }
