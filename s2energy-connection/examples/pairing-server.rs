@@ -1,4 +1,5 @@
 use axum_server::tls_rustls::RustlsConfig;
+use rustls::pki_types::{CertificateDer, pem::PemObject};
 use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 use uuid::uuid;
 
@@ -18,8 +19,9 @@ async fn main() {
         .with(EnvFilter::from_default_env())
         .init();
 
-    let server = Server::new(ServerConfig {
-        leaf_certificate: None,
+    // TODO: determine a proper solution here - the deployment is local, but what certificate should we use?
+    let server = Server::new(ServerConfig::Lan {
+        leaf_certificate: CertificateDer::from_pem_slice(include_bytes!("../testdata/root.pem")).unwrap(),
         endpoint_description: EndpointDescription::default(),
         advertised_nodes: vec![],
     });

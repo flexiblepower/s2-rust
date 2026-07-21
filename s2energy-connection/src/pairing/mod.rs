@@ -401,9 +401,10 @@ impl HmacChallenge {
         let mut mac = Hmac::<Sha256>::new_from_slice(&self.0).expect("HMAC can take a key of any size");
 
         match network {
-            Network::Wan => {
+            Network::Wan { domain } => {
                 // R = HMAC(C, T)
                 mac.update(pairing_token);
+                mac.update(domain.as_bytes());
             }
             Network::Lan { fingerprint } => {
                 // R = HMAC(C, T || F)
@@ -421,14 +422,14 @@ pub type PairingResult<T> = Result<T, Error>;
 
 #[derive(Debug)]
 enum Network {
-    Wan,
+    Wan { domain: String },
     Lan { fingerprint: CertificateHash },
 }
 
 impl Network {
     fn as_deployment(&self) -> Deployment {
         match self {
-            Network::Wan => Deployment::Wan,
+            Network::Wan { .. } => Deployment::Wan,
             Network::Lan { .. } => Deployment::Lan,
         }
     }

@@ -135,16 +135,43 @@ impl<H> Clone for Server<H> {
     }
 }
 
-/// Configuration for the S2 pairing server.
-pub struct ServerConfig {
-    /// The leaf certificate of the server, if we are using a self-signed root.
-    /// Presence of this field indicates we are deployed on LAN.
-    pub leaf_certificate: Option<CertificateDer<'static>>,
-    /// Endpoint description of the server
-    pub endpoint_description: EndpointDescription,
-    /// Initial set of nodes to advertise. This is only used if the server
-    /// is deployed on LAN.
-    pub advertised_nodes: Vec<NodeDescription>,
+pub enum ServerConfig {
+    Lan {
+        /// The leaf certificate of the server, using a self-signed root.
+        leaf_certificate: CertificateDer<'static>,
+        /// Initial set of nodes to advertise.
+        advertised_nodes: Vec<NodeDescription>,
+        /// Endpoint description of the server.
+        endpoint_description: EndpointDescription,
+    },
+    Wan {
+        /// The domain name of the server, without protocol or trailing slashes. Example value: `s2connect.example.com`.
+        domain: String,
+        /// Endpoint description of the server.
+        endpoint_description: EndpointDescription,
+    },
+}
+
+impl ServerConfig {
+    pub fn endpoint_description(&self) -> &EndpointDescription {
+        match self {
+            ServerConfig::Lan { endpoint_description, .. } => endpoint_description,
+            ServerConfig::Wan { endpoint_description, .. } => endpoint_description,
+        }
+    }
+
+    /// An example WAN configuration to use in tests. Uses `s2connect.example.com` as domain name.
+    #[cfg(test)]
+    pub fn dummy_config_wan() -> ServerConfig {
+        ServerConfig::Wan {
+            domain: "s2connect.example.com".into(),
+            endpoint_description: EndpointDescription {
+                name: None,
+                logo_url: None,
+                deployment: Some(crate::Deployment::Wan),
+            },
+        }
+    }
 }
 
 /// Description of what response to
@@ -211,16 +238,28 @@ impl<H: PrePairingHandler> Server<H> {
         let (longpolling_handle_sender, pending_longpolling_handles) = tokio::sync::mpsc::channel(LONGPOLLING_HANDLE_BUFFER_SIZE);
         let (longpolling_enabled_sender, longpolling_enabled_receiver) = tokio::sync::watch::channel(false);
         let longpolling_sessions_active = Arc::new(tokio::sync::RwLock::new(()));
+        let (network, advertised_nodes, endpoint_description) = match server_config {
+            ServerConfig::Lan {
+                leaf_certificate,
+                advertised_nodes,
+                endpoint_description,
+            } => (
+                Network::Lan {
+                    fingerprint: CertificateHash::sha256(&leaf_certificate),
+                },
+                advertised_nodes,
+                endpoint_description,
+            ),
+            ServerConfig::Wan {
+                domain,
+                endpoint_description,
+            } => (Network::Wan { domain }, Vec::new(), endpoint_description),
+        };
 
         let state = AppStateInner {
-            network: server_config
-                .leaf_certificate
-                .map(|v| Network::Lan {
-                    fingerprint: CertificateHash::sha256(&v),
-                })
-                .unwrap_or(Network::Wan),
-            advertised_nodes: Mutex::new(server_config.advertised_nodes),
-            endpoint_description: server_config.endpoint_description,
+            network,
+            advertised_nodes: Mutex::new(advertised_nodes),
+            endpoint_description,
             pending_pairings: Mutex::new(PendingPairings::default()),
             attempts: Mutex::new(HashMap::default()),
             prepairing_handler: Arc::new(handler),
@@ -1342,11 +1381,7 @@ mod tests {
 
     #[tokio::test]
     async fn version_negotiation() {
-        let server = Server::new(ServerConfig {
-            leaf_certificate: None,
-            endpoint_description: EndpointDescription::default(),
-            advertised_nodes: vec![],
-        });
+        let server = Server::new(ServerConfig::dummy_config_wan());
 
         let response = server
             .get_router()
@@ -1360,8 +1395,8 @@ mod tests {
 
     #[tokio::test]
     async fn advertised_endpoint() {
-        let server = Server::new(ServerConfig {
-            leaf_certificate: Some(CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()),
+        let server = Server::new(ServerConfig::Lan {
+            leaf_certificate: CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap(),
             endpoint_description: EndpointDescription {
                 name: Some("Testendpoint".into()),
                 logo_url: None,
@@ -1383,15 +1418,7 @@ mod tests {
 
     #[tokio::test]
     async fn advertised_endpoint_wan() {
-        let server = Server::new(ServerConfig {
-            leaf_certificate: None,
-            endpoint_description: EndpointDescription {
-                name: Some("Testendpoint".into()),
-                logo_url: None,
-                deployment: None,
-            },
-            advertised_nodes: vec![basic_node_description(UUID_A, Role::Cem)],
-        });
+        let server = Server::new(ServerConfig::dummy_config_wan());
 
         let response = server
             .get_router()
@@ -1403,8 +1430,8 @@ mod tests {
 
     #[tokio::test]
     async fn advertised_nodes() {
-        let server = Server::new(ServerConfig {
-            leaf_certificate: Some(CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()),
+        let server = Server::new(ServerConfig::Lan {
+            leaf_certificate: CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap(),
             endpoint_description: EndpointDescription {
                 name: Some("Testendpoint".into()),
                 logo_url: None,
@@ -1426,15 +1453,7 @@ mod tests {
 
     #[tokio::test]
     async fn advertised_nodes_wan() {
-        let server = Server::new(ServerConfig {
-            leaf_certificate: None,
-            endpoint_description: EndpointDescription {
-                name: Some("Testendpoint".into()),
-                logo_url: None,
-                deployment: None,
-            },
-            advertised_nodes: vec![basic_node_description(UUID_A, Role::Cem)],
-        });
+        let server = Server::new(ServerConfig::dummy_config_wan());
 
         let response = server
             .get_router()
@@ -1487,14 +1506,7 @@ mod tests {
     #[tokio::test]
     async fn prepairing_accept() {
         let test_handler = TestPrePairingHandler::new(PrePairingResponse::Accept);
-        let server = Server::new_with_prepairing(
-            ServerConfig {
-                leaf_certificate: None,
-                endpoint_description: EndpointDescription::default(),
-                advertised_nodes: vec![],
-            },
-            test_handler.clone(),
-        );
+        let server = Server::new_with_prepairing(ServerConfig::dummy_config_wan(), test_handler.clone());
         let response = server
             .get_router()
             .oneshot(
@@ -1526,14 +1538,7 @@ mod tests {
     #[tokio::test]
     async fn prepairing_reject_no_node() {
         let test_handler = TestPrePairingHandler::new(PrePairingResponse::RejectNoS2Node);
-        let server = Server::new_with_prepairing(
-            ServerConfig {
-                leaf_certificate: None,
-                endpoint_description: EndpointDescription::default(),
-                advertised_nodes: vec![],
-            },
-            test_handler.clone(),
-        );
+        let server = Server::new_with_prepairing(ServerConfig::dummy_config_wan(), test_handler.clone());
         let response = server
             .get_router()
             .oneshot(
@@ -1568,14 +1573,7 @@ mod tests {
     #[tokio::test]
     async fn prepairing_reject_role() {
         let test_handler = TestPrePairingHandler::new(PrePairingResponse::RejectUnwantedRole);
-        let server = Server::new_with_prepairing(
-            ServerConfig {
-                leaf_certificate: None,
-                endpoint_description: EndpointDescription::default(),
-                advertised_nodes: vec![],
-            },
-            test_handler.clone(),
-        );
+        let server = Server::new_with_prepairing(ServerConfig::dummy_config_wan(), test_handler.clone());
         let response = server
             .get_router()
             .oneshot(
@@ -1610,14 +1608,7 @@ mod tests {
     #[tokio::test]
     async fn cancel_prepairing() {
         let test_handler = TestPrePairingHandler::new(PrePairingResponse::Accept);
-        let server = Server::new_with_prepairing(
-            ServerConfig {
-                leaf_certificate: None,
-                endpoint_description: EndpointDescription::default(),
-                advertised_nodes: vec![],
-            },
-            test_handler.clone(),
-        );
+        let server = Server::new_with_prepairing(ServerConfig::dummy_config_wan(), test_handler.clone());
         let response = server
             .get_router()
             .oneshot(
@@ -1644,11 +1635,7 @@ mod tests {
 
     #[tokio::test]
     async fn pair_attempt() {
-        let server = Server::new(ServerConfig {
-            leaf_certificate: None,
-            endpoint_description: EndpointDescription::default(),
-            advertised_nodes: vec![],
-        });
+        let server = Server::new(ServerConfig::dummy_config_wan());
         server
             .allow_pair_once(
                 Arc::new(
@@ -1691,18 +1678,19 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let body = response.into_body().collect().await.unwrap().to_bytes();
         let response_data: RequestPairingResponse = serde_json::from_slice(&body).unwrap();
-        let expected_response = challenge.sha256(&Network::Wan, b"testtoken");
+        let expected_response = challenge.sha256(
+            &Network::Wan {
+                domain: "s2connect.example.com".into(),
+            },
+            b"testtoken",
+        );
         assert_eq!(expected_response, response_data.client_hmac_challenge_response);
         assert!(server.state.pending_pairings.lock().unwrap().alias_mappings.is_empty());
     }
 
     #[tokio::test]
     async fn pair_attempt_node_id() {
-        let server = Server::new(ServerConfig {
-            leaf_certificate: None,
-            endpoint_description: EndpointDescription::default(),
-            advertised_nodes: vec![],
-        });
+        let server = Server::new(ServerConfig::dummy_config_wan());
         server
             .allow_pair_repeated(
                 Arc::new(
@@ -1745,18 +1733,19 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let body = response.into_body().collect().await.unwrap().to_bytes();
         let response_data: RequestPairingResponse = serde_json::from_slice(&body).unwrap();
-        let expected_response = challenge.sha256(&Network::Wan, b"testtoken");
+        let expected_response = challenge.sha256(
+            &Network::Wan {
+                domain: "s2connect.example.com".into(),
+            },
+            b"testtoken",
+        );
         assert_eq!(expected_response, response_data.client_hmac_challenge_response);
         assert!(!server.state.pending_pairings.lock().unwrap().alias_mappings.is_empty());
     }
 
     #[tokio::test]
     async fn pair_attempt_no_node_identifier() {
-        let server = Server::new(ServerConfig {
-            leaf_certificate: None,
-            endpoint_description: EndpointDescription::default(),
-            advertised_nodes: vec![],
-        });
+        let server = Server::new(ServerConfig::dummy_config_wan());
         server
             .allow_pair_once(
                 Arc::new(
@@ -1799,18 +1788,19 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let body = response.into_body().collect().await.unwrap().to_bytes();
         let response_data: RequestPairingResponse = serde_json::from_slice(&body).unwrap();
-        let expected_response = challenge.sha256(&Network::Wan, b"testtoken");
+        let expected_response = challenge.sha256(
+            &Network::Wan {
+                domain: "s2connect.example.com".into(),
+            },
+            b"testtoken",
+        );
         assert_eq!(expected_response, response_data.client_hmac_challenge_response);
         assert!(server.state.pending_pairings.lock().unwrap().alias_mappings.is_empty());
     }
 
     #[tokio::test]
     async fn pair_attempt_need_node_identifier() {
-        let server = Server::new(ServerConfig {
-            leaf_certificate: None,
-            endpoint_description: EndpointDescription::default(),
-            advertised_nodes: vec![],
-        });
+        let server = Server::new(ServerConfig::dummy_config_wan());
         server
             .allow_pair_once(
                 Arc::new(
@@ -1858,11 +1848,7 @@ mod tests {
 
     #[tokio::test]
     async fn pair_attempt_no_common_communication() {
-        let server = Server::new(ServerConfig {
-            leaf_certificate: None,
-            endpoint_description: EndpointDescription::default(),
-            advertised_nodes: vec![],
-        });
+        let server = Server::new(ServerConfig::dummy_config_wan());
         server
             .allow_pair_once(
                 Arc::new(
@@ -1910,11 +1896,7 @@ mod tests {
 
     #[tokio::test]
     async fn pair_attempt_no_common_messages() {
-        let server = Server::new(ServerConfig {
-            leaf_certificate: None,
-            endpoint_description: EndpointDescription::default(),
-            advertised_nodes: vec![],
-        });
+        let server = Server::new(ServerConfig::dummy_config_wan());
         server
             .allow_pair_once(
                 Arc::new(
@@ -1962,11 +1944,7 @@ mod tests {
 
     #[tokio::test]
     async fn pair_attempt_forced() {
-        let server = Server::new(ServerConfig {
-            leaf_certificate: None,
-            endpoint_description: EndpointDescription::default(),
-            advertised_nodes: vec![],
-        });
+        let server = Server::new(ServerConfig::dummy_config_wan());
         server
             .allow_pair_once(
                 Arc::new(
@@ -2009,17 +1987,18 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let body = response.into_body().collect().await.unwrap().to_bytes();
         let response_data: RequestPairingResponse = serde_json::from_slice(&body).unwrap();
-        let expected_response = challenge.sha256(&Network::Wan, b"testtoken");
+        let expected_response = challenge.sha256(
+            &Network::Wan {
+                domain: "s2connect.example.com".into(),
+            },
+            b"testtoken",
+        );
         assert_eq!(expected_response, response_data.client_hmac_challenge_response);
     }
 
     #[tokio::test]
     async fn pair_attempt_with_unknown_node() {
-        let server = Server::new(ServerConfig {
-            leaf_certificate: None,
-            endpoint_description: EndpointDescription::default(),
-            advertised_nodes: vec![],
-        });
+        let server = Server::new(ServerConfig::dummy_config_wan());
 
         let response = server
             .get_router()
@@ -2053,11 +2032,7 @@ mod tests {
 
     #[tokio::test]
     async fn pair_attempt_same_role() {
-        let server = Server::new(ServerConfig {
-            leaf_certificate: None,
-            endpoint_description: EndpointDescription::default(),
-            advertised_nodes: vec![],
-        });
+        let server = Server::new(ServerConfig::dummy_config_wan());
         server
             .allow_pair_once(
                 Arc::new(
@@ -2105,11 +2080,7 @@ mod tests {
 
     #[tokio::test]
     async fn request_connection_details() {
-        let server = Server::new(ServerConfig {
-            leaf_certificate: None,
-            endpoint_description: EndpointDescription::default(),
-            advertised_nodes: vec![],
-        });
+        let server = Server::new(ServerConfig::dummy_config_wan());
         let mut attempts = server.state.attempts.lock().unwrap();
         let challenge = HmacChallenge::new(&mut rand::rng(), 64);
         attempts.insert(
@@ -2142,7 +2113,12 @@ mod tests {
                     .header(http::header::CONTENT_TYPE, "application/json")
                     .body(Body::from(
                         serde_json::to_vec(&RequestConnectionDetailsRequest {
-                            server_hmac_challenge_response: challenge.sha256(&Network::Wan, b"testtoken"),
+                            server_hmac_challenge_response: challenge.sha256(
+                                &Network::Wan {
+                                    domain: "s2connect.example.com".into(),
+                                },
+                                b"testtoken",
+                            ),
                         })
                         .unwrap(),
                     ))
@@ -2159,11 +2135,7 @@ mod tests {
 
     #[tokio::test]
     async fn request_connection_details_invalid_response() {
-        let server = Server::new(ServerConfig {
-            leaf_certificate: None,
-            endpoint_description: EndpointDescription::default(),
-            advertised_nodes: vec![],
-        });
+        let server = Server::new(ServerConfig::dummy_config_wan());
         let mut attempts = server.state.attempts.lock().unwrap();
         let challenge = HmacChallenge::new(&mut rand::rng(), 64);
         attempts.insert(
@@ -2196,7 +2168,12 @@ mod tests {
                     .header(http::header::CONTENT_TYPE, "application/json")
                     .body(Body::from(
                         serde_json::to_vec(&RequestConnectionDetailsRequest {
-                            server_hmac_challenge_response: challenge.sha256(&Network::Wan, b"testtoken2"),
+                            server_hmac_challenge_response: challenge.sha256(
+                                &Network::Wan {
+                                    domain: "example.com".into(),
+                                },
+                                b"testtoken2",
+                            ),
                         })
                         .unwrap(),
                     ))
@@ -2210,11 +2187,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn request_connection_details_too_late() {
-        let server = Server::new(ServerConfig {
-            leaf_certificate: None,
-            endpoint_description: EndpointDescription::default(),
-            advertised_nodes: vec![],
-        });
+        let server = Server::new(ServerConfig::dummy_config_wan());
         let mut attempts = server.state.attempts.lock().unwrap();
         let challenge = HmacChallenge::new(&mut rand::rng(), 64);
         attempts.insert(
@@ -2249,7 +2222,12 @@ mod tests {
                     .header(http::header::CONTENT_TYPE, "application/json")
                     .body(Body::from(
                         serde_json::to_vec(&RequestConnectionDetailsRequest {
-                            server_hmac_challenge_response: challenge.sha256(&Network::Wan, b"testtoken"),
+                            server_hmac_challenge_response: challenge.sha256(
+                                &Network::Wan {
+                                    domain: "example.com".into(),
+                                },
+                                b"testtoken",
+                            ),
                         })
                         .unwrap(),
                     ))
@@ -2263,11 +2241,7 @@ mod tests {
 
     #[tokio::test]
     async fn post_connection_details() {
-        let server = Server::new(ServerConfig {
-            leaf_certificate: None,
-            endpoint_description: EndpointDescription::default(),
-            advertised_nodes: vec![],
-        });
+        let server = Server::new(ServerConfig::dummy_config_wan());
         let mut attempts = server.state.attempts.lock().unwrap();
         let challenge = HmacChallenge::new(&mut rand::rng(), 64);
         attempts.insert(
@@ -2300,7 +2274,12 @@ mod tests {
                     .header(http::header::CONTENT_TYPE, "application/json")
                     .body(Body::from(
                         serde_json::to_vec(&PostConnectionDetailsRequest {
-                            server_hmac_challenge_response: challenge.sha256(&Network::Wan, b"testtoken"),
+                            server_hmac_challenge_response: challenge.sha256(
+                                &Network::Wan {
+                                    domain: "s2connect.example.com".into(),
+                                },
+                                b"testtoken",
+                            ),
                             connection_details: ConnectionDetails {
                                 initiate_session_url: "https://example.com/".into(),
                                 access_token: AccessToken::new(&mut rand::rng()),
@@ -2319,11 +2298,7 @@ mod tests {
 
     #[tokio::test]
     async fn post_connection_details_invalid_response() {
-        let server = Server::new(ServerConfig {
-            leaf_certificate: None,
-            endpoint_description: EndpointDescription::default(),
-            advertised_nodes: vec![],
-        });
+        let server = Server::new(ServerConfig::dummy_config_wan());
         let mut attempts = server.state.attempts.lock().unwrap();
         let challenge = HmacChallenge::new(&mut rand::rng(), 64);
         attempts.insert(
@@ -2356,7 +2331,12 @@ mod tests {
                     .header(http::header::CONTENT_TYPE, "application/json")
                     .body(Body::from(
                         serde_json::to_vec(&PostConnectionDetailsRequest {
-                            server_hmac_challenge_response: challenge.sha256(&Network::Wan, b"testtoken2"),
+                            server_hmac_challenge_response: challenge.sha256(
+                                &Network::Wan {
+                                    domain: "s2connect.example.com".into(),
+                                },
+                                b"testtoken2",
+                            ),
                             connection_details: ConnectionDetails {
                                 initiate_session_url: "https://example.com/".into(),
                                 access_token: AccessToken::new(&mut rand::rng()),
@@ -2375,11 +2355,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn post_connection_details_too_late() {
-        let server = Server::new(ServerConfig {
-            leaf_certificate: None,
-            endpoint_description: EndpointDescription::default(),
-            advertised_nodes: vec![],
-        });
+        let server = Server::new(ServerConfig::dummy_config_wan());
         let mut attempts = server.state.attempts.lock().unwrap();
         let challenge = HmacChallenge::new(&mut rand::rng(), 64);
         attempts.insert(
@@ -2414,7 +2390,12 @@ mod tests {
                     .header(http::header::CONTENT_TYPE, "application/json")
                     .body(Body::from(
                         serde_json::to_vec(&PostConnectionDetailsRequest {
-                            server_hmac_challenge_response: challenge.sha256(&Network::Wan, b"testtoken"),
+                            server_hmac_challenge_response: challenge.sha256(
+                                &Network::Wan {
+                                    domain: "s2connect.example.com".into(),
+                                },
+                                b"testtoken",
+                            ),
                             connection_details: ConnectionDetails {
                                 initiate_session_url: "https://example.com/".into(),
                                 access_token: AccessToken::new(&mut rand::rng()),
@@ -2433,11 +2414,7 @@ mod tests {
 
     #[tokio::test]
     async fn finalize() {
-        let server = Server::new(ServerConfig {
-            leaf_certificate: None,
-            endpoint_description: EndpointDescription::default(),
-            advertised_nodes: vec![],
-        });
+        let server = Server::new(ServerConfig::dummy_config_wan());
         let mut attempts = server.state.attempts.lock().unwrap();
         let (sender, receiver) = tokio::sync::oneshot::channel();
         let challenge = HmacChallenge::new(&mut rand::rng(), 64);
@@ -2481,11 +2458,7 @@ mod tests {
 
     #[tokio::test]
     async fn finalize_cancel() {
-        let server = Server::new(ServerConfig {
-            leaf_certificate: None,
-            endpoint_description: EndpointDescription::default(),
-            advertised_nodes: vec![],
-        });
+        let server = Server::new(ServerConfig::dummy_config_wan());
         let mut attempts = server.state.attempts.lock().unwrap();
         let (sender, receiver) = tokio::sync::oneshot::channel();
         let challenge = HmacChallenge::new(&mut rand::rng(), 64);
@@ -2529,11 +2502,7 @@ mod tests {
 
     #[tokio::test]
     async fn finalize_cancel_at_intermediate() {
-        let server = Server::new(ServerConfig {
-            leaf_certificate: None,
-            endpoint_description: EndpointDescription::default(),
-            advertised_nodes: vec![],
-        });
+        let server = Server::new(ServerConfig::dummy_config_wan());
         let mut attempts = server.state.attempts.lock().unwrap();
         let (sender, receiver) = tokio::sync::oneshot::channel();
         let challenge = HmacChallenge::new(&mut rand::rng(), 64);
@@ -2583,11 +2552,7 @@ mod tests {
 
     #[tokio::test]
     async fn finalize_unknown_session() {
-        let server = Server::new(ServerConfig {
-            leaf_certificate: None,
-            endpoint_description: EndpointDescription::default(),
-            advertised_nodes: vec![],
-        });
+        let server = Server::new(ServerConfig::dummy_config_wan());
 
         let response = server
             .get_router()
@@ -2606,11 +2571,7 @@ mod tests {
 
     #[tokio::test]
     async fn finalize_cancel_unknown_session() {
-        let server = Server::new(ServerConfig {
-            leaf_certificate: None,
-            endpoint_description: EndpointDescription::default(),
-            advertised_nodes: vec![],
-        });
+        let server = Server::new(ServerConfig::dummy_config_wan());
 
         let response = server
             .get_router()
@@ -2629,11 +2590,7 @@ mod tests {
 
     #[tokio::test]
     async fn finalize_handler_failed() {
-        let server = Server::new(ServerConfig {
-            leaf_certificate: None,
-            endpoint_description: EndpointDescription::default(),
-            advertised_nodes: vec![],
-        });
+        let server = Server::new(ServerConfig::dummy_config_wan());
         let mut attempts = server.state.attempts.lock().unwrap();
         let (sender, receiver) = tokio::sync::oneshot::channel();
         let challenge = HmacChallenge::new(&mut rand::rng(), 64);
@@ -2677,11 +2634,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn longpolling_timeout() {
-        let mut server = Server::new(ServerConfig {
-            leaf_certificate: None,
-            endpoint_description: EndpointDescription::default(),
-            advertised_nodes: vec![],
-        });
+        let mut server = Server::new(ServerConfig::dummy_config_wan());
 
         server.enable_longpolling().await;
 
@@ -2708,11 +2661,7 @@ mod tests {
 
     #[tokio::test]
     async fn longpolling_descriptions() {
-        let mut server = Server::new(ServerConfig {
-            leaf_certificate: None,
-            endpoint_description: EndpointDescription::default(),
-            advertised_nodes: vec![],
-        });
+        let mut server = Server::new(ServerConfig::dummy_config_wan());
 
         server.enable_longpolling().await;
 
@@ -2780,11 +2729,7 @@ mod tests {
 
     #[tokio::test]
     async fn longpolling_prepare_pairing() {
-        let mut server = Server::new(ServerConfig {
-            leaf_certificate: None,
-            endpoint_description: EndpointDescription::default(),
-            advertised_nodes: vec![],
-        });
+        let mut server = Server::new(ServerConfig::dummy_config_wan());
 
         server.enable_longpolling().await;
 
@@ -2845,11 +2790,7 @@ mod tests {
 
     #[tokio::test]
     async fn longpolling_cancel_prepare_pairing() {
-        let mut server = Server::new(ServerConfig {
-            leaf_certificate: None,
-            endpoint_description: EndpointDescription::default(),
-            advertised_nodes: vec![],
-        });
+        let mut server = Server::new(ServerConfig::dummy_config_wan());
 
         server.enable_longpolling().await;
 
@@ -2910,11 +2851,7 @@ mod tests {
 
     #[tokio::test]
     async fn longpolling_request_pairing_success() {
-        let mut server = Server::new(ServerConfig {
-            leaf_certificate: None,
-            endpoint_description: EndpointDescription::default(),
-            advertised_nodes: vec![],
-        });
+        let mut server = Server::new(ServerConfig::dummy_config_wan());
 
         server.enable_longpolling().await;
 
@@ -2992,11 +2929,7 @@ mod tests {
 
     #[tokio::test]
     async fn longpolling_request_pairing_failure() {
-        let mut server = Server::new(ServerConfig {
-            leaf_certificate: None,
-            endpoint_description: EndpointDescription::default(),
-            advertised_nodes: vec![],
-        });
+        let mut server = Server::new(ServerConfig::dummy_config_wan());
 
         server.enable_longpolling().await;
 
@@ -3060,11 +2993,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn longpolling_aborted_request_keeps_session_alive() {
-        let mut server = Server::new(ServerConfig {
-            leaf_certificate: None,
-            endpoint_description: EndpointDescription::default(),
-            advertised_nodes: vec![],
-        });
+        let mut server = Server::new(ServerConfig::dummy_config_wan());
 
         server.enable_longpolling().await;
 
@@ -3153,11 +3082,7 @@ mod tests {
     }
 
     async fn longpolling_disable_during_request() {
-        let mut server = Server::new(ServerConfig {
-            leaf_certificate: None,
-            endpoint_description: EndpointDescription::default(),
-            advertised_nodes: vec![],
-        });
+        let mut server = Server::new(ServerConfig::dummy_config_wan());
 
         server.enable_longpolling().await;
 

@@ -504,7 +504,13 @@ impl<'a> V1Session<'a> {
                 return Err(ErrorKind::ProtocolError.into());
             }
         } else {
-            Network::Wan
+            Network::Wan {
+                domain: self
+                    .base_url
+                    .domain()
+                    .expect("base_url has no domain, even though it is a WAN deployment")
+                    .to_owned(),
+            }
         };
 
         trace!(?network, "Determined network type of remote.");
@@ -527,6 +533,10 @@ impl<'a> V1Session<'a> {
                 let expected = client_hmac_challenge.sha256(&network, pairing_token);
 
                 if expected != request_pairing_response.client_hmac_challenge_response {
+                    trace!(
+                        "Invalid pairing token: using token {pairing_token:?}, got a result of {expected:?} but received a response of {:?}",
+                        request_pairing_response.client_hmac_challenge_response
+                    );
                     let _ = self.finalize(&attempt_id, false).await;
                     return Err(ErrorKind::InvalidToken.into());
                 }
@@ -810,10 +820,10 @@ mod tests {
         overrides: Router<()>,
     ) -> (Handle<SocketAddr>, JoinHandle<Pairing>, Server<impl PrePairingHandler>) {
         let server = Server::new_with_prepairing(
-            ServerConfig {
-                leaf_certificate: None,
+            ServerConfig::Lan {
+                leaf_certificate: CertificateDer::from_pem_slice(include_bytes!("../../testdata/localhost.pem")).unwrap(),
+                advertised_nodes: Vec::new(),
                 endpoint_description: EndpointDescription::default(),
-                advertised_nodes: vec![],
             },
             handler,
         );
@@ -1288,7 +1298,12 @@ mod tests {
                             server_node_description: basic_node_description(UUID_A, Role::Rm),
                             server_endpoint_description: EndpointDescription::default(),
                             selected_hmac_hashing_algorithm: crate::pairing::wire::HmacHashingAlgorithm::Sha256,
-                            client_hmac_challenge_response: request.client_hmac_challenge.sha256(&Network::Wan, b"testtoken"),
+                            client_hmac_challenge_response: request.client_hmac_challenge.sha256(
+                                &Network::Wan {
+                                    domain: "test.example.com".into(),
+                                },
+                                b"testtoken",
+                            ),
                             server_hmac_challenge: HmacChallenge::new(&mut rand::rng(), 32),
                         })
                     }),
