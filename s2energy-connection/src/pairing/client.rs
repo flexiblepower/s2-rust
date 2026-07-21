@@ -595,7 +595,7 @@ impl<'a> V1Session<'a> {
                 };
 
                 let initiate_url =
-                    Url::parse(&connection_details.initiate_connection_url).map_err(|e| Error::new(ErrorKind::ProtocolError, e))?;
+                    Url::parse(&connection_details.initiate_session_url).map_err(|e| Error::new(ErrorKind::ProtocolError, e))?;
                 let root_hash = if initiate_url.domain().map(|v| v.ends_with(".local")).unwrap_or_default()
                     || initiate_url.domain().map(|v| v.ends_with(".local.")).unwrap_or_default()
                 {
@@ -611,7 +611,7 @@ impl<'a> V1Session<'a> {
                     remote_node_description: request_pairing_response.server_node_description,
                     token: connection_details.access_token,
                     role: PairingRole::CommunicationClient {
-                        initiate_url: connection_details.initiate_connection_url,
+                        initiate_url: connection_details.initiate_session_url,
                         root_hash,
                     },
                 }
@@ -683,7 +683,7 @@ impl<'a> V1Session<'a> {
         let request = PostConnectionDetailsRequest {
             server_hmac_challenge_response,
             connection_details: ConnectionDetails {
-                initiate_connection_url,
+                initiate_session_url: initiate_connection_url,
                 access_token,
                 certificate_fingerprint,
             },

@@ -1097,7 +1097,7 @@ async fn v1_request_connection_details<H>(
 
                     let mut rng = rand::rng();
                     let connection_details = ConnectionDetails {
-                        initiate_connection_url: match &state.config.connection_initiate_url {
+                        initiate_session_url: match &state.config.connection_initiate_url {
                             Some(url) => url.clone(),
                             None => return (Err(StatusCode::BAD_REQUEST), None),
                         },
@@ -1196,7 +1196,7 @@ async fn v1_post_connection_details<H>(
                         remote_endpoint_description: state.remote_endpoint_description,
                         access_token: req.connection_details.access_token,
                         role: PairingRole::CommunicationClient {
-                            initiate_url: req.connection_details.initiate_connection_url,
+                            initiate_url: req.connection_details.initiate_session_url,
                             root_hash: req.connection_details.certificate_fingerprint,
                         },
                     });
@@ -2154,7 +2154,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let body = response.into_body().collect().await.unwrap().to_bytes();
         let response_data: ConnectionDetails = serde_json::from_slice(&body).unwrap();
-        assert_eq!(response_data.initiate_connection_url, "https://example.com/")
+        assert_eq!(response_data.initiate_session_url, "https://example.com/")
     }
 
     #[tokio::test]
@@ -2302,7 +2302,7 @@ mod tests {
                         serde_json::to_vec(&PostConnectionDetailsRequest {
                             server_hmac_challenge_response: challenge.sha256(&Network::Wan, b"testtoken"),
                             connection_details: ConnectionDetails {
-                                initiate_connection_url: "https://example.com/".into(),
+                                initiate_session_url: "https://example.com/".into(),
                                 access_token: AccessToken::new(&mut rand::rng()),
                                 certificate_fingerprint: None,
                             },
@@ -2358,7 +2358,7 @@ mod tests {
                         serde_json::to_vec(&PostConnectionDetailsRequest {
                             server_hmac_challenge_response: challenge.sha256(&Network::Wan, b"testtoken2"),
                             connection_details: ConnectionDetails {
-                                initiate_connection_url: "https://example.com/".into(),
+                                initiate_session_url: "https://example.com/".into(),
                                 access_token: AccessToken::new(&mut rand::rng()),
                                 certificate_fingerprint: None,
                             },
@@ -2416,7 +2416,7 @@ mod tests {
                         serde_json::to_vec(&PostConnectionDetailsRequest {
                             server_hmac_challenge_response: challenge.sha256(&Network::Wan, b"testtoken"),
                             connection_details: ConnectionDetails {
-                                initiate_connection_url: "https://example.com/".into(),
+                                initiate_session_url: "https://example.com/".into(),
                                 access_token: AccessToken::new(&mut rand::rng()),
                                 certificate_fingerprint: None,
                             },

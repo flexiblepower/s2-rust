@@ -36,7 +36,7 @@ pub(crate) enum CommunicationDetailsErrorMessage {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
-pub(crate) struct InitiateConnectionRequest {
+pub(crate) struct InitiateSessionRequest {
     #[serde(rename = "clientNodeId")]
     pub(crate) client_node_id: NodeId,
     #[serde(rename = "serverNodeId")]
@@ -52,7 +52,7 @@ pub(crate) struct InitiateConnectionRequest {
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
-pub(crate) struct InitiateConnectionResponse {
+pub(crate) struct InitiateSessionResponse {
     #[serde(rename = "selectedCommunicationProtocol")]
     pub(crate) communication_protocol: CommunicationProtocol,
     #[serde(rename = "selectedS2MessageVersion")]

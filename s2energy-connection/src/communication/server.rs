@@ -20,8 +20,8 @@ use crate::{
     communication::{
         ConnectionInfo, NodeConfig, WebSocketTransport,
         wire::{
-            CommunicationDetails, CommunicationDetailsErrorMessage, CommunicationToken, InitiateConnectionRequest,
-            InitiateConnectionResponse, UnpairRequest, WebSocketCommunicationDetails,
+            CommunicationDetails, CommunicationDetailsErrorMessage, CommunicationToken, InitiateSessionRequest,
+            InitiateSessionResponse, UnpairRequest, WebSocketCommunicationDetails,
         },
     },
 };
@@ -223,7 +223,7 @@ impl IntoResponse for CommunicationDetailsErrorMessage {
     }
 }
 
-impl IntoResponse for InitiateConnectionResponse {
+impl IntoResponse for InitiateSessionResponse {
     fn into_response(self) -> axum::response::Response {
         Json(self).into_response()
     }
@@ -267,7 +267,7 @@ async fn periodic_cleanup<Store>(state: Weak<AppStateInner<Store>>) {
 fn v1_router<Store: ServerPairingStore>() -> Router<AppState<Store>> {
     Router::new()
         .route("/unpair", post(v1_unpair))
-        .route("/initiateConnection", post(v1_initiate_connection))
+        .route("/initiateSession", post(v1_initiate_session))
         .route("/confirmAccessToken", post(v1_confirm_access_token))
         .route("/websocket", get(v1_websocket))
 }
@@ -301,10 +301,10 @@ async fn v1_unpair<Store: ServerPairingStore>(
 }
 
 #[tracing::instrument(skip_all, level = tracing::Level::INFO)]
-async fn v1_initiate_connection<Store: ServerPairingStore>(
+async fn v1_initiate_session<Store: ServerPairingStore>(
     State(state): State<AppState<Store>>,
     token: AccessToken,
-    Json(request): Json<InitiateConnectionRequest>,
+    Json(request): Json<InitiateSessionRequest>,
 ) -> axum::response::Response {
     let session_span = tracing::span!(parent: None, tracing::Level::ERROR, "Communication session", client = %request.client_node_id, server = %request.server_node_id);
     let session_span_clone = session_span.clone();
@@ -380,7 +380,7 @@ async fn v1_initiate_connection<Store: ServerPairingStore>(
 
         trace!("Stored session.");
 
-        InitiateConnectionResponse {
+        InitiateSessionResponse {
             communication_protocol,
             message_version,
             access_token: new_access_token,
@@ -522,8 +522,8 @@ mod tests {
             NodeConfig, Server, ServerConfig, ServerPairing, ServerPairingStore, WebSocketTransport,
             server::{Expiring, PendingWebsocket, Session},
             wire::{
-                CommunicationDetails, CommunicationDetailsErrorMessage, CommunicationToken, InitiateConnectionRequest,
-                InitiateConnectionResponse, UnpairRequest,
+                CommunicationDetails, CommunicationDetailsErrorMessage, CommunicationToken, InitiateSessionRequest,
+                InitiateSessionResponse, UnpairRequest,
             },
         },
     };
@@ -764,11 +764,11 @@ mod tests {
         let response = server
             .get_router()
             .oneshot(
-                http::Request::post("/v1/initiateConnection")
+                http::Request::post("/v1/initiateSession")
                     .header(http::header::AUTHORIZATION, "Bearer testtoken")
                     .header(http::header::CONTENT_TYPE, "application/json")
                     .body(Body::from(
-                        serde_json::to_vec(&InitiateConnectionRequest {
+                        serde_json::to_vec(&InitiateSessionRequest {
                             client_node_id: UUID_A.into(),
                             server_node_id: UUID_B.into(),
                             supported_message_versions: vec![MessageVersion("v1".into())],
@@ -784,7 +784,7 @@ mod tests {
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         let body = response.into_body().collect().await.unwrap().to_bytes();
-        let response_data: InitiateConnectionResponse = serde_json::from_slice(&body).unwrap();
+        let response_data: InitiateSessionResponse = serde_json::from_slice(&body).unwrap();
         assert_eq!(response_data.message_version, MessageVersion("v1".into()));
         assert_eq!(response_data.communication_protocol, CommunicationProtocol("WebSocket".into()));
         assert!(response_data.endpoint_description.is_none());
@@ -804,11 +804,11 @@ mod tests {
         let response = server
             .get_router()
             .oneshot(
-                http::Request::post("/v1/initiateConnection")
+                http::Request::post("/v1/initiateSession")
                     .header(http::header::AUTHORIZATION, "Bearer testtoken")
                     .header(http::header::CONTENT_TYPE, "application/json")
                     .body(Body::from(
-                        serde_json::to_vec(&InitiateConnectionRequest {
+                        serde_json::to_vec(&InitiateSessionRequest {
                             client_node_id: UUID_A.into(),
                             server_node_id: UUID_B.into(),
                             supported_message_versions: vec![MessageVersion("v1".into())],
@@ -838,11 +838,11 @@ mod tests {
         let response = server
             .get_router()
             .oneshot(
-                http::Request::post("/v1/initiateConnection")
+                http::Request::post("/v1/initiateSession")
                     .header(http::header::AUTHORIZATION, "Bearer testtoken")
                     .header(http::header::CONTENT_TYPE, "application/json")
                     .body(Body::from(
-                        serde_json::to_vec(&InitiateConnectionRequest {
+                        serde_json::to_vec(&InitiateSessionRequest {
                             client_node_id: UUID_B.into(),
                             server_node_id: UUID_A.into(),
                             supported_message_versions: vec![MessageVersion("v1".into())],
@@ -879,11 +879,11 @@ mod tests {
         let response = server
             .get_router()
             .oneshot(
-                http::Request::post("/v1/initiateConnection")
+                http::Request::post("/v1/initiateSession")
                     .header(http::header::AUTHORIZATION, "Bearer invalid")
                     .header(http::header::CONTENT_TYPE, "application/json")
                     .body(Body::from(
-                        serde_json::to_vec(&InitiateConnectionRequest {
+                        serde_json::to_vec(&InitiateSessionRequest {
                             client_node_id: UUID_A.into(),
                             server_node_id: UUID_B.into(),
                             supported_message_versions: vec![MessageVersion("v1".into())],
@@ -917,11 +917,11 @@ mod tests {
         let response = server
             .get_router()
             .oneshot(
-                http::Request::post("/v1/initiateConnection")
+                http::Request::post("/v1/initiateSession")
                     .header(http::header::AUTHORIZATION, "Bearer testtoken")
                     .header(http::header::CONTENT_TYPE, "application/json")
                     .body(Body::from(
-                        serde_json::to_vec(&InitiateConnectionRequest {
+                        serde_json::to_vec(&InitiateSessionRequest {
                             client_node_id: UUID_A.into(),
                             server_node_id: UUID_B.into(),
                             supported_message_versions: vec![MessageVersion("v1".into())],
@@ -958,11 +958,11 @@ mod tests {
         let response = server
             .get_router()
             .oneshot(
-                http::Request::post("/v1/initiateConnection")
+                http::Request::post("/v1/initiateSession")
                     .header(http::header::AUTHORIZATION, "Bearer testtoken")
                     .header(http::header::CONTENT_TYPE, "application/json")
                     .body(Body::from(
-                        serde_json::to_vec(&InitiateConnectionRequest {
+                        serde_json::to_vec(&InitiateSessionRequest {
                             client_node_id: UUID_A.into(),
                             server_node_id: UUID_B.into(),
                             supported_message_versions: vec![MessageVersion("v0".into())],
