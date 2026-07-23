@@ -1035,6 +1035,7 @@ async fn v1_request_pairing<H>(
         }
 
         trace!("Checked communication protocol and s2 message version compatibility.");
+        trace!(?state.network, "Computing response to challenge");
 
         debug_assert!(request_pairing.client_hmac_challenge.0.len() >= 32);
         let client_hmac_challenge_response = request_pairing

@@ -409,8 +409,10 @@ impl Client {
     }
 
     fn prepare_reqwest_client(&self, url: &Url) -> Result<(reqwest::Client, Option<HashProvider>), Error> {
-        let (client, certhash) = if url.domain().map(|v| v.ends_with(".local")).unwrap_or_default()
-            || url.domain().map(|v| v.ends_with(".local.")).unwrap_or_default()
+        let (client, certhash) = if url
+            .domain()
+            .map(|v| v.ends_with(".local") || v.ends_with(".local.") || v == "localhost")
+            .unwrap_or_default()
         {
             let (client, certhash) = hash_providing_https_client()?;
             (client, Some(certhash))
@@ -495,8 +497,11 @@ impl<'a> V1Session<'a> {
         let our_deployment = self.endpoint_description.deployment.unwrap_or(local_deployment);
         let our_role = self.config.node_description.role;
 
-        let network = if self.base_url.domain().map(|v| v.ends_with(".local")).unwrap_or_default()
-            || self.base_url.domain().map(|v| v.ends_with(".local.")).unwrap_or_default()
+        let network = if self
+            .base_url
+            .domain()
+            .map(|v| v.ends_with(".local") || v.ends_with(".local.") || v == "localhost")
+            .unwrap_or_default()
         {
             if let Some(hash) = certhash.as_ref().and_then(HashProvider::leaf_hash) {
                 Network::Lan { fingerprint: hash.clone() }

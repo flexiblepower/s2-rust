@@ -21,7 +21,7 @@ async fn main() {
 
     // TODO: determine a proper solution here - the deployment is local, but what certificate should we use?
     let server = Server::new(ServerConfig::Lan {
-        leaf_certificate: CertificateDer::from_pem_slice(include_bytes!("../testdata/root.pem")).unwrap(),
+        leaf_certificate: CertificateDer::from_pem_slice(include_bytes!("../testdata/localhost.pem")).unwrap(),
         endpoint_description: EndpointDescription::default(),
         advertised_nodes: vec![],
     });
