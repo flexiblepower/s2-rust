@@ -209,6 +209,7 @@ mod transport;
 pub(crate) mod wire;
 
 use rand::CryptoRng;
+use tracing::debug;
 
 use rustls::pki_types::CertificateDer;
 use wire::{HmacChallenge, HmacChallengeResponse};
@@ -399,14 +400,17 @@ impl HmacChallenge {
         use sha2::Sha256;
 
         let mut mac = Hmac::<Sha256>::new_from_slice(&self.0).expect("HMAC can take a key of any size");
+        debug!(?pairing_token, "Pairing token used for HMAC challenge response");
 
         match network {
             Network::Wan { domain } => {
+                debug!(domain = %domain, "WAN domain used for HMAC challenge response");
                 // R = HMAC(C, T)
                 mac.update(pairing_token);
                 mac.update(domain.as_bytes());
             }
             Network::Lan { fingerprint } => {
+                debug!(?fingerprint, "LAN fingerprint used for HMAC challenge response");
                 // R = HMAC(C, T || F)
                 mac.update(pairing_token);
                 mac.update(fingerprint);
