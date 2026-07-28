@@ -20,6 +20,16 @@ NAME="${1:-localhost}"
 CA="${2:-root}"
 FILENAME="${3:-$NAME}"
 
+# generate the CA with proper key usage extensions if it does not exist
+if [ ! -f "$CA".pem ] || [ ! -f "$CA".key ]; then
+	openssl genrsa -out "$CA".key 2048
+	openssl req -x509 -new -key "$CA".key -sha256 -days 1825 \
+		-subj "/C=AU/ST=Some-State/O=Internet Widgits Pty Ltd" \
+		-addext "basicConstraints=critical,CA:TRUE" \
+		-addext "keyUsage=critical,keyCertSign,cRLSign" \
+		-out "$CA".pem
+fi
+
 # generate a key
 openssl genrsa -out "$FILENAME".key 2048
 
