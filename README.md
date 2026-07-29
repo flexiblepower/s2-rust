@@ -51,6 +51,11 @@ and the client with
 cargo run --example full-client
 ```
 
+The full server example generates its S2 node ID at startup. To retrieve the current server node ID, query the nodes endpoint:
+```sh
+curl -sk https://<hostname>.local:8000/v1/nodes
+```
+
 Note: the full examples use `.local` hostnames such as `https://<hostname>.local:8000`. On WSL this hostname often does not resolve by default. If `https://localhost.local:8000` times out even though the server is running, add a hosts entry such as:
 ```sh
 sudo sh -c 'printf "\n127.0.0.1 localhost.local\n::1 localhost.local\n" >> /etc/hosts'
