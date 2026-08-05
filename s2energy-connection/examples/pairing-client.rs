@@ -29,7 +29,7 @@ async fn main() {
         },
         vec![MessageVersion("v1".into())],
     )
-    .with_connection_initiate_url("https://client.example.com".into())
+    .with_session_initiate_url("https://client.example.com".into())
     .build()
     .unwrap();
 
