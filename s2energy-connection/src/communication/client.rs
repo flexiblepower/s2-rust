@@ -13,7 +13,7 @@ use crate::{
         CommunicationResult, ConnectionInfo, Error, ErrorKind, NodeConfig, WebSocketTransport,
         transport::{hash_checking_http_client, hash_checking_verifier},
         wire::{
-            CommunicationDetails, CommunicationDetailsErrorMessage, InitiateConnectionRequest, InitiateConnectionResponse, UnpairRequest,
+            CommunicationDetails, CommunicationDetailsErrorMessage, InitiateSessionRequest, InitiateSessionResponse, UnpairRequest,
         },
     },
 };
@@ -114,7 +114,7 @@ impl Client {
                     }
 
                     if response.status() != StatusCode::NO_CONTENT {
-                        debug!(status = ?response.status(), "Unexpected status in response to initiateConnection request.");
+                        debug!(status = ?response.status(), "Unexpected status in response to initiateSession request.");
                         return Err(ErrorKind::ProtocolError.into());
                     }
 
@@ -152,7 +152,7 @@ impl Client {
             crate::common::wire::PairingVersion::V1 => {
                 let base_url = communication_url.join("v1/").unwrap();
 
-                let request = InitiateConnectionRequest {
+                let request = InitiateSessionRequest {
                     client_node_id: pairing.client_id(),
                     server_node_id: pairing.server_id(),
                     supported_message_versions: self.config.supported_message_versions.clone(),
@@ -164,7 +164,7 @@ impl Client {
                 let (initiate_response, current_token) = 'found: {
                     for token in pairing.access_tokens().as_ref() {
                         let response = client
-                            .post(base_url.join("initiateConnection").unwrap())
+                            .post(base_url.join("initiateSession").unwrap())
                             .bearer_auth(&token.0)
                             .json(&request)
                             .send()
@@ -194,13 +194,13 @@ impl Client {
                         }
 
                         if response.status() != StatusCode::OK {
-                            debug!(status = ?response.status(), "Unexpected status in response to initiateConnection request.");
+                            debug!(status = ?response.status(), "Unexpected status in response to initiateSession request.");
                             return Err(ErrorKind::ProtocolError.into());
                         }
 
                         break 'found (
                             response
-                                .json::<InitiateConnectionResponse>()
+                                .json::<InitiateSessionResponse>()
                                 .await
                                 .map_err(|e| Error::new(ErrorKind::TransportFailed, e))?,
                             token.clone(),
@@ -321,7 +321,7 @@ mod tests {
         communication::{
             self, Client, ClientConfig, ClientPairing, ErrorKind, NodeConfig, PairingLookup, Server, ServerConfig, ServerPairing,
             ServerPairingStore,
-            wire::{CommunicationDetailsErrorMessage, InitiateConnectionResponse},
+            wire::{CommunicationDetailsErrorMessage, InitiateSessionResponse},
         },
     };
 
@@ -799,7 +799,7 @@ mod tests {
             store.clone(),
             None,
             Router::new().route(
-                "/v1/initiateConnection",
+                "/v1/initiateSession",
                 post(|| async { CommunicationDetailsErrorMessage::IncompatibleCommunicationProtocols }),
             ),
         )
@@ -838,7 +838,7 @@ mod tests {
             store.clone(),
             None,
             Router::new().route(
-                "/v1/initiateConnection",
+                "/v1/initiateSession",
                 post(|| async { CommunicationDetailsErrorMessage::IncompatibleS2MessageVersions }),
             ),
         )
@@ -877,9 +877,9 @@ mod tests {
             store.clone(),
             None,
             Router::new().route(
-                "/v1/initiateConnection",
+                "/v1/initiateSession",
                 post(|| async {
-                    InitiateConnectionResponse {
+                    InitiateSessionResponse {
                         communication_protocol: CommunicationProtocol("Unknown".into()),
                         message_version: MessageVersion("v1".into()),
                         access_token: AccessToken::new(&mut rand::rng()),
@@ -924,9 +924,9 @@ mod tests {
             store.clone(),
             None,
             Router::new().route(
-                "/v1/initiateConnection",
+                "/v1/initiateSession",
                 post(|| async {
-                    InitiateConnectionResponse {
+                    InitiateSessionResponse {
                         communication_protocol: CommunicationProtocol("WebSocket".into()),
                         message_version: MessageVersion("v0".into()),
                         access_token: AccessToken::new(&mut rand::rng()),

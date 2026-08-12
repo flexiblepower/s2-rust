@@ -207,7 +207,7 @@ impl From<ConfigError> for ErrorKind {
 /// Error for problems with inconsistent [`NodeConfig`](super::NodeConfig).
 #[derive(Error, Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum ConfigError {
-    /// The [`NodeConfig`](super::NodeConfig) doesn't have an `connection_initiate_url` even though it is needed for the configuration to make sense.
-    #[error("Missing connection_initiate_url, even though it is required for CEM and WAN endpoints")]
+    /// The [`NodeConfig`](super::NodeConfig) doesn't have an `session_initiate_url` even though it is needed for the configuration to make sense.
+    #[error("Missing session_initiate_url, even though it is required for CEM and WAN endpoints")]
     MissingInitiateUrl,
 }

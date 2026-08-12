@@ -235,7 +235,7 @@ pub(crate) struct CancelPrePairingRequest {
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ConnectionDetails {
-    pub initiate_connection_url: String,
+    pub initiate_session_url: String,
     pub access_token: AccessToken,
     #[serde(
         default,

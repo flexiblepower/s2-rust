@@ -161,7 +161,7 @@ impl<H: PrePairingHandler, Store: CombinedServerPairingStore> Server<H, Store> {
             node_description,
             supported_message_versions: message_versions,
             supported_communication_protocols: vec![CommunicationProtocol("WebSocket".into())],
-            connection_initiate_url: Some(self.base_url.clone()),
+            session_initiate_url: Some(self.base_url.clone()),
             root_certificate: self.root_certificate.clone(),
         };
 
@@ -208,7 +208,7 @@ impl<H: PrePairingHandler, Store: CombinedServerPairingStore> Server<H, Store> {
             node_description,
             supported_message_versions: message_versions,
             supported_communication_protocols: vec![CommunicationProtocol("WebSocket".into())],
-            connection_initiate_url: Some(self.base_url.clone()),
+            session_initiate_url: Some(self.base_url.clone()),
             root_certificate: self.root_certificate.clone(),
         };
 

@@ -346,7 +346,7 @@ impl Client {
         let span = span!(tracing::Level::ERROR, "prepair", local = %local_node.node_description.id, remote = ?remote);
         let span_clone = span.clone();
         async move {
-            if self.endpoint_description.deployment == Some(Deployment::Wan) && local_node.connection_initiate_url.is_none() {
+            if self.endpoint_description.deployment == Some(Deployment::Wan) && local_node.session_initiate_url.is_none() {
                 return Err(ErrorKind::InvalidConfig(ConfigError::MissingInitiateUrl).into());
             }
 
@@ -386,7 +386,7 @@ impl Client {
         pairing_token: &[u8],
         callback: impl AsyncFnOnce(Pairing) -> Result<(), E>,
     ) -> PairingResult<()> {
-        if self.endpoint_description.deployment == Some(Deployment::Wan) && local_node.connection_initiate_url.is_none() {
+        if self.endpoint_description.deployment == Some(Deployment::Wan) && local_node.session_initiate_url.is_none() {
             return Err(ErrorKind::InvalidConfig(ConfigError::MissingInitiateUrl).into());
         }
 
@@ -543,7 +543,7 @@ impl<'a> V1Session<'a> {
         trace!("Computed pairing token challenge response.");
 
         enum CommunicationRole {
-            CommunicationServer { initiate_connection_url: String },
+            CommunicationServer { initiate_session_url: String },
             CommunicationClient,
         }
 
@@ -555,7 +555,7 @@ impl<'a> V1Session<'a> {
             (Deployment::Lan, _, Deployment::Wan, _) => CommunicationRole::CommunicationClient,
             // unwrap is okay here, as Deployment::Wan or S2Role::Cem locally means we will ALWAYS have a connection initiate url.
             (Deployment::Wan, _, Deployment::Lan, _) | (_, Role::Cem, _, Role::Rm) => CommunicationRole::CommunicationServer {
-                initiate_connection_url: self.config.connection_initiate_url.as_ref().unwrap().into(),
+                initiate_session_url: self.config.session_initiate_url.as_ref().unwrap().into(),
             },
             (_, Role::Rm, _, Role::Cem) => CommunicationRole::CommunicationClient,
         };
@@ -563,13 +563,13 @@ impl<'a> V1Session<'a> {
         trace!("Determined communication role.");
 
         let pairing = match role {
-            CommunicationRole::CommunicationServer { initiate_connection_url } => {
+            CommunicationRole::CommunicationServer { initiate_session_url } => {
                 let access_token = AccessToken::new(&mut rand::rng());
                 if let Err(e) = self
                     .post_connection_details(
                         &attempt_id,
                         server_hmac_challenge_response,
-                        initiate_connection_url.clone(),
+                        initiate_session_url.clone(),
                         access_token.clone(),
                         self.config.root_certificate.as_deref().map(CertificateHash::sha256),
                     )
@@ -595,7 +595,7 @@ impl<'a> V1Session<'a> {
                 };
 
                 let initiate_url =
-                    Url::parse(&connection_details.initiate_connection_url).map_err(|e| Error::new(ErrorKind::ProtocolError, e))?;
+                    Url::parse(&connection_details.initiate_session_url).map_err(|e| Error::new(ErrorKind::ProtocolError, e))?;
                 let root_hash = if initiate_url.domain().map(|v| v.ends_with(".local")).unwrap_or_default()
                     || initiate_url.domain().map(|v| v.ends_with(".local.")).unwrap_or_default()
                 {
@@ -611,7 +611,7 @@ impl<'a> V1Session<'a> {
                     remote_node_description: request_pairing_response.server_node_description,
                     token: connection_details.access_token,
                     role: PairingRole::CommunicationClient {
-                        initiate_url: connection_details.initiate_connection_url,
+                        initiate_url: connection_details.initiate_session_url,
                         root_hash,
                     },
                 }
@@ -676,14 +676,14 @@ impl<'a> V1Session<'a> {
         &self,
         attempt_id: &PairingAttemptId,
         server_hmac_challenge_response: HmacChallengeResponse,
-        initiate_connection_url: String,
+        initiate_session_url: String,
         access_token: AccessToken,
         certificate_fingerprint: Option<CertificateHash>,
     ) -> PairingResult<()> {
         let request = PostConnectionDetailsRequest {
             server_hmac_challenge_response,
             connection_details: ConnectionDetails {
-                initiate_connection_url,
+                initiate_session_url,
                 access_token,
                 certificate_fingerprint,
             },
@@ -864,7 +864,7 @@ mod tests {
     #[tokio::test]
     async fn descriptors() {
         let server_config = NodeConfig::builder(basic_node_description(UUID_A, Role::Cem), vec![MessageVersion("v1".into())])
-            .with_connection_initiate_url("test.example.com".into())
+            .with_session_initiate_url("test.example.com".into())
             .build()
             .unwrap();
 
@@ -905,7 +905,7 @@ mod tests {
     #[tokio::test]
     async fn descriptors_forbidden() {
         let server_config = NodeConfig::builder(basic_node_description(UUID_A, Role::Cem), vec![MessageVersion("v1".into())])
-            .with_connection_initiate_url("test.example.com".into())
+            .with_session_initiate_url("test.example.com".into())
             .build()
             .unwrap();
 
@@ -936,12 +936,12 @@ mod tests {
     #[tokio::test]
     async fn pairing_ok_rm_initiates() {
         let server_config = NodeConfig::builder(basic_node_description(UUID_A, Role::Cem), vec![MessageVersion("v1".into())])
-            .with_connection_initiate_url("https://test.example.com".into())
+            .with_session_initiate_url("https://test.example.com".into())
             .build()
             .unwrap();
 
         let client_config = NodeConfig::builder(basic_node_description(UUID_B, Role::Rm), vec![MessageVersion("v1".into())])
-            .with_connection_initiate_url("https://client.example.com".into())
+            .with_session_initiate_url("https://client.example.com".into())
             .build()
             .unwrap();
 
@@ -980,12 +980,12 @@ mod tests {
     #[tokio::test]
     async fn pairing_ok_cem_initiates() {
         let server_config = NodeConfig::builder(basic_node_description(UUID_A, Role::Rm), vec![MessageVersion("v1".into())])
-            .with_connection_initiate_url("test.example.com".into())
+            .with_session_initiate_url("test.example.com".into())
             .build()
             .unwrap();
 
         let client_config = NodeConfig::builder(basic_node_description(UUID_B, Role::Cem), vec![MessageVersion("v1".into())])
-            .with_connection_initiate_url("client.example.com".into())
+            .with_session_initiate_url("client.example.com".into())
             .build()
             .unwrap();
 
@@ -1064,12 +1064,12 @@ mod tests {
     #[tokio::test]
     async fn prepairing_then_pair() {
         let server_config = NodeConfig::builder(basic_node_description(UUID_A, Role::Rm), vec![MessageVersion("v1".into())])
-            .with_connection_initiate_url("test.example.com".into())
+            .with_session_initiate_url("test.example.com".into())
             .build()
             .unwrap();
 
         let client_config = NodeConfig::builder(basic_node_description(UUID_B, Role::Cem), vec![MessageVersion("v1".into())])
-            .with_connection_initiate_url("client.example.com".into())
+            .with_session_initiate_url("client.example.com".into())
             .build()
             .unwrap();
 
@@ -1117,12 +1117,12 @@ mod tests {
     #[tokio::test]
     async fn prepairing_then_cancel() {
         let server_config = NodeConfig::builder(basic_node_description(UUID_A, Role::Rm), vec![MessageVersion("v1".into())])
-            .with_connection_initiate_url("test.example.com".into())
+            .with_session_initiate_url("test.example.com".into())
             .build()
             .unwrap();
 
         let client_config = NodeConfig::builder(basic_node_description(UUID_B, Role::Cem), vec![MessageVersion("v1".into())])
-            .with_connection_initiate_url("client.example.com".into())
+            .with_session_initiate_url("client.example.com".into())
             .build()
             .unwrap();
 
@@ -1164,12 +1164,12 @@ mod tests {
     #[tokio::test]
     async fn prepairing_rejected() {
         let server_config = NodeConfig::builder(basic_node_description(UUID_A, Role::Rm), vec![MessageVersion("v1".into())])
-            .with_connection_initiate_url("test.example.com".into())
+            .with_session_initiate_url("test.example.com".into())
             .build()
             .unwrap();
 
         let client_config = NodeConfig::builder(basic_node_description(UUID_B, Role::Cem), vec![MessageVersion("v1".into())])
-            .with_connection_initiate_url("client.example.com".into())
+            .with_session_initiate_url("client.example.com".into())
             .build()
             .unwrap();
 
@@ -1199,12 +1199,12 @@ mod tests {
     #[tokio::test]
     async fn pairing_rejects_invalid_hmac() {
         let server_config = NodeConfig::builder(basic_node_description(UUID_A, Role::Cem), vec![MessageVersion("v1".into())])
-            .with_connection_initiate_url("test.example.com".into())
+            .with_session_initiate_url("test.example.com".into())
             .build()
             .unwrap();
 
         let client_config = NodeConfig::builder(basic_node_description(UUID_B, Role::Rm), vec![MessageVersion("v1".into())])
-            .with_connection_initiate_url("client.example.com".into())
+            .with_session_initiate_url("client.example.com".into())
             .build()
             .unwrap();
 
@@ -1266,12 +1266,12 @@ mod tests {
     #[tokio::test]
     async fn pairing_rejects_same_role() {
         let server_config = NodeConfig::builder(basic_node_description(UUID_A, Role::Rm), vec![MessageVersion("v1".into())])
-            .with_connection_initiate_url("test.example.com".into())
+            .with_session_initiate_url("test.example.com".into())
             .build()
             .unwrap();
 
         let client_config = NodeConfig::builder(basic_node_description(UUID_B, Role::Rm), vec![MessageVersion("v1".into())])
-            .with_connection_initiate_url("client.example.com".into())
+            .with_session_initiate_url("client.example.com".into())
             .build()
             .unwrap();
 
@@ -1333,12 +1333,12 @@ mod tests {
     #[tokio::test]
     async fn pairing_rejects_same_role_reported_by_server() {
         let server_config = NodeConfig::builder(basic_node_description(UUID_A, Role::Rm), vec![MessageVersion("v1".into())])
-            .with_connection_initiate_url("test.example.com".into())
+            .with_session_initiate_url("test.example.com".into())
             .build()
             .unwrap();
 
         let client_config = NodeConfig::builder(basic_node_description(UUID_B, Role::Rm), vec![MessageVersion("v1".into())])
-            .with_connection_initiate_url("client.example.com".into())
+            .with_session_initiate_url("client.example.com".into())
             .build()
             .unwrap();
 
@@ -1396,12 +1396,12 @@ mod tests {
     #[tokio::test]
     async fn pairing_invokes_finalize_on_bad_request_connection_details() {
         let server_config = NodeConfig::builder(basic_node_description(UUID_A, Role::Cem), vec![MessageVersion("v1".into())])
-            .with_connection_initiate_url("test.example.com".into())
+            .with_session_initiate_url("test.example.com".into())
             .build()
             .unwrap();
 
         let client_config = NodeConfig::builder(basic_node_description(UUID_B, Role::Rm), vec![MessageVersion("v1".into())])
-            .with_connection_initiate_url("client.example.com".into())
+            .with_session_initiate_url("client.example.com".into())
             .build()
             .unwrap();
 
@@ -1448,12 +1448,12 @@ mod tests {
     #[tokio::test]
     async fn pairing_invokes_finalize_on_bad_post_connection_details() {
         let server_config = NodeConfig::builder(basic_node_description(UUID_A, Role::Rm), vec![MessageVersion("v1".into())])
-            .with_connection_initiate_url("test.example.com".into())
+            .with_session_initiate_url("test.example.com".into())
             .build()
             .unwrap();
 
         let client_config = NodeConfig::builder(basic_node_description(UUID_B, Role::Cem), vec![MessageVersion("v1".into())])
-            .with_connection_initiate_url("client.example.com".into())
+            .with_session_initiate_url("client.example.com".into())
             .build()
             .unwrap();
 
@@ -1500,12 +1500,12 @@ mod tests {
     #[tokio::test]
     async fn pairing_invokes_finalize_on_callback_failure() {
         let server_config = NodeConfig::builder(basic_node_description(UUID_A, Role::Rm), vec![MessageVersion("v1".into())])
-            .with_connection_initiate_url("test.example.com".into())
+            .with_session_initiate_url("test.example.com".into())
             .build()
             .unwrap();
 
         let client_config = NodeConfig::builder(basic_node_description(UUID_B, Role::Cem), vec![MessageVersion("v1".into())])
-            .with_connection_initiate_url("client.example.com".into())
+            .with_session_initiate_url("client.example.com".into())
             .build()
             .unwrap();
 
@@ -1550,7 +1550,7 @@ mod tests {
     #[tokio::test]
     async fn longpolling() {
         let server_config = NodeConfig::builder(basic_node_description(UUID_A, Role::Cem), vec![MessageVersion("v1".into())])
-            .with_connection_initiate_url("https://test.example.com".into())
+            .with_session_initiate_url("https://test.example.com".into())
             .build()
             .unwrap();
 
@@ -1560,7 +1560,7 @@ mod tests {
 
         let client_task = async move {
             let client_config = NodeConfig::builder(basic_node_description(UUID_B, Role::Rm), vec![MessageVersion("v1".into())])
-                .with_connection_initiate_url("client.example.com".into())
+                .with_session_initiate_url("client.example.com".into())
                 .build()
                 .unwrap();
 
@@ -1653,7 +1653,7 @@ mod tests {
     #[tokio::test]
     async fn longpolling_request_pairing_not_ready() {
         let server_config = NodeConfig::builder(basic_node_description(UUID_A, Role::Cem), vec![MessageVersion("v1".into())])
-            .with_connection_initiate_url("test.example.com".into())
+            .with_session_initiate_url("test.example.com".into())
             .build()
             .unwrap();
 
@@ -1663,7 +1663,7 @@ mod tests {
 
         let client_task = tokio::spawn(async move {
             let client_config = NodeConfig::builder(basic_node_description(UUID_B, Role::Rm), vec![MessageVersion("v1".into())])
-                .with_connection_initiate_url("client.example.com".into())
+                .with_session_initiate_url("client.example.com".into())
                 .build()
                 .unwrap();
 
@@ -1709,12 +1709,12 @@ mod tests {
     #[tokio::test]
     async fn longpolling_cancelled() {
         let server_config = NodeConfig::builder(basic_node_description(UUID_A, Role::Cem), vec![MessageVersion("v1".into())])
-            .with_connection_initiate_url("test.example.com".into())
+            .with_session_initiate_url("test.example.com".into())
             .build()
             .unwrap();
 
         let client_config = NodeConfig::builder(basic_node_description(UUID_B, Role::Rm), vec![MessageVersion("v1".into())])
-            .with_connection_initiate_url("client.example.com".into())
+            .with_session_initiate_url("client.example.com".into())
             .build()
             .unwrap();
 
@@ -1762,12 +1762,12 @@ mod tests {
     #[tokio::test]
     async fn longpolling_rejected() {
         let server_config = NodeConfig::builder(basic_node_description(UUID_A, Role::Cem), vec![MessageVersion("v1".into())])
-            .with_connection_initiate_url("test.example.com".into())
+            .with_session_initiate_url("test.example.com".into())
             .build()
             .unwrap();
 
         let client_config = NodeConfig::builder(basic_node_description(UUID_B, Role::Rm), vec![MessageVersion("v1".into())])
-            .with_connection_initiate_url("client.example.com".into())
+            .with_session_initiate_url("client.example.com".into())
             .build()
             .unwrap();
 

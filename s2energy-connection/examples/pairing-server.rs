@@ -35,7 +35,7 @@ async fn main() {
         },
         vec![MessageVersion("v1".into())],
     )
-    .with_connection_initiate_url("https://test.example.com".into())
+    .with_session_initiate_url("https://test.example.com".into())
     .build()
     .unwrap();
     let app = server.get_router();
