@@ -16,7 +16,9 @@ pub(crate) enum CommunicationDetails {
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct WebSocketCommunicationDetails {
+    #[serde(rename = "websocketToken")]
     pub(crate) websocket_token: CommunicationToken,
+    #[serde(rename = "websocketUrl")]
     pub(crate) websocket_url: String,
 }
 
