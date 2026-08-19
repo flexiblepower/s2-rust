@@ -9,6 +9,7 @@ axum-extra.workspace = true
 base64.workspace = true
 futures-util.workspace = true
 generic-array.workspace = true
+hex.workspace = true
 hmac.workspace = true
 http.workspace = true
 hyper.workspace = true
