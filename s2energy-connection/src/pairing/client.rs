@@ -1590,7 +1590,7 @@ mod tests {
             let client = Client::new(ClientConfig {
                 additional_certificates: vec![CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()],
                 endpoint_description: EndpointDescription::default(),
-                pairing_deployment: Deployment::Wan,
+                pairing_deployment: Deployment::Lan,
             })
             .unwrap();
 
