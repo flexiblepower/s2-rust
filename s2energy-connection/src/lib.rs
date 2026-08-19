@@ -29,7 +29,7 @@ pub struct CertificateHash(CertificateHashInner);
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
 enum CertificateHashInner {
-    Sha256(sha2::digest::generic_array::GenericArray<u8, <sha2::Sha256 as sha2::digest::OutputSizeUser>::OutputSize>),
+    Sha256(sha2::digest::array::Array<u8, <sha2::Sha256 as sha2::digest::OutputSizeUser>::OutputSize>),
 }
 
 impl CertificateHash {

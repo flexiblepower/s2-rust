@@ -208,6 +208,7 @@ mod server;
 mod transport;
 pub(crate) mod wire;
 
+use hmac::KeyInit;
 use rand::CryptoRng;
 
 use rustls::pki_types::CertificateDer;

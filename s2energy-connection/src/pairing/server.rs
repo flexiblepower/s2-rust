@@ -17,7 +17,7 @@ use axum::{
 };
 use base64::{DecodeError, Engine, display::Base64Display, prelude::BASE64_STANDARD};
 use rand::{
-    RngCore,
+    Rng,
     distr::{Alphanumeric, SampleString},
 };
 use reqwest::StatusCode;
