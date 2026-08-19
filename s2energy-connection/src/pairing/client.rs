@@ -987,7 +987,10 @@ mod tests {
         let server_pairing = server_pairing.await.unwrap();
         assert_eq!(client_pairing.token, server_pairing.token);
         assert_ne!(client_pairing.role, server_pairing.role);
-        assert!(matches!(client_pairing.role, PairingRole::CommunicationClient { .. }));
+        // Note that the RM is a WAN deployment and the CEM a LAN deployment here; in this scenario,
+        // the RM should be the server and the CEM should be the client.
+        assert!(matches!(client_pairing.role, PairingRole::CommunicationServer { .. }));
+        assert!(matches!(server_pairing.role, PairingRole::CommunicationClient { .. }));
 
         server_handle.shutdown();
     }
