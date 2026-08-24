@@ -56,9 +56,13 @@ The full server example generates its S2 node ID at startup. To retrieve the cur
 curl -sk https://<hostname>.local:8000/v1/nodes
 ```
 
-Note: the full examples use `.local` hostnames such as `https://<hostname>.local:8000`. On WSL this hostname often does not resolve by default. If `https://localhost.local:8000` times out even though the server is running, add a hosts entry such as:
+Note: the full examples use `.local` hostnames such as `https://<hostname>.local:8000`. On WSL this hostname often does not resolve by default. If `https://localhost.local:8000` times out even though the server is running, add both IPv4 and IPv6 loopback entries:
 ```sh
 sudo sh -c 'printf "\n127.0.0.1 localhost.local\n::1 localhost.local\n" >> /etc/hosts'
+```
+If you only want IPv4, use:
+```sh
+echo "127.0.0.1 localhost.local" | sudo tee -a /etc/hosts
 ```
 Alternatively, configure mDNS resolution in WSL so `.local` names resolve through Avahi.
 
