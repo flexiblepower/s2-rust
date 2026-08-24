@@ -558,7 +558,7 @@ impl<'a> V1Session<'a> {
         trace!("Computed pairing token challenge response.");
 
         enum CommunicationRole {
-            CommunicationServer { initiate_connection_url: String },
+            CommunicationServer { initiate_session_url: String },
             CommunicationClient,
         }
 
@@ -570,7 +570,7 @@ impl<'a> V1Session<'a> {
             (Deployment::Lan, _, Deployment::Wan, _) => CommunicationRole::CommunicationClient,
             // unwrap is okay here, as Deployment::Wan or S2Role::Cem locally means we will ALWAYS have a connection initiate url.
             (Deployment::Wan, _, Deployment::Lan, _) | (_, Role::Cem, _, Role::Rm) => CommunicationRole::CommunicationServer {
-                initiate_connection_url: self.config.session_initiate_url.as_ref().unwrap().into(),
+                initiate_session_url: self.config.session_initiate_url.as_ref().unwrap().into(),
             },
             (_, Role::Rm, _, Role::Cem) => CommunicationRole::CommunicationClient,
         };
@@ -578,13 +578,13 @@ impl<'a> V1Session<'a> {
         trace!("Determined communication role.");
 
         let pairing = match role {
-            CommunicationRole::CommunicationServer { initiate_connection_url } => {
+            CommunicationRole::CommunicationServer { initiate_session_url } => {
                 let access_token = AccessToken::new(&mut rand::rng());
                 if let Err(e) = self
                     .post_connection_details(
                         &attempt_id,
                         server_hmac_challenge_response,
-                        initiate_connection_url.clone(),
+                        initiate_session_url.clone(),
                         access_token.clone(),
                         self.config.root_certificate.as_deref().map(CertificateHash::sha256),
                     )
@@ -691,14 +691,14 @@ impl<'a> V1Session<'a> {
         &self,
         attempt_id: &PairingAttemptId,
         server_hmac_challenge_response: HmacChallengeResponse,
-        initiate_connection_url: String,
+        initiate_session_url: String,
         access_token: AccessToken,
         certificate_fingerprint: Option<CertificateHash>,
     ) -> PairingResult<()> {
         let request = PostConnectionDetailsRequest {
             server_hmac_challenge_response,
             connection_details: ConnectionDetails {
-                initiate_session_url: initiate_connection_url,
+                initiate_session_url,
                 access_token,
                 certificate_fingerprint,
             },
@@ -987,7 +987,10 @@ mod tests {
         let server_pairing = server_pairing.await.unwrap();
         assert_eq!(client_pairing.token, server_pairing.token);
         assert_ne!(client_pairing.role, server_pairing.role);
-        assert!(matches!(client_pairing.role, PairingRole::CommunicationClient { .. }));
+        // Note that the RM is a WAN deployment and the CEM a LAN deployment here; in this scenario,
+        // the RM should be the server and the CEM should be the client.
+        assert!(matches!(client_pairing.role, PairingRole::CommunicationServer { .. }));
+        assert!(matches!(server_pairing.role, PairingRole::CommunicationClient { .. }));
 
         server_handle.shutdown();
     }
@@ -1587,7 +1590,7 @@ mod tests {
             let client = Client::new(ClientConfig {
                 additional_certificates: vec![CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()],
                 endpoint_description: EndpointDescription::default(),
-                pairing_deployment: Deployment::Wan,
+                pairing_deployment: Deployment::Lan,
             })
             .unwrap();
 

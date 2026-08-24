@@ -249,20 +249,18 @@ pub(crate) struct ConnectionDetails {
 }
 
 pub(crate) fn serialize_fingerprint<S: Serializer>(value: &Option<CertificateHash>, serializer: S) -> Result<S::Ok, S::Error> {
-    use base64::{Engine, engine::general_purpose::STANDARD};
     // Unwrap is ok here as we serialize only when not none.
-    let encoded = STANDARD.encode(value.as_deref().unwrap() as &[u8]);
+    let encoded = hex::encode(value.as_deref().unwrap() as &[u8]);
     let mut map = serializer.serialize_map(Some(1))?;
     map.serialize_entry("SHA256", &encoded)?;
     map.end()
 }
 
 pub(crate) fn deserialize_fingerprint<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<CertificateHash>, D::Error> {
-    use base64::{Engine, engine::general_purpose::STANDARD};
     use std::{borrow::Cow, collections::HashMap};
     let data = HashMap::<Cow<'de, str>, Cow<'de, str>>::deserialize(deserializer)?;
     if let Some(hash) = data.get("SHA256") {
-        let decoded = STANDARD.decode(hash.as_ref()).map_err(de::Error::custom)?;
+        let decoded = hex::decode(hash.as_ref()).map_err(de::Error::custom)?;
         Ok(Some(CertificateHash(CertificateHashInner::Sha256(
             <[u8; 32]>::try_from(decoded)
                 .map_err(|_| de::Error::custom("Hash is wrong length"))?

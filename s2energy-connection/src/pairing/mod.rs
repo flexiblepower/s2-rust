@@ -208,6 +208,7 @@ mod server;
 mod transport;
 pub(crate) mod wire;
 
+use hmac::KeyInit;
 use rand::CryptoRng;
 use tracing::debug;
 
@@ -253,7 +254,7 @@ impl NodeConfig {
         &self.supported_communication_protocols
     }
 
-    /// Connection initiate url used for this node, if configured.
+    /// Session initiate url used for this node, if configured.
     pub fn session_initiate_url(&self) -> Option<&str> {
         self.session_initiate_url.as_deref()
     }
