@@ -8,7 +8,7 @@ use s2energy_connection::{
 };
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
-const PAIRING_TOKEN: &[u8] = &[1, 2, 3];
+const PAIRING_TOKEN: &[u8] = b"test";
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {

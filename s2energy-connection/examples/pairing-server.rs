@@ -1,4 +1,5 @@
 use axum_server::tls_rustls::RustlsConfig;
+use rustls::pki_types::{CertificateDer, pem::PemObject};
 use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 use uuid::uuid;
 
@@ -9,7 +10,7 @@ use s2energy_connection::{
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
 #[allow(unused)]
-const PAIRING_TOKEN: &[u8] = &[1, 2, 3];
+const PAIRING_TOKEN: &str = "test";
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
@@ -18,8 +19,9 @@ async fn main() {
         .with(EnvFilter::from_default_env())
         .init();
 
-    let server = Server::new(ServerConfig {
-        leaf_certificate: None,
+    // TODO: determine a proper solution here - the deployment is local, but what certificate should we use?
+    let server = Server::new(ServerConfig::Lan {
+        leaf_certificate: CertificateDer::from_pem_slice(include_bytes!("../testdata/localhost.pem")).unwrap(),
         endpoint_description: EndpointDescription::default(),
         advertised_nodes: vec![],
     });
@@ -66,7 +68,7 @@ async fn main() {
         .allow_pair_once(
             Arc::new(config.clone()),
             Some(pairing_node_id.clone()),
-            PairingToken(PAIRING_TOKEN.into()),
+            PAIRING_TOKEN.parse().unwrap(),
             async move |result| {
                 let pairing = result.unwrap();
                 println!("token: {}", pairing.token.0);
@@ -74,7 +76,7 @@ async fn main() {
                     .allow_pair_repeated(
                         Arc::new(config),
                         Some(pairing_node_id),
-                        PairingToken(PAIRING_TOKEN.into()),
+                        PAIRING_TOKEN.parse().unwrap(),
                         async |result| {
                             println!("token: {}", result.unwrap().token.0);
                             Ok::<_, std::io::Error>(())

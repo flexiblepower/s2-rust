@@ -267,7 +267,7 @@ async fn periodic_cleanup<Store>(state: Weak<AppStateInner<Store>>) {
 fn v1_router<Store: ServerPairingStore>() -> Router<AppState<Store>> {
     Router::new()
         .route("/unpair", post(v1_unpair))
-        .route("/initiateSession", post(v1_initiate_connection))
+        .route("/initiateSession", post(v1_initiate_session))
         .route("/confirmAccessToken", post(v1_confirm_access_token))
         .route("/websocket", get(v1_websocket))
 }
@@ -301,7 +301,7 @@ async fn v1_unpair<Store: ServerPairingStore>(
 }
 
 #[tracing::instrument(skip_all, level = tracing::Level::INFO)]
-async fn v1_initiate_connection<Store: ServerPairingStore>(
+async fn v1_initiate_session<Store: ServerPairingStore>(
     State(state): State<AppState<Store>>,
     token: AccessToken,
     Json(request): Json<InitiateSessionRequest>,

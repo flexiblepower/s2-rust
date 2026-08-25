@@ -27,6 +27,13 @@ These crates require the avahi client libraries on linux. On debian or debian-li
 sudo apt install libavahi-client-dev
 ```
 
+The discovery examples also require a running mDNS stack. On Debian-like systems this typically means installing and starting Avahi and D-Bus:
+```sh
+sudo apt install avahi-daemon dbus
+sudo service dbus start
+sudo service avahi-daemon start
+```
+
 ## Running full client and server examples
 
 The full-client and full-server examples provide complete examples of an s2-connect client and server. Both examples assume local running, which means that the server example needs certificates for the hostname of the machine it is being run on. To generate this, run
@@ -43,6 +50,21 @@ and the client with
 ```sh
 cargo run --example full-client
 ```
+
+The full server example generates its S2 node ID at startup. To retrieve the current server node ID, query the nodes endpoint:
+```sh
+curl -sk https://<hostname>.local:8000/v1/nodes
+```
+
+Note: the full examples use `.local` hostnames such as `https://<hostname>.local:8000`. On WSL this hostname often does not resolve by default. If `https://localhost.local:8000` times out even though the server is running, add both IPv4 and IPv6 loopback entries:
+```sh
+sudo sh -c 'printf "\n127.0.0.1 localhost.local\n::1 localhost.local\n" >> /etc/hosts'
+```
+If you only want IPv4, use:
+```sh
+echo "127.0.0.1 localhost.local" | sudo tee -a /etc/hosts
+```
+Alternatively, configure mDNS resolution in WSL so `.local` names resolve through Avahi.
 
 ## Documentation
 You can find the crate documentation at [docs.rs](https://docs.rs/s2energy). The crate documentation assumes that you are familiar with S2; if this is not the case, it may be useful to refer to [the S2 documentation website](https://docs.s2standard.org/docs/welcome/). That documentation explains S2 concepts in more detail, and contains a reference of all messages and types in the S2 specification.

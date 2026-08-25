@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use axum::{Router, routing::get};
 use rustls::pki_types::CertificateDer;
+use url::Url;
 
 use crate::{
     CommunicationProtocol, EndpointDescription, MessageVersion, NodeDescription, NodeId,
@@ -88,15 +89,26 @@ impl<H: PrePairingHandler, Store: CombinedServerPairingStore> Server<H, Store> {
             Some(certificates) => (Some(certificates.leaf_certificate), Some(certificates.root_certificate)),
             None => (None, None),
         };
+        let pairing_server_config = if let Some(leaf_certificate) = leaf_certificate {
+            pairing::ServerConfig::Lan {
+                leaf_certificate,
+                endpoint_description: server_config.endpoint_description.clone(),
+                advertised_nodes: server_config.advertised_nodes,
+            }
+        } else {
+            pairing::ServerConfig::Wan {
+                // TODO: replace these potential panics with proper error handling.
+                domain: Url::parse(&server_config.base_url)
+                    .expect("couldn't parse base_url for WAN deployment")
+                    .domain()
+                    .expect("no domain in base_url for WAN deployment")
+                    .into(),
+                endpoint_description: server_config.endpoint_description.clone(),
+            }
+        };
+
         Ok(Self {
-            pairing: pairing::Server::new_with_prepairing(
-                pairing::ServerConfig {
-                    leaf_certificate,
-                    endpoint_description: server_config.endpoint_description.clone(),
-                    advertised_nodes: server_config.advertised_nodes,
-                },
-                handler,
-            ),
+            pairing: pairing::Server::new_with_prepairing(pairing_server_config, handler),
             communication: communication::Server::new(
                 communication::ServerConfig {
                     base_url: server_config.base_url.clone(),

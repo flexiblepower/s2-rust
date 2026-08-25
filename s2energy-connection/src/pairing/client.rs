@@ -409,8 +409,10 @@ impl Client {
     }
 
     fn prepare_reqwest_client(&self, url: &Url) -> Result<(reqwest::Client, Option<HashProvider>), Error> {
-        let (client, certhash) = if url.domain().map(|v| v.ends_with(".local")).unwrap_or_default()
-            || url.domain().map(|v| v.ends_with(".local.")).unwrap_or_default()
+        let (client, certhash) = if url
+            .domain()
+            .map(|v| v.ends_with(".local") || v.ends_with(".local.") || v == "localhost")
+            .unwrap_or_default()
         {
             let (client, certhash) = hash_providing_https_client()?;
             (client, Some(certhash))
@@ -495,8 +497,11 @@ impl<'a> V1Session<'a> {
         let our_deployment = self.endpoint_description.deployment.unwrap_or(local_deployment);
         let our_role = self.config.node_description.role;
 
-        let network = if self.base_url.domain().map(|v| v.ends_with(".local")).unwrap_or_default()
-            || self.base_url.domain().map(|v| v.ends_with(".local.")).unwrap_or_default()
+        let network = if self
+            .base_url
+            .domain()
+            .map(|v| v.ends_with(".local") || v.ends_with(".local.") || v == "localhost")
+            .unwrap_or_default()
         {
             if let Some(hash) = certhash.as_ref().and_then(HashProvider::leaf_hash) {
                 Network::Lan { fingerprint: hash.clone() }
@@ -504,7 +509,13 @@ impl<'a> V1Session<'a> {
                 return Err(ErrorKind::ProtocolError.into());
             }
         } else {
-            Network::Wan
+            Network::Wan {
+                domain: self
+                    .base_url
+                    .domain()
+                    .expect("base_url has no domain, even though it is a WAN deployment")
+                    .to_owned(),
+            }
         };
 
         trace!(?network, "Determined network type of remote.");
@@ -527,6 +538,10 @@ impl<'a> V1Session<'a> {
                 let expected = client_hmac_challenge.sha256(&network, pairing_token);
 
                 if expected != request_pairing_response.client_hmac_challenge_response {
+                    trace!(
+                        "Invalid pairing token: using token {pairing_token:?}, got a result of {expected:?} but received a response of {:?}",
+                        request_pairing_response.client_hmac_challenge_response
+                    );
                     let _ = self.finalize(&attempt_id, false).await;
                     return Err(ErrorKind::InvalidToken.into());
                 }
@@ -810,10 +825,10 @@ mod tests {
         overrides: Router<()>,
     ) -> (Handle<SocketAddr>, JoinHandle<Pairing>, Server<impl PrePairingHandler>) {
         let server = Server::new_with_prepairing(
-            ServerConfig {
-                leaf_certificate: None,
+            ServerConfig::Lan {
+                leaf_certificate: CertificateDer::from_pem_slice(include_bytes!("../../testdata/localhost.pem")).unwrap(),
+                advertised_nodes: Vec::new(),
                 endpoint_description: EndpointDescription::default(),
-                advertised_nodes: vec![],
             },
             handler,
         );
@@ -841,7 +856,7 @@ mod tests {
                 .allow_pair_once(
                     Arc::new(config),
                     Some(pairing_s2_node_id()),
-                    PairingToken(b"testtoken".as_slice().into()),
+                    PairingToken(String::from("testtoken")),
                     async |result| {
                         tx.send(result).ok();
                         Ok::<_, std::io::Error>(())
@@ -972,7 +987,10 @@ mod tests {
         let server_pairing = server_pairing.await.unwrap();
         assert_eq!(client_pairing.token, server_pairing.token);
         assert_ne!(client_pairing.role, server_pairing.role);
-        assert!(matches!(client_pairing.role, PairingRole::CommunicationClient { .. }));
+        // Note that the RM is a WAN deployment and the CEM a LAN deployment here; in this scenario,
+        // the RM should be the server and the CEM should be the client.
+        assert!(matches!(client_pairing.role, PairingRole::CommunicationServer { .. }));
+        assert!(matches!(server_pairing.role, PairingRole::CommunicationClient { .. }));
 
         server_handle.shutdown();
     }
@@ -1288,7 +1306,12 @@ mod tests {
                             server_node_description: basic_node_description(UUID_A, Role::Rm),
                             server_endpoint_description: EndpointDescription::default(),
                             selected_hmac_hashing_algorithm: crate::pairing::wire::HmacHashingAlgorithm::Sha256,
-                            client_hmac_challenge_response: request.client_hmac_challenge.sha256(&Network::Wan, b"testtoken"),
+                            client_hmac_challenge_response: request.client_hmac_challenge.sha256(
+                                &Network::Wan {
+                                    domain: "test.example.com".into(),
+                                },
+                                b"testtoken",
+                            ),
                             server_hmac_challenge: HmacChallenge::new(&mut rand::rng(), 32),
                         })
                     }),
@@ -1567,7 +1590,7 @@ mod tests {
             let client = Client::new(ClientConfig {
                 additional_certificates: vec![CertificateDer::from_pem_slice(include_bytes!("../../testdata/root.pem")).unwrap()],
                 endpoint_description: EndpointDescription::default(),
-                pairing_deployment: Deployment::Wan,
+                pairing_deployment: Deployment::Lan,
             })
             .unwrap();
 
